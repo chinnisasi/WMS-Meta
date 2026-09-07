@@ -1,0 +1,29 @@
+node_modules/
+npm-debug.log*
+__pycache__/
+*.pyc
+
+# bun only — reject other package managers' lockfiles.
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Cloned child repos are local working trees, not part of this repo's history.
+workspace/core/*
+!workspace/core/.gitkeep
+workspace/external/*
+!workspace/external/.gitkeep
+
+# BMAD personal/local files (per-developer, not shared).
+_bmad/config.user.toml
+
+.env
+.env.local
+.DS_Store
+
+# Editor/IDE state.
+.idea/
+.vscode/
+*.iml
+# Local editor/tool state.
+.zcode/

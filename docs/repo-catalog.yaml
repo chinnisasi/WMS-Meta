@@ -1,0 +1,24 @@
+version: 1
+workspace_root: workspace
+core_root: workspace/core
+external_root: workspace/external
+
+# Registered repos that this meta repo governs and clones on setup.
+# Add a new entry here (and a matching docs/repos/<id>/ folder) whenever
+# a new repo should be pulled into the workspace automatically.
+repos:
+  - id: wms-fe
+    path: workspace/core/frontend/wms-fe
+    remote: https://github.com/chinnisasi/WMS-FE.git
+    role: frontend
+    default_branch: main
+    status: active
+    docs_dir: docs/repos/wms-fe
+
+  - id: wms-be
+    path: workspace/core/backend/wms-be
+    remote: https://github.com/chinnisasi/WMS-BE.git
+    role: backend
+    default_branch: main
+    status: active
+    docs_dir: docs/repos/wms-be

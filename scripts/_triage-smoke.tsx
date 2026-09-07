@@ -1,0 +1,62 @@
+// Temporary smoke test for the triage UI with fabricated reviews. Delete after use.
+import { runPushTriage, type RepoReview } from "./lib/push-triage.tsx";
+
+const reviews: RepoReview[] = [
+	{
+		id: "wms-be",
+		path: "fake/be",
+		absolutePath: "/fake/be",
+		state: "ahead",
+		branch: "main",
+		ahead: 2,
+		behind: 0,
+		dirtyCount: 0,
+		untrackedCount: 1,
+		unpushedCommits: ["abc1234 Add endpoint", "def5678 Fix types"],
+		statusLines: ["?? notes.txt"],
+		options: ["skip", "push"],
+		defaultDecision: "push",
+		note: null,
+		advice: [],
+		fetchFailed: true,
+	},
+	{
+		id: "wms-fe",
+		path: "fake/app",
+		absolutePath: "/fake/app",
+		state: "ahead",
+		branch: "main",
+		ahead: 1,
+		behind: 0,
+		dirtyCount: 3,
+		untrackedCount: 0,
+		unpushedCommits: ["aaa1111 Update contract"],
+		statusLines: ["M src/a.ts", "M src/b.ts", "M src/c.ts"],
+		options: ["skip", "push"],
+		defaultDecision: "skip",
+		note: "has uncommitted tracked changes — pushing anyway is safe (a push never touches the working tree), but committing first is cleaner",
+		advice: [],
+		fetchFailed: false,
+	},
+	{
+		id: "wms-meta",
+		path: ".",
+		absolutePath: "/fake/meta",
+		state: "diverged",
+		branch: "main",
+		ahead: 1,
+		behind: 2,
+		dirtyCount: 1,
+		untrackedCount: 0,
+		unpushedCommits: ["bbb222 Local commit"],
+		statusLines: ["M README.md"],
+		options: ["skip"],
+		defaultDecision: "skip",
+		note: "local branch is behind origin — pull/rebase first, then re-run",
+		advice: ["git -C /fake/meta pull --rebase"],
+		fetchFailed: false,
+	},
+];
+
+const decisions = await runPushTriage(reviews);
+console.log("DECISIONS:", JSON.stringify(decisions));

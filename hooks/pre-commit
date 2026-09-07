@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Safety net: workspace/core/** and workspace/external/** are independent git
+# repos (WMS-FE, WMS-BE, ...) and are gitignored here on purpose. A change to
+# WMS-FE or WMS-BE must be committed inside that repo's own working tree, never
+# inside this meta repo. This only fires if something gets force-added
+# (git add -f) past the .gitignore.
+set -euo pipefail
+
+offending_paths=$(git diff --cached --name-only | grep -E '^workspace/(core|external)/' | grep -v -E '/\.gitkeep$' || true)
+
+if [ -n "$offending_paths" ]; then
+	echo "Refusing to commit: these paths belong to a child repo, not WMS-Meta:" >&2
+	echo "$offending_paths" >&2
+	echo "" >&2
+	echo "Commit them from inside their own repo (e.g. workspace/core/frontend/wms-fe)." >&2
+	exit 1
+fi
