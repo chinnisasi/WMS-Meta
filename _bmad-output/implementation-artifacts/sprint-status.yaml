@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-08-2026 20:10
+last_updated: 09-08-2026 22:11
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -38,10 +38,10 @@ development_status:
   epic-1: in-progress
   1-1-monorepo-scaffold-and-design-system-shell: done
   1-2-tenant-registration-and-warehouse-creation: done
-  1-3-zones-bins-and-the-setup-checklist: review
-  1-4-catalog-import-with-partial-commit-and-fix-mode: review
+  1-3-zones-bins-and-the-setup-checklist: done
+  1-4-catalog-import-with-partial-commit-and-fix-mode: done
   1-5-users-roles-and-permission-gating: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   epic-2: backlog
   2-1-append-only-ledger-core-and-derived-quantities: backlog
@@ -97,3 +97,62 @@ development_status:
   9-2-notification-panel-and-pushes: backlog
   9-3-global-audit-trail-and-async-export: backlog
   epic-9-retrospective: optional
+action_items:
+  - id: "epic-1-retro-item-1-be-docs-add-role-denied-to-403-annotatio"
+    epic: 1
+    action: "BE docs: add role-denied to 403 annotations on the seven 1.5-gated routes
+      + fix checklist summary; openapi:export + FE api:generate"
+    owner: "Claude (on approval, next change)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-2-meta-contract-docs-accept-invite-body-to"
+    epic: 1
+    action: "Meta contract docs: accept-invite body {token,password,tenantId}; idempotency
+      replay carve-out for re-evaluated denials"
+    owner: "Claude (with the meta PR)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-3-epic-2-outbox-replay-suppression-parity"
+    epic: 1
+    action: "Epic 2 outbox: replay-suppression parity for users.command.ts publishes"
+    owner: "epic 2 spec"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-4-fe-capability-mirror-drift-guard-before"
+    epic: 1
+    action: "FE capability-mirror drift guard before epic 2 adds capabilities"
+    owner: "Claude"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-5-migration-0005-owner-backfill-verificati"
+    epic: 1
+    action: "Migration 0005 owner-backfill verification before next prod deploy"
+    owner: "Claude"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-6-promote-decodecursorsafe-clamp-guard-lay"
+    epic: 1
+    action: "Promote decodeCursorSafe/clamp guard layer into shared pagination primitive
+      + users crafted-cursor test"
+    owner: "Claude (first refactor pass)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-7-mobile-replace-hand-written-api-ts-types"
+    epic: 1
+    action: "Mobile: replace hand-written api.ts types with generated client per AD-8"
+    owner: "Claude (next mobile API story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-8-process-add-real-http-smoke-of-a-changed"
+    epic: 1
+    action: "Process: add real-HTTP smoke of a changed flow to every story step-05
+      verification runbook"
+    owner: "Sasidhar (bmad-build template)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-1-retro-item-9-process-run-the-retrospective-at-every-e"
+    epic: 1
+    action: "Process: run the retrospective at every epic boundary"
+    owner: "Sasidhar (sprint ritual)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
