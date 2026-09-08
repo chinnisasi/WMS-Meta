@@ -26,3 +26,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-tenant-registration-and-warehouse-creation.md`
   summary: `idempotency_keys` retention is unbounded — one row per mutating request, no cleanup job or trigger.
   evidence: Verified — Design Notes say "retention bounded later (AD-5)" but nothing records an owner. Settle when: data-retention policy is defined (a scheduled job deleting rows older than N days is safe — rows only matter for replays of recent requests).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-zones-bins-and-the-setup-checklist.md`
+  summary: The tenancy domain events (`zone.created`, `bins.generated`, `bin.blocked`) — and the 1.2 predecessors — have no test observation; pin them when the first real subscriber/outbox lands.
+  evidence: Verification-gap layer grep — no test reads the `EVENT_BUS` seam; the only registered implementation is the log-only `LoggingEventBus` with no subscribers, so a removed publish or drifted payload fails nothing in CI today.
