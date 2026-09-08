@@ -26,3 +26,17 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-tenant-registration-and-warehouse-creation.md`
   summary: `idempotency_keys` retention is unbounded — one row per mutating request, no cleanup job or trigger.
   evidence: Verified — Design Notes say "retention bounded later (AD-5)" but nothing records an owner. Settle when: data-retention policy is defined (a scheduled job deleting rows older than N days is safe — rows only matter for replays of recent requests).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-zones-bins-and-the-setup-checklist.md`
+  summary: The tenancy domain events (`zone.created`, `bins.generated`, `bin.blocked`) — and the 1.2 predecessors — have no test observation; pin them when the first real subscriber/outbox lands.
+  evidence: Verification-gap layer grep — no test reads the `EVENT_BUS` seam; the only registered implementation is the log-only `LoggingEventBus` with no subscribers, so a removed publish or drifted payload fails nothing in CI today.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-catalog-import-with-partial-commit-and-fix-mode.md`
+  summary: `skus` lacks a `(tenant_id, created_at, id)` composite keyset index (the SKU list pages with `WHERE tenant_id ORDER BY created_at DESC, id DESC`; `catalog_imports` got one, `skus` didn't).
+  evidence: Verified in schema.ts/0004 SQL — only bare `skus_tenant_id_idx` + `(created_at, id)`. Fix is a new migration; per-tenant catalogs are small at this stage. Settle when: catalog volumes grow (Epic 2/3 consumption or the bin-administration-style catalog story).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-catalog-import-with-partial-commit-and-fix-mode.md`
+  summary: The catalog domain events (`catalog.imported`, `catalog.sku_edited`) have no test observation; pin them when the first real subscriber/outbox lands.
+  evidence: Verified — no test reads the `EVENT_BUS` seam; only consumer is the log-only `LoggingEventBus` (mirrors the 1.3 deferral for the tenancy events).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-catalog-import-with-partial-commit-and-fix-mode.md`
+  summary: No retention/cleanup story for the catalog append-only tables (`catalog_imports`, `catalog_import_errors`) — this story adds three more append-only tables alongside `idempotency_keys` (1.2 deferral).
+  evidence: Verified — rows are written forever with no pruning; the import-error ledger is the fix-mode input so recent rows are load-bearing, but old rows have no owner. Settle when: the data-retention policy is defined.
