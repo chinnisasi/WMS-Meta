@@ -13,3 +13,16 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-tenant-registration-and-warehouse-creation.md`
   summary: `requireActiveWarehouse(tenantId)` returns the newest warehouse (arbitrary "active"), which will collide with the frontend's localStorage-picked warehouse once Epic 2 defines a real active-warehouse concept.
   evidence: Unverified design prediction (maybe-false; medium if true) — nothing in Story 1.2 contradicts it. What would settle it: Epic 2's active-warehouse design (server-side pick vs the sidebar's per-viewer pick) — decide one authority and align `requireActiveWarehouse` or the switcher to it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-tenant-registration-and-warehouse-creation.md`
+  summary: Drizzle-orm 0.45 cannot model RLS in `schema.ts` (no `enableRLS` export; `pgPolicy` declarations would conflict with the hand-written 0001 policy DDL), so the drizzle snapshot records `isRLSEnabled: false` — RLS state is invisible to drizzle-kit.
+  evidence: Verified against the installed toolchain — `drizzle-orm/pg-core` 0.45.2 exports only `pgPolicy`; declaring the four policies in schema would make the next `generate` emit `CREATE POLICY` against already-existing policies (migration apply failure). Residual risk is a from-scratch migration regeneration losing the hand-written RLS block, not forward generation. Settle when: drizzle-orm ships `enableRLS` (or the repo upgrades drizzle-kit) — then declare RLS+policies in schema.ts and regenerate the snapshot chain in one migration.
+
+## Deferred from: review loop 2 of spec-1-2 (2026-09-08)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-tenant-registration-and-warehouse-creation.md`
+  summary: `POST /tenants/sign-in` has no rate limiting or lockout — password brute-force is unthrottled. Human resolution (2026-09-08): deferred, tracked — consistent with the minimal-sign-in decision (HS256, no refresh).
+  evidence: Verified — no throttle in `sign-in.command.ts` or the controller. Settle when: the auth-hardening/infrastructure story lands (per-IP + per-email attempt counter, 429 after N failures, or an upstream WAF/rate-limiter at the edge).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-tenant-registration-and-warehouse-creation.md`
+  summary: `idempotency_keys` retention is unbounded — one row per mutating request, no cleanup job or trigger.
+  evidence: Verified — Design Notes say "retention bounded later (AD-5)" but nothing records an owner. Settle when: data-retention policy is defined (a scheduled job deleting rows older than N days is safe — rows only matter for replays of recent requests).
