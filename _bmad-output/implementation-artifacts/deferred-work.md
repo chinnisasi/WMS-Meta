@@ -40,3 +40,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-catalog-import-with-partial-commit-and-fix-mode.md`
   summary: No retention/cleanup story for the catalog append-only tables (`catalog_imports`, `catalog_import_errors`) — this story adds three more append-only tables alongside `idempotency_keys` (1.2 deferral).
   evidence: Verified — rows are written forever with no pruning; the import-error ledger is the fix-mode input so recent rows are load-bearing, but old rows have no owner. Settle when: the data-retention policy is defined.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-users-roles-and-permission-gating.md`
+  summary: The wms-fe `ROLE_CAPABILITIES` UI mirror has no cross-repo drift guard — nothing fails in wms-be CI when the backend capability matrix changes.
+  evidence: `src/lib/users.ts` hand-duplicates `wms-be/src/modules/tenancy/permissions.ts`; the only pin is a hardcoded capability-count assertion in `src/lib/users.test.ts`. Settling it needs generating the mirror from the backend (shared constants or an OpenAPI extension), which is new cross-repo build machinery beyond this story.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-users-roles-and-permission-gating.md`
+  summary: Migration 0005's owner backfill (`UPDATE users SET role = 'owner'`) is never verified against a database containing pre-0005 user rows.
+  evidence: CI migrates only fresh databases, so a regenerated migration silently dropping the hand-appended UPDATE would go undetected until deploy, demoting every pre-existing account to `operator`. Settling it needs a migration-state test harness (apply 0001–0004, seed rows, apply 0005, assert role) the repo doesn't have; a release-checklist note is the interim guard.
