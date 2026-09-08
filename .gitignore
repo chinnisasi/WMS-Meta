@@ -27,3 +27,4 @@ _bmad/config.user.toml
 *.iml
 # Local editor/tool state.
 .zcode/
+_bmad-output/**/.memlog.md
