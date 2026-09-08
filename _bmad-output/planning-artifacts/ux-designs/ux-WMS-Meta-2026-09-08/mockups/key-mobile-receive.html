@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WMS · Mobile receive / GRN</title>
+<style>
+/* ============================================================
+   Governing spine sections (EXPERIENCE.md):
+   - Component Patterns: Qty stepper (large +/-, gloves-friendly,
+     scan increments, manual entry as deliberate fallback),
+     Scan banner (every task step)
+   - Key Flows / Flow 1 — onboard and receive (UJ-1): steps 4–5
+     + failure edge — delivery short 20 units → partial GRN
+     keeps the PO line open with correct remaining qty
+   - State Patterns: Offline n/a at the dock; QC Hold surfaces
+     as the amber attention banner (scan-attention color)
+   - Voice and Tone: "Scanned 1,980 of 2,000. 20 short — record
+     a partial." pattern applied to this PO's numbers
+   - Interaction Primitives: scan → banner → next; ≥ 48dp
+   Governing tokens (DESIGN.md): scan-banner (min 96px, radius
+   6px, Title-1-class), qty stepper 48dp, dark brand map
+   (#7FA7DB / #4CC38A / #F0A860), radii 4/6/8.
+   ============================================================ */
+:root{
+  --bg:#0E1319; --surface:#1A212A; --surface-2:#222B36; --line:#2C3742;
+  --text:#E8EDF4; --muted:#9AA7B4;
+  --primary:#7FA7DB; --primary-ink:#0B2038;
+  --green:#4CC38A; --green-ink:#06251A;
+  --amber:#F0A860; --amber-ink:#2E1A05;
+  --red:#E5484D;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#F4F4F5;color:#18181B;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  display:flex;flex-direction:column;align-items:center;gap:28px;padding:32px 16px 48px;
+}
+.page-note{font-size:12px;color:#71717A;letter-spacing:.02em;max-width:820px;text-align:center}
+.page-note b{color:#18181B;font-weight:600}
+.duo{display:flex;gap:32px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+
+/* ---------- phone frame ---------- */
+.phone{
+  width:390px;height:844px;background:var(--bg);border-radius:44px;
+  border:10px solid #10151B;box-shadow:0 0 0 2px #3F3F46,0 24px 48px -12px rgba(0,0,0,.35);
+  display:flex;flex-direction:column;overflow:hidden;color:var(--text);position:relative;
+}
+.statusbar{display:flex;justify-content:space-between;align-items:center;padding:12px 22px 6px;font-size:13px;font-weight:600}
+.statusbar .icons{display:flex;gap:5px;align-items:center}
+.sig{display:inline-block;width:16px;height:10px;border-radius:2px;background:var(--line);position:relative;overflow:hidden}
+.sig i{position:absolute;inset:0;width:100%;background:var(--muted)}
+.batt{display:inline-block;width:22px;height:11px;border:1.5px solid var(--muted);border-radius:3px;position:relative}
+.batt::after{content:"";position:absolute;inset:1.5px;width:60%;background:var(--muted);border-radius:1px}
+
+/* ---------- PO header ---------- */
+.taskhead{padding:10px 16px 14px;border-bottom:1px solid var(--line)}
+.taskhead .row1{display:flex;align-items:center;gap:10px}
+.chev{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--primary);flex:none}
+.taskhead h1{font-size:19px;font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.draft-chip{margin-left:auto;font-size:12px;font-weight:700;color:var(--primary);background:rgba(127,167,219,.14);border:1px solid rgba(127,167,219,.45);border-radius:9999px;padding:5px 10px;font-variant-numeric:tabular-nums}
+.taskhead .sub{font-size:13px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.taskhead .row2{display:flex;align-items:center;gap:10px;margin-top:12px}
+.scan-count{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.scan-track{flex:1;height:4px;border-radius:9999px;background:var(--surface-2);overflow:hidden}
+.scan-track i{display:block;height:100%;width:64%;background:var(--green)}
+
+/* ---------- camera overlay ---------- */
+.camera{
+  height:280px;position:relative;flex:none;
+  background:linear-gradient(180deg,#0A0E13 0%,#131A22 55%,#1A212A 100%);
+  border-bottom:1px solid var(--line);
+}
+.reticle{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:216px;height:132px}
+.reticle i{position:absolute;width:26px;height:26px;border:3px solid var(--primary);border-radius:4px}
+.reticle i:nth-child(1){left:0;top:0;border-right:0;border-bottom:0}
+.reticle i:nth-child(2){right:0;top:0;border-left:0;border-bottom:0}
+.reticle i:nth-child(3){left:0;bottom:0;border-right:0;border-top:0}
+.reticle i:nth-child(4){right:0;bottom:0;border-left:0;border-top:0}
+.reticle .sweep{position:absolute;left:8px;right:8px;top:50%;height:2px;background:var(--primary);opacity:.7}
+.camera .aim{position:absolute;left:0;right:0;top:calc(50% + 82px);text-align:center;font-size:15px;font-weight:600}
+.camera .aim span{color:var(--muted)}
+.camera .hid{position:absolute;left:16px;bottom:16px;font-size:12px;color:var(--muted);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:9999px;padding:6px 10px}
+.torch{position:absolute;right:16px;bottom:16px;width:44px;height:44px;border-radius:9999px;background:rgba(255,255,255,.08);border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+
+/* ---------- scanned SKU card ---------- */
+.step{padding:14px 16px 4px}
+.scanned{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.scanned .sku{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.scanned .name{font-size:13px;color:var(--muted);margin-top:2px}
+.scanned .meta{font-size:12px;color:var(--muted);margin-top:8px;display:flex;gap:12px;font-variant-numeric:tabular-nums}
+.scanned .meta b{color:var(--text);font-weight:600}
+
+/* ---------- qty stepper (48dp) ---------- */
+.stepper{margin:12px 16px 0;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;align-items:center;gap:12px}
+.stepper-btn{width:64px;height:48px;border-radius:6px;background:var(--surface-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:600;color:var(--text);flex:none}
+.stepper-mid{flex:1;text-align:center}
+.stepper-mid .n{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.stepper-mid .of{font-size:12px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}
+.manual{margin:8px 16px 0;font-size:13px;color:var(--muted);text-align:center}
+.manual b{color:var(--primary);font-weight:600}
+
+/* ---------- banners ---------- */
+.banner{margin:12px 16px 0;min-height:96px;border-radius:6px;padding:16px 18px;flex:none}
+.banner.accept{background:var(--green);color:var(--green-ink)}
+.banner h2{font-size:24px;font-weight:700;letter-spacing:-.01em}
+.banner p{font-size:15px;font-weight:500;margin-top:6px;opacity:.92;font-variant-numeric:tabular-nums}
+.banner.attention{background:var(--amber);color:var(--amber-ink)}
+
+/* ---------- bottom actions ---------- */
+.spacer{flex:1}
+.actions{padding:12px 16px 22px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.btn{height:52px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700}
+.btn.primary{background:var(--primary);color:var(--primary-ink)}
+.btn.ghost{background:transparent;color:var(--muted);font-weight:600;font-size:14px;height:44px}
+.partial-lines{background:var(--surface);border:1px solid var(--line);border-radius:8px;margin:12px 16px 0;padding:4px 0}
+.pl{display:flex;align-items:center;gap:10px;padding:9px 14px;font-size:13px;font-variant-numeric:tabular-nums}
+.pl + .pl{border-top:1px solid var(--line)}
+.pl .code{color:var(--muted);flex:none}
+.pl .bar{flex:1;height:4px;border-radius:9999px;background:var(--surface-2);overflow:hidden}
+.pl .bar i{display:block;height:100%;background:var(--green)}
+.pl .bar i.short{background:var(--amber)}
+.pl .q{flex:none;font-weight:600}
+.pl .q.short{color:var(--amber)}
+
+/* ---------- alternate-state strip ---------- */
+.states{width:840px;max-width:100%;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.states h3{font-size:13px;font-weight:700;color:#18181B;margin-bottom:4px}
+.states .why{font-size:12px;color:#71717A;margin-bottom:10px;line-height:1.45}
+.state-card{background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:14px}
+.state-card .banner{margin:0}
+@media (max-width:900px){.states{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="page-note">UJ-1 · Flow 1 steps 4–5 · left phone: <b>canonical state — single-SKU pallet scan with qty stepper</b> · right phone: <b>load-bearing alternate — partial delivery, GRN confirm</b> · amber QC-hold variant in the strip below</div>
+
+<div class="duo">
+
+  <!-- ============ canonical: scan + stepper ============ -->
+  <div class="phone">
+    <div class="statusbar">
+      <span>11:14</span>
+      <span class="icons"><span class="sig"><i></i></span><span class="batt"></span></span>
+    </div>
+
+    <div class="taskhead">
+      <div class="row1">
+        <span class="chev"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></span>
+        <h1>PO-1042</h1>
+        <span class="draft-chip">GRN draft</span>
+      </div>
+      <div class="sub">200 units · 4 SKUs · Sanjay Textiles</div>
+      <div class="row2">
+        <span class="scan-count">Scanned 128 of 200</span>
+        <span class="scan-track"><i></i></span>
+      </div>
+    </div>
+
+    <div class="camera">
+      <div class="reticle"><i></i><i></i><i></i><i></i><span class="sweep"></span></div>
+      <div class="aim">Scan SKU barcode <span>· pallet 1 of 2</span></div>
+      <span class="torch"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3h12l-3 6v12H9V9L6 3z"/><path d="M9 13h6"/></svg></span>
+      <span class="hid">HID scanner paired</span>
+    </div>
+
+    <div class="step">
+      <div class="scanned">
+        <div class="sku">SKU 8452 · scanned</div>
+        <div class="name">Cotton cushion cover 16in — indigo</div>
+        <div class="meta"><span>Ordered <b>72</b></span><span>Received to date <b>0</b></span><span>Batch <b>ST-2609-A</b> · mfg 02/09/2026</span></div>
+      </div>
+    </div>
+
+    <div class="stepper">
+      <div class="stepper-btn">−</div>
+      <div class="stepper-mid">
+        <div class="n">48</div>
+        <div class="of">on this pallet · expected 52</div>
+      </div>
+      <div class="stepper-btn">+</div>
+    </div>
+    <div class="manual">Case pack 12 · <b>type quantity instead</b></div>
+
+    <div class="banner accept">
+      <h2>Pallet counted</h2>
+      <p>48 of 52 on this pallet — scan pallet 2 or confirm.</p>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="actions">
+      <div class="btn primary">Scan next pallet</div>
+      <div class="btn ghost">Confirm GRN</div>
+    </div>
+  </div>
+
+  <!-- ============ alternate: partial delivery + confirm ============ -->
+  <div class="phone">
+    <div class="statusbar">
+      <span>11:31</span>
+      <span class="icons"><span class="sig"><i></i></span><span class="batt"></span></span>
+    </div>
+
+    <div class="taskhead">
+      <div class="row1">
+        <span class="chev"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></span>
+        <h1>PO-1042</h1>
+        <span class="draft-chip">GRN draft</span>
+      </div>
+      <div class="sub">200 units · 4 SKUs · Sanjay Textiles</div>
+      <div class="row2">
+        <span class="scan-count">Scanned 180 of 200</span>
+        <span class="scan-track"><i style="width:90%"></i></span>
+      </div>
+    </div>
+
+    <div class="camera" style="height:220px">
+      <div class="reticle"><i></i><i></i><i></i><i></i></div>
+      <div class="aim">All pallets scanned <span>· 1 of 4 lines open</span></div>
+      <span class="hid">HID scanner paired</span>
+    </div>
+
+    <div class="banner attention">
+      <h2>20 short — record a partial</h2>
+      <p>Scanned 180 of 200. SKU 8452 stays open at 20 units.</p>
+    </div>
+
+    <div class="partial-lines">
+      <div class="pl"><span class="code">8452</span><span class="bar"><i class="short" style="width:72%"></i></span><span class="q short">52 of 72</span></div>
+      <div class="pl"><span class="code">8453</span><span class="bar"><i style="width:100%"></i></span><span class="q">64 of 64</span></div>
+      <div class="pl"><span class="code">8454</span><span class="bar"><i style="width:100%"></i></span><span class="q">40 of 40</span></div>
+      <div class="pl"><span class="code">8455</span><span class="bar"><i style="width:100%"></i></span><span class="q">24 of 24</span></div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="actions">
+      <div class="btn primary">Record partial GRN · GRN-0088</div>
+      <div class="btn ghost">PO line stays open at 20 units</div>
+    </div>
+  </div>
+</div>
+
+<div class="states">
+  <div class="state-card">
+    <h3>Amber variant — QC hold at putaway</h3>
+    <div class="why">Attention, not error: received stock is quarantined out of ATP until inspection (FR-9). Amber means look, then decide — the operator keeps working.</div>
+    <div class="banner attention">
+      <h2>QC hold — 48 units of SKU 8452</h2>
+      <p>Held in QA-01-02 until inspection. Putaway resumes after release.</p>
+    </div>
+  </div>
+  <div class="state-card">
+    <h3>Green variant — full pallet accepted (canonical path)</h3>
+    <div class="why">GRN creation target: ≤ 4 scans + 1 confirm for a single-SKU single-lot pallet (FR-8, field-verified).</div>
+    <div class="banner accept">
+      <h2>Pallet accepted</h2>
+      <p>52 of 52 scanned — confirm GRN-0088 to finish.</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

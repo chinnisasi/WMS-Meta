@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WMS · Overview dashboard</title>
+<style>
+/* ============================================================
+   Governing spine sections (EXPERIENCE.md):
+   - Information Architecture (web): the 10 sidebar surfaces,
+     Overview reached at app open
+   - Component Patterns: KPI tile (click-through, reconciles to
+     ledger, no estimated state), Data table (dense rows,
+     cursor pagination, sticky header), setup checklist lives
+     in Settings (FR-1) rendered here as its surface card
+   - Key Flows / Flow 1 step 5: Priya watches received-vs-ordered
+     fill in live while Ramesh scans PO-1042; dock-to-stock
+     clocking automatically; failure edge — 20 short on SKU 8452
+   - State Patterns: stale data n/a; amber reserved for
+     attention (short line, label retry, open variance)
+   - Voice and Tone: numbers + verbs, no exclamation marks
+   Governing tokens (DESIGN.md): primary #1E4E8C, accent green
+   #16794C, warning amber #B45309; kpi type 28px semibold
+   tabular-nums; radii 4/6/8, pills on badges only; dense
+   ~40px table rows; shadcn neutral surfaces for everything else.
+   ============================================================ */
+:root{
+  --primary:#1E4E8C; --primary-fg:#FFFFFF;
+  --accent:#16794C; --accent-fg:#FFFFFF;
+  --warning:#B45309; --warning-fg:#FFFFFF;
+  --bg:#FAFAFA; --card:#FFFFFF; --line:#E4E4E7; --line-strong:#D4D4D8;
+  --fg:#09090B; --muted:#71717A; --muted-2:#A1A1AA;
+  --destructive:#DC2626;
+  --zinc-50:#FAFAFA; --zinc-100:#F4F4F5;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:14px;line-height:1.45;
+  padding:28px 16px 48px;display:flex;flex-direction:column;align-items:center;gap:14px;
+}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- browser frame ---------- */
+.browser{width:1440px;max-width:100%;background:var(--card);border:1px solid var(--line-strong);border-radius:8px;overflow:hidden;box-shadow:0 16px 40px -20px rgba(0,0,0,.18)}
+.chrome{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--zinc-100);border-bottom:1px solid var(--line)}
+.dots{display:flex;gap:6px}
+.dots i{width:11px;height:11px;border-radius:9999px;background:#D4D4D8}
+.dots i:first-child{background:#FCA5A5}.dots i:nth-child(2){background:#FCD34D}.dots i:nth-child(3){background:#86EFAC}
+.url{flex:1;max-width:440px;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 12px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.url svg{color:var(--accent);flex:none}
+
+/* ---------- shell ---------- */
+.shell{display:flex;min-height:880px}
+
+/* ---------- fixed left sidebar ---------- */
+.side{width:216px;flex:none;border-right:1px solid var(--line);background:var(--card);display:flex;flex-direction:column;position:relative}
+.side .brand{display:flex;align-items:center;gap:9px;padding:16px 16px 12px;font-weight:700;font-size:15px;letter-spacing:-.01em}
+.side .brand .mark{width:26px;height:26px;border-radius:6px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+.wh{margin:0 12px 12px;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.wh b{color:var(--fg);font-weight:600;display:block;font-size:12.5px}
+.wh .wh-ico{width:24px;height:24px;border-radius:4px;background:var(--zinc-100);display:flex;align-items:center;justify-content:center;color:var(--muted);flex:none}
+.wh .car{margin-left:auto;color:var(--muted-2)}
+nav{padding:4px 8px 8px;display:flex;flex-direction:column;gap:1px}
+nav a{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;font-size:13.5px;color:var(--muted);text-decoration:none}
+nav a svg{flex:none;opacity:.75}
+nav a.active{background:var(--primary);color:#fff;font-weight:600}
+nav a.active svg{opacity:1}
+nav .grp{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted-2);padding:12px 10px 4px}
+.side .foot{margin-top:auto;padding:10px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.side .foot .av{width:26px;height:26px;border-radius:9999px;background:var(--zinc-100);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--muted)}
+
+/* ---------- content ---------- */
+.main{flex:1;padding:20px 24px 28px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.topbar{display:flex;align-items:center;gap:12px}
+.topbar h1{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.topbar .crumb{color:var(--muted);font-size:13px}
+.kcmd{margin-left:auto;display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:6px;padding:7px 12px;font-size:13px;color:var(--muted);min-width:230px}
+.kcmd kbd{margin-left:auto;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px;color:var(--muted);background:var(--zinc-50);font-family:inherit}
+.live-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--accent);background:#F0F7F3;border:1px solid #CDE5D8;border-radius:9999px;padding:4px 10px;font-weight:600}
+.live-pill i{width:7px;height:7px;border-radius:9999px;background:var(--accent)}
+
+/* ---------- KPI tiles ---------- */
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.tile .lbl{font-size:12px;color:var(--muted);font-weight:500}
+.tile .val{font-size:28px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15}
+.tile .cap{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tile .cap b{font-weight:600;color:var(--fg)}
+.tile .cap .ok{color:var(--accent);font-weight:600}
+.tile .cap .warn{color:var(--warning);font-weight:600}
+.tile.chan .ch{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;font-variant-numeric:tabular-nums;margin-top:2px}
+.tile.chan .ch span:first-child{color:var(--fg);font-weight:500}
+.tile.chan .lag{color:var(--muted)}
+.tile.chan .lag.warn{color:var(--warning);font-weight:600}
+
+/* ---------- content columns ---------- */
+.cols{display:grid;grid-template-columns:1.6fr 1fr;gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px}
+.card-h{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.card-h h2{font-size:14px;font-weight:600}
+.card-h .sub{font-size:12px;color:var(--muted)}
+.card-h .r{margin-left:auto;display:flex;align-items:center;gap:10px}
+.link{color:var(--primary);font-size:12.5px;font-weight:600;text-decoration:none}
+
+/* live PO progress panel */
+.pbar{height:8px;border-radius:9999px;background:var(--zinc-100);overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--accent)}
+.pbar i.short{background:var(--warning)}
+.po-sum{display:flex;align-items:baseline;gap:10px;padding:14px 16px 6px}
+.po-sum .big{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.po-sum .mut{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.po-sum .eta{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.po-lines{padding:6px 16px 14px;display:flex;flex-direction:column;gap:9px}
+.pol{display:flex;align-items:center;gap:10px;font-size:12.5px;font-variant-numeric:tabular-nums}
+.pol .code{width:52px;flex:none;color:var(--muted)}
+.pol .nm{width:210px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.pol .bar{flex:1;height:6px;border-radius:9999px;background:var(--zinc-100);overflow:hidden}
+.pol .bar i{display:block;height:100%;background:var(--accent)}
+.pol .bar i.short{background:var(--warning)}
+.pol .q{width:78px;flex:none;text-align:right;font-weight:600}
+.pol .q.short{color:var(--warning)}
+.pol .note{width:130px;flex:none;font-size:11.5px;color:var(--muted);text-align:right}
+.pol .note-warn{color:var(--warning)}
+
+/* data table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{position:sticky;top:0;background:var(--card);text-align:left;font-size:11.5px;font-weight:600;color:var(--muted);padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{padding:0 12px;height:40px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+tbody tr:hover{background:var(--zinc-50)}
+tbody td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody td .ord{font-weight:600;font-variant-numeric:tabular-nums}
+.badge{display:inline-flex;align-items:center;border-radius:9999px;padding:3px 10px;font-size:11.5px;font-weight:600;line-height:1.4}
+.badge.b-muted{background:var(--zinc-100);color:var(--muted);border:1px solid var(--line)}
+.badge.b-green{background:#F0F7F3;color:var(--accent);border:1px solid #CDE5D8}
+.badge.b-amber{background:#FBF3EA;color:var(--warning);border:1px solid #F0D9C0}
+.badge.b-blue{background:#EEF3FA;color:var(--primary);border:1px solid #C9D8EC}
+.rowact{display:flex;gap:8px;justify-content:flex-end;font-size:12px;color:var(--primary);font-weight:600}
+.tbl-foot{display:flex;align-items:center;padding:9px 16px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;border-top:1px solid var(--line)}
+.tbl-foot .load{margin-left:auto}
+
+/* checklist */
+.check-item{display:flex;gap:11px;padding:11px 16px;border-bottom:1px solid var(--line);font-size:13px;align-items:flex-start}
+.check-item:last-child{border-bottom:0}
+.tick{width:20px;height:20px;border-radius:9999px;flex:none;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.tick.done{background:var(--accent);color:#fff}
+.tick.todo{border:1.5px dashed var(--line-strong);color:transparent}
+.check-item .t{font-weight:600;font-size:13px}
+.check-item .s{font-size:12px;color:var(--muted);margin-top:1px;font-variant-numeric:tabular-nums}
+.check-item .s .go{color:var(--primary);font-weight:600}
+.prog{display:flex;align-items:center;gap:10px;padding:12px 16px}
+.prog .pbar{flex:1}
+.prog .pct{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.prog-bar i{width:50%;background:var(--accent)}
+</style>
+</head>
+<body>
+
+<div class="page-note" style="font-size:12px;color:#71717A">FR-27 · UJ-1 step 5 · light mode, shadcn neutral surfaces + brand delta (#1E4E8C primary, #16794C confirm, #B45309 amber, tabular numerals)</div>
+
+<div class="browser">
+  <div class="chrome">
+    <span class="dots"><i></i><i></i><i></i></span>
+    <span class="url"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>app.wms/overview</span>
+  </div>
+
+  <div class="shell">
+
+    <!-- ============ sidebar ============ -->
+    <aside class="side">
+      <div class="brand"><span class="mark">W</span>WMS</div>
+      <div class="wh">
+        <span class="wh-ico"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-6 9 9v11H3z"/><path d="M9 22V12h6v10"/></svg></span>
+        <span><b>BLR-01 Whitefield</b>Warehouse 1 of 1</span>
+        <span class="car"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </div>
+      <nav>
+        <a class="active" href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v8"/></svg>Inventory</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 8l-9-5-9 4 9 5z"/><path d="M3 12v7l9 4 9-4v-7"/><path d="M12 17v6"/></svg>Inbound</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h13"/><path d="M12 6l6 6-6 6"/><path d="M21 5v14"/></svg>Outbound</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 4v13"/><path d="M7 17l-3-3M7 17l3-3"/><path d="M17 20V7"/><path d="M17 7l-3 3M17 7l3 3"/></svg>Moves</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 8v4l3 2"/></svg>Replenishment</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="14" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="10" cy="18" r="1.6" fill="currentColor" stroke="none"/></svg>Channels</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 13h7M9 17h7"/></svg>Compliance</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>Reports / Audit</a>
+        <a href="#"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12"/></svg>Settings</a>
+      </nav>
+      <div class="foot"><span class="av">PS</span>Priya · Ops Manager</div>
+    </aside>
+
+    <!-- ============ main ============ -->
+    <main class="main">
+      <div class="topbar">
+        <h1>Overview</h1>
+        <span class="crumb">Today · 8 Sep 2026 · IST</span>
+        <span class="live-pill"><i></i>PO-1042 receiving now</span>
+        <span class="kcmd">Search orders, SKUs, bins<kbd>⌘K</kbd></span>
+      </div>
+
+      <!-- KPI tile row -->
+      <div class="kpis">
+        <div class="tile">
+          <span class="lbl">Dock-to-stock</span>
+          <span class="val">3h 12m</span>
+          <span class="cap">median, 12 receipts · target ≤ 4h</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Pick rate</span>
+          <span class="val">118</span>
+          <span class="cap">lines/h · shift 1 of 2, 4 operators</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Short-picks</span>
+          <span class="val">4</span>
+          <span class="cap">of <b>1,012</b> lines picked today</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Open GRN variances</span>
+          <span class="val">3</span>
+          <span class="cap"><span class="ok">86 units</span> across 2 POs · oldest 6h</span>
+        </div>
+        <div class="tile chan">
+          <span class="lbl">Sync health · 3 channels</span>
+          <span class="val" style="font-size:20px;line-height:1.3">2 of 3</span>
+          <span class="cap">ATP → channel, p95 ≤ 60s</span>
+          <span class="ch"><span>Shopify</span><span class="lag">22s</span></span>
+          <span class="ch"><span>Amazon.in</span><span class="lag">41s</span></span>
+          <span class="ch"><span>Flipkart</span><span class="lag warn">retrying · last sync 14:05</span></span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Dispatch pipeline</span>
+          <span class="val">612</span>
+          <span class="cap"><b>230</b> dispatched · <b>168</b> ready · <b>214</b> packed</span>
+        </div>
+      </div>
+
+      <div class="cols">
+
+        <!-- left column -->
+        <div class="col">
+
+          <!-- live received-vs-ordered panel -->
+          <section class="card">
+            <div class="card-h">
+              <h2>PO-1042 · Sanjay Textiles</h2>
+              <span class="sub">Ramesh is scanning at dock 2 · started 10:36</span>
+              <span class="r"><span class="link">Open GRN-0088 →</span></span>
+            </div>
+            <div class="po-sum">
+              <span class="big">180 of 200 units</span>
+              <span class="eta">dock-to-stock clocking · 38m elapsed</span>
+            </div>
+            <div class="po-lines">
+              <div class="pol"><span class="code">8452</span><span class="nm">Cotton cushion cover 16in — indigo</span><span class="bar"><i class="short" style="width:72%"></i></span><span class="q short">52 of 72</span><span class="note-warn note">20 short — partial recorded</span></div>
+              <div class="pol"><span class="code">8453</span><span class="nm">Jute storage basket — natural, L</span><span class="bar"><i style="width:100%"></i></span><span class="q">64 of 64</span><span class="note">done 10:58</span></div>
+              <div class="pol"><span class="code">8454</span><span class="nm">Teak serving tray — 40cm</span><span class="bar"><i style="width:100%"></i></span><span class="q">40 of 40</span><span class="note">done 11:04</span></div>
+              <div class="pol"><span class="code">8455</span><span class="nm">Coir doormat — chevron, 60×40</span><span class="bar"><i style="width:100%"></i></span><span class="q">24 of 24</span><span class="note">done 11:07</span></div>
+            </div>
+          </section>
+
+          <!-- dispatch pipeline table -->
+          <section class="card">
+            <div class="card-h">
+              <h2>Today's dispatch pipeline</h2>
+              <span class="sub">612 orders · carrier cutoff 16:00</span>
+              <span class="r"><span class="link">Open Outbound →</span></span>
+            </div>
+            <table>
+              <thead>
+                <tr><th>Order</th><th>Channel</th><th class="num">Qty</th><th>Carrier</th><th>State</th><th class="num">Cutoff</th><th style="text-align:right">Actions</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><span class="ord">SO-3841</span></td><td>Shopify</td><td class="num">24</td><td>Delhivery</td><td><span class="badge b-blue">Packed</span></td><td class="num">16:00</td><td><span class="rowact">Label · Open</span></td></tr>
+                <tr><td><span class="ord">SO-3839</span></td><td>Amazon.in</td><td class="num">6</td><td>Blue Dart</td><td><span class="badge b-green">Ready to dispatch</span></td><td class="num">16:00</td><td><span class="rowact">Manifest · Open</span></td></tr>
+                <tr><td><span class="ord">SO-3838</span></td><td>Manual</td><td class="num">12</td><td>Ecom Express</td><td><span class="badge b-amber">Label retry</span></td><td class="num">16:00</td><td><span class="rowact">Retry · Open</span></td></tr>
+                <tr><td><span class="ord">SO-3836</span></td><td>Shopify</td><td class="num">2</td><td>Shiprocket</td><td><span class="badge b-muted">Picking</span></td><td class="num">16:00</td><td><span class="rowact" style="color:var(--muted-2)">—</span></td></tr>
+                <tr><td><span class="ord">SO-3834</span></td><td>Flipkart</td><td class="num">8</td><td>Delhivery</td><td><span class="badge b-muted">Dispatched</span></td><td class="num">14:32</td><td><span class="rowact">Open</span></td></tr>
+                <tr><td><span class="ord">SO-3833</span></td><td>Amazon.in</td><td class="num">15</td><td>Blue Dart</td><td><span class="badge b-muted">Dispatched</span></td><td class="num">13:58</td><td><span class="rowact">Open</span></td></tr>
+                <tr><td><span class="ord">SO-3830</span></td><td>Shopify</td><td class="num">17</td><td>Delhivery</td><td><span class="badge b-muted">Picking</span></td><td class="num">16:00</td><td><span class="rowact" style="color:var(--muted-2)">—</span></td></tr>
+              </tbody>
+            </table>
+            <div class="tbl-foot">50 of 612 shown · cursor pagination · export runs async and notifies</div>
+          </section>
+        </div>
+
+        <!-- right column -->
+        <div class="col">
+
+          <!-- setup checklist: 2 of 4 done -->
+          <section class="card">
+            <div class="card-h">
+              <h2>Setup checklist</h2>
+              <span class="r"><span class="badge b-muted num">2 of 4 done</span></span>
+            </div>
+            <div class="prog">
+              <span class="pbar"><i class="prog-bar" style="width:50%;background:var(--accent);display:block;height:100%"></i></span>
+              <span class="pct">50%</span>
+            </div>
+            <div class="check-item">
+              <span class="tick done"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M4 13l5 5L20 7"/></svg></span>
+              <span><span class="t">Import catalog</span><br><span class="s">Done · 4,970 SKUs committed, 30 rows fixed in fix mode</span></span>
+            </div>
+            <div class="check-item">
+              <span class="tick done"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M4 13l5 5L20 7"/></svg></span>
+              <span><span class="t">Define zones and bins</span><br><span class="s">Done · 312 bins generated, 2 blocked</span></span>
+            </div>
+            <div class="check-item">
+              <span class="tick todo">✓</span>
+              <span><span class="t">Invite users and roles</span><br><span class="s">2 of 8 seats invited · <span class="go">Continue →</span></span></span>
+            </div>
+            <div class="check-item">
+              <span class="tick todo">✓</span>
+              <span><span class="t">Connect a sales channel</span><br><span class="s">Not started · Shopify first takes about 5 min · <span class="go">Connect →</span></span></span>
+            </div>
+          </section>
+
+          <!-- open items needing a decision (amber) -->
+          <section class="card">
+            <div class="card-h">
+              <h2>Needs a decision</h2>
+              <span class="sub">attention, not errors</span>
+            </div>
+            <div class="check-item">
+              <span class="tick" style="background:#FBF3EA;border:1px solid #F0D9C0;color:var(--warning);font-size:14px;line-height:1">•</span>
+              <span><span class="t">1 QC hold to release</span><br><span class="s">48 units of SKU 8452 in QA-01-02 since 10:52 · <span class="go">Review →</span></span></span>
+            </div>
+            <div class="check-item">
+              <span class="tick" style="background:#FBF3EA;border:1px solid #F0D9C0;color:var(--warning);font-size:14px;line-height:1">•</span>
+              <span><span class="t">2 GRN variances over threshold</span><br><span class="s">86 units across 2 POs — route to Owner at 100+ · <span class="go">Review →</span></span></span>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

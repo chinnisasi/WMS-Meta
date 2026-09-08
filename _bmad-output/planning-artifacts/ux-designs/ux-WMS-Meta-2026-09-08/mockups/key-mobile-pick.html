@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WMS · Mobile pick task</title>
+<style>
+/* ============================================================
+   Governing spine sections (EXPERIENCE.md):
+   - Component Patterns: Scan banner (every task step, reject
+     offers nearest correct bin, rejected scans never queue),
+     Task card (order ref + counts), Qty stepper (n/a here)
+   - State Patterns: Offline (mobile) — queue chip, no error
+     styling (FR-14); Replay chip n/a
+   - Key Flows / Flow 2 — pick through a Wi-Fi dead zone (UJ-2):
+     steps 1–3 + failure edge (wrong item, red banner ≤ 500 ms)
+   - Voice and Tone: numbers + verbs, no exclamation marks,
+     errors state what happened + what to do
+   - Interaction Primitives: scan → banner → next; ≥ 48dp;
+     camera overlay occupies top half while active
+   Governing tokens (DESIGN.md): scan-banner (min 96px,
+   radius 6px, largest text on screen), queue indicator
+   (amber only, never red), dark brand map
+   (#7FA7DB / #4CC38A / #F0A860), radii 4/6/8.
+   ============================================================ */
+:root{
+  --bg:#0E1319; --surface:#1A212A; --surface-2:#222B36; --line:#2C3742;
+  --text:#E8EDF4; --muted:#9AA7B4;
+  --primary:#7FA7DB; --primary-ink:#0B2038;
+  --green:#4CC38A; --green-ink:#06251A;
+  --amber:#F0A860; --amber-ink:#2E1A05;
+  --red:#E5484D; --red-ink:#2B0A0C;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#F4F4F5;color:#18181B;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  display:flex;flex-direction:column;align-items:center;gap:28px;padding:32px 16px 48px;
+}
+.page-note{font-size:12px;color:#71717A;letter-spacing:.02em}
+.page-note b{color:#18181B;font-weight:600}
+
+/* ---------- phone frame ---------- */
+.phone{
+  width:390px;height:844px;background:var(--bg);border-radius:44px;
+  border:10px solid #10151B;box-shadow:0 0 0 2px #3F3F46,0 24px 48px -12px rgba(0,0,0,.35);
+  display:flex;flex-direction:column;overflow:hidden;color:var(--text);position:relative;
+}
+.statusbar{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:12px 22px 6px;font-size:13px;font-weight:600;color:var(--text);
+}
+.statusbar .icons{display:flex;gap:5px;align-items:center}
+.sig{display:inline-block;width:16px;height:10px;border-radius:2px;background:var(--line);position:relative;overflow:hidden}
+.sig i{position:absolute;inset:0;width:38%;background:var(--muted)}
+.batt{display:inline-block;width:22px;height:11px;border:1.5px solid var(--muted);border-radius:3px;position:relative}
+.batt::after{content:"";position:absolute;inset:1.5px;width:60%;background:var(--muted);border-radius:1px}
+
+/* ---------- task header ---------- */
+.taskhead{padding:10px 16px 12px;border-bottom:1px solid var(--line);background:var(--bg)}
+.taskhead .row1{display:flex;align-items:center;gap:10px}
+.chev{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--primary);flex:none}
+.chev svg{display:block}
+.taskhead h1{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.taskhead .sub{font-size:13px;color:var(--muted);margin-top:2px}
+.queue-chip{
+  margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:6px;
+  background:rgba(240,168,96,.14);border:1px solid rgba(240,168,96,.55);color:var(--amber);
+  border-radius:9999px;padding:6px 12px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+.queue-chip .dot{width:7px;height:7px;border-radius:9999px;background:var(--amber)}
+.taskhead .row2{display:flex;align-items:center;gap:10px;margin-top:12px}
+.tick-count{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.tick-track{flex:1;height:4px;border-radius:9999px;background:var(--surface-2);overflow:hidden}
+.tick-track i{display:block;height:100%;width:33.3%;background:var(--green)}
+
+/* ---------- camera scan overlay (top half) ---------- */
+.camera{
+  height:300px;position:relative;flex:none;
+  background:linear-gradient(180deg,#0A0E13 0%,#131A22 55%,#1A212A 100%);
+  border-bottom:1px solid var(--line);
+}
+.reticle{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:216px;height:132px}
+.reticle i{position:absolute;width:26px;height:26px;border:3px solid var(--primary);border-radius:4px}
+.reticle i:nth-child(1){left:0;top:0;border-right:0;border-bottom:0}
+.reticle i:nth-child(2){right:0;top:0;border-left:0;border-bottom:0}
+.reticle i:nth-child(3){left:0;bottom:0;border-right:0;border-top:0}
+.reticle i:nth-child(4){right:0;bottom:0;border-left:0;border-top:0}
+.reticle .sweep{position:absolute;left:8px;right:8px;top:50%;height:2px;background:var(--primary);opacity:.7}
+.camera .aim{position:absolute;left:0;right:0;top:calc(50% + 82px);text-align:center;font-size:15px;font-weight:600;color:var(--text)}
+.camera .aim span{color:var(--muted)}
+.torch{
+  position:absolute;right:16px;bottom:16px;width:44px;height:44px;border-radius:9999px;
+  background:rgba(255,255,255,.08);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;color:var(--text);
+}
+.hid{position:absolute;left:16px;bottom:16px;font-size:12px;color:var(--muted);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:9999px;padding:6px 10px}
+
+/* ---------- directed pick path step ---------- */
+.step{padding:14px 16px 8px}
+.step .label{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.step .label span{color:var(--primary);text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums}
+.loc-card{
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;
+  display:flex;align-items:center;gap:14px;
+}
+.bin-code{font-size:28px;font-weight:700;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+.loc-card .meta{font-size:13px;color:var(--muted);margin-top:2px}
+.loc-card .expected{margin-left:auto;text-align:right}
+.loc-card .expected .sku{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.loc-card .expected .name{font-size:12px;color:var(--muted);max-width:140px}
+.loc-card .expected .qty{font-size:13px;color:var(--amber);font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px}
+
+/* ---------- scan banner (canonical: accepted) ---------- */
+.banner{
+  margin:10px 16px 0;min-height:96px;border-radius:6px;padding:16px 18px;flex:none;
+}
+.banner.accept{background:var(--green);color:var(--green-ink)}
+.banner h2{font-size:24px;font-weight:700;letter-spacing:-.01em}
+.banner p{font-size:15px;font-weight:500;margin-top:6px;opacity:.92;font-variant-numeric:tabular-nums}
+
+/* ---------- bottom actions ---------- */
+.spacer{flex:1}
+.actions{padding:12px 16px 22px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line)}
+.btn{height:52px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700}
+.btn.primary{background:var(--primary);color:var(--primary-ink)}
+.btn.ghost{background:transparent;color:var(--muted);font-weight:600;font-size:14px;height:44px}
+.capt{font-size:12px;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums}
+
+/* ---------- two-state banner strip below phone ---------- */
+.states{width:780px;max-width:100%;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.states h3{font-size:13px;font-weight:700;color:#18181B;margin-bottom:4px}
+.states .why{font-size:12px;color:#71717A;margin-bottom:10px;line-height:1.45}
+.state-card{background:#fff;border:1px solid #E4E4E7;border-radius:8px;padding:14px}
+.state-card .banner{margin:0}
+.banner.reject{background:var(--red);color:var(--red-ink)}
+.banner.reject .offer{margin-top:8px;background:rgba(0,0,0,.14);border-radius:4px;padding:8px 10px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+@media (max-width:840px){.states{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="page-note">UJ-2 · Flow 2 step 3 (Wi-Fi dead zone, aisle C) · canonical state: <b>bin accepted, offline queueing</b> · alternate state below the phone: <b>reject + nearest correct bin</b></div>
+
+<div class="phone">
+  <div class="statusbar">
+    <span>14:32</span>
+    <span class="icons"><span class="sig"><i></i></span><span class="batt"></span></span>
+  </div>
+
+  <div class="taskhead">
+    <div class="row1">
+      <span class="chev"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></span>
+      <h1>Picklist PL-2451</h1>
+      <span class="queue-chip"><span class="dot"></span>Queued 14</span>
+    </div>
+    <div class="sub">Batch pick · 12 orders · aisle A–B–C</div>
+    <div class="row2">
+      <span class="tick-count">4 of 12 orders ticked</span>
+      <span class="tick-track"><i></i></span>
+    </div>
+  </div>
+
+  <div class="camera">
+    <div class="reticle"><i></i><i></i><i></i><i></i><span class="sweep"></span></div>
+    <div class="aim">Scan item barcode <span>· SKU 8452, qty 2</span></div>
+    <span class="torch"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3h12l-3 6v12H9V9L6 3z"/><path d="M9 13h6"/></svg></span>
+    <span class="hid">HID scanner paired</span>
+  </div>
+
+  <div class="step">
+    <div class="label">Directed pick path · step 3 of 9 · <span>next B-01-04</span></div>
+    <div class="loc-card">
+      <div>
+        <div class="bin-code">A-03-12</div>
+        <div class="meta">Zone A · forward pick</div>
+      </div>
+      <div class="expected">
+        <div class="sku">SKU 8452 · qty 2</div>
+        <div class="name">Cotton cushion cover 16in — indigo</div>
+        <div class="qty">Bin short — record a short-pick</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="banner accept">
+    <h2>Bin accepted</h2>
+    <p>Order 4 of 12 ticked green — pick next at B-01-04.</p>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="actions">
+    <div class="btn primary">Next bin — B-01-04</div>
+    <div class="btn ghost">Record a short-pick</div>
+    <div class="capt">Queued 14 — will sync when Wi-Fi returns.</div>
+  </div>
+</div>
+
+<div class="states">
+  <div class="state-card">
+    <h3>State 1 — accepted (canonical, rendered in the flow above)</h3>
+    <div class="why">Every scan step resolves into this banner within 1.5 s. Green is reserved for scan-accepted; it never appears as chrome.</div>
+    <div class="banner accept">
+      <h2>Bin accepted</h2>
+      <p>Order 4 of 12 ticked green — pick next at B-01-04.</p>
+    </div>
+  </div>
+  <div class="state-card">
+    <h3>State 2 — rejected, reason + nearest correct bin</h3>
+    <div class="why">Red banner ≤ 500 ms, on-device. Rejected scans never queue. The next scan is what counts — no dialog to dismiss.</div>
+    <div class="banner reject">
+      <h2>Wrong item — expected SKU 8452</h2>
+      <p>Scanned SKU 8901 is not on PL-2451.</p>
+      <div class="offer">Nearest correct bin: A-03-11 — scan it to continue</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
