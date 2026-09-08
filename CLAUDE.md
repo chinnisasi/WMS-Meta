@@ -25,6 +25,15 @@ Never `git add -f` anything under `workspace/**` into this meta repo — a `hook
 - **Meta repo last.** Code ships before the docs that describe it; `bun run workspace:push` enforces this order automatically.
 - After a cross-repo change lands, update the interface contract in `docs/repos/wms-fe/README.md` (what the frontend consumes) and/or `docs/repos/wms-be/README.md` (what the backend exposes) — that contract is what lets the agent catch breakage *before* making a change.
 
+## Git flow (PR-based)
+
+`main` in all three repos is branch-protected: changes land via pull request, and in `wms-be`/`wms-fe` the CI checks (lint, tests, typecheck, build, drift guards) must pass before merge.
+
+- Do story work on a feature branch named `feat/<story-key>` (e.g. `feat/1-2-tenant-registration-and-warehouse-creation`) in each repo that changes.
+- Push the branch, then open a PR: `gh pr create`. Merge with `gh pr merge --squash --delete-branch` once checks pass, then `git pull` on `main`.
+- Cross-repo ordering still applies: open and merge the backend PR before the frontend PR that consumes it; meta docs PR last.
+- Direct pushes to `main` are permitted for the admin account (bypass), but should be reserved for trivial fixes — default to the PR flow.
+
 ## Workspace commands
 
 - `bun run workspace:setup` — clone any registered repo that is missing locally
