@@ -64,8 +64,8 @@
   summary: The RLS policies' `NULLIF(current_setting('app.tenant_id', true), '')::uuid` cast errors the session (22P02) instead of failing closed when the setting holds a non-uuid non-empty string — now on six policies across three migrations.
   evidence: Confirmed as coded, but it is the 0005-established repo-wide pattern (app code always sets a validated uuid via `withTenantTransaction`); settling it needs one shared `to_uuid_or_null` hardening across all policies in a single follow-up migration.
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
-  summary: `anchorChain` commits a digest without running the chain verifier over the anchored range — the contiguity check lands in this story's patch, but full verify-before-anchor (recompute the range's hashes before committing) is the fuller guarantee.
-  evidence: Verified — `anchorChain` reads only `(seq, event_hash)` and computes `digestOverRange` with no `verifyChainInTx` call. The full check is a Story-2.2-shaped addition (its reconciliation job is the natural runner); what settles it is deciding whether anchoring is verifier-gated in 2.2's design.
+  summary: ~~`anchorChain` commits a digest without running the chain verifier over the anchored range — full verify-before-anchor (recompute the range's hashes before committing) is the fuller guarantee~~ **RESOLVED 2026-09-09** — landed in Story 2.2 exactly as this entry anticipated (the reconciliation story as runner): `anchorChain` now runs `verifyChainInTx` over its range inside the anchor transaction and refuses to commit an anchor over a broken range (PR #10, merged `b0b14ad`).
+  evidence: Implemented per spec-2-2 with the anchor-refusal path pinned by `test/reconciliation.spec.ts` ("verify-before-anchor: a tampered ledger range refuses the anchor, commits nothing, and fires the severity-1 alert").
 
 ## Deferred from: review of spec-outbox-relay (2026-09-09)
 
