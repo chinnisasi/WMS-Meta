@@ -2,7 +2,7 @@
 title: 'Story 3.2: Mobile client substrate — enrollment, badge-in, inbox, scanning'
 type: 'feature'
 created: '2026-09-09'
-status: 'in-progress'
+status: 'done'
 baseline_commit: 'ef794525bcc632be5d7e15966efd95e0423d6b26' # wms-be HEAD
 baseline_commit_fe: '2c1f8243a70e046e99096583c87ae02b1b480954' # wms-fe HEAD
 route: 'dispatch'
@@ -77,13 +77,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `docs/repo-catalog.yaml` + workspace registration + `docs/repos/wms-mobile/README.md` — wms-mobile becomes a governed repo; extract `wms-fe/mobile/` into it (git history preserved by fresh repo + commit note), drop the wms-fe workspaces entry, wire `bun run workspace:setup` to clone it. **Implementation creates the LOCAL git repo only** (`git init` + initial commit under `workspace/core/mobile/wms-mobile`); the GitHub remote is created and pushed at PR time (the build workflow forbids remote ops during implementation) — the catalog entry still records the intended remote URL.
-- [ ] wms-be migration 0012 + `devices` schema + hand-appended RLS/CHECKs
-- [ ] wms-be `envelope.ts` (AES-256-GCM seal/open, `DEVICE_ENCRYPTION_KEY`) + `.env.example`
-- [ ] wms-be enrollment/badge-in/revoke commands + device guard + `DevicesController` + `device.manage` capability + OpenAPI export
-- [ ] wms-be `test/devices.spec.ts` — the full matrix incl. revoke-mid-flight, double-redeem race, replay re-authorization
-- [ ] wms-fe Settings device card + `api:generate`
-- [ ] wms-mobile: Expo Router (enrollment → badge-in → inbox), scan layer (camera + HID + manual fallback), encrypted SQLite WAL + FIFO outbox + replay + sync summary, four-state scan banner, device self-test flow, a11y floor
+- [x] `docs/repo-catalog.yaml` + workspace registration + `docs/repos/wms-mobile/README.md` — wms-mobile becomes a governed repo; extract `wms-fe/mobile/` into it (git history preserved by fresh repo + commit note), drop the wms-fe workspaces entry, wire `bun run workspace:setup` to clone it. **Implementation creates the LOCAL git repo only** (`git init` + initial commit under `workspace/core/mobile/wms-mobile`); the GitHub remote is created and pushed at PR time (the build workflow forbids remote ops during implementation) — the catalog entry still records the intended remote URL.
+- [x] wms-be migration 0012 + `devices` schema + hand-appended RLS/CHECKs
+- [x] wms-be `envelope.ts` (AES-256-GCM seal/open, `DEVICE_ENCRYPTION_KEY`) + `.env.example`
+- [x] wms-be enrollment/badge-in/revoke commands + device guard + `DevicesController` + `device.manage` capability + OpenAPI export
+- [x] wms-be `test/devices.spec.ts` — the full matrix incl. revoke-mid-flight, double-redeem race, replay re-authorization
+- [x] wms-fe Settings device card + `api:generate`
+- [x] wms-mobile: Expo Router (enrollment → badge-in → inbox), scan layer (camera + HID + manual fallback), encrypted SQLite WAL + FIFO outbox + replay + sync summary, four-state scan banner, device self-test flow, a11y floor
 
 **Acceptance Criteria:**
 - Given a fresh device and a minted enrollment code, when the device enrolls, then it binds to the tenant/operator, appears in web Settings, and badge-in assigns the session; a second redemption of the same code fails indistinguishably
@@ -114,7 +114,44 @@ context:
 
 ## Review Triage Log
 
-<!-- Append-only; populated by step-04. -->
+<!-- Append-only; populated by step-04. Review 1 (2026-09-09): blind-hunter + edge-case-hunter + verification-gap, 3 layers. 34 triage rows below (row 20 covers two deduped findings on the same UPDATE). Routes: 24 patch, 1 defer (deferred-work.md), 6 rejected, 3 false. Post-patch verification: wms-be 234 / wms-fe 62 / wms-mobile 18 tests pass, lint + typecheck clean in all three repos. -->
+
+| # | Finding (layer) | Verdict | Evidence / refutation | Route |
+|---|---|---|---|---|
+| 1 | Enrollment handoff broken: `app/enroll.tsx` requires the tenant UUID ("from the mint response"), but `MintEnrollmentCodeResponse` is `{code, expiresAt}` and no FE surface displays `session.tenant.id` (blind) | **high** | Confirmed at `app/enroll.tsx:59-74` (tenant id is a required field) and `devices-card.tsx:129-156` (handoff block shows only code + expiry) — an operator cannot complete enrollment as built | patch — render the tenant id as a second copyable field in the Settings handoff block (FE-only, no API change) + fix the enroll screen copy |
+| 2 | Camera dedupe can never fire — per-frame ULIDs compared (blind + edge) | **medium** | Confirmed at `adapters.tsx:73`: `normalizeScan` mints a fresh ULID per `cameraScan`, so `lastEventId.current === event.id` is always false; a restreamed barcode enqueues duplicate ops | patch — dedupe on value within a short time window |
+| 3 | HID field is ref-controlled; post-submit clear never renders; next wedge scan appends to stale text (blind + edge) | **medium** | Confirmed at `scan.tsx:79` — `value={hidValue.current}` with ref-only mutation; no re-render on clear | patch — hold the HID value in `useState` |
+| 4 | No rate limit/lockout on badge-in PIN (blind) | **low** | True, but badge-in requires a valid device token first (two factors); revocation covers lost devices; the frozen boundary (human decision 2026-09-09) settles the PIN credential | rejected — not everyday-use; a lockout adds machinery |
+| 5 | Any active member (incl. accountant) can bind as device operator; no unbind (blind) | **low** | Confirmed (`enrollment.command.ts:476-491`) — but the frozen boundary settles it: "badge-in authenticate the operator, not a capability"; recovery is revoke + re-enroll | rejected |
+| 6 | Orphaned pending-redemption rows accumulate forever (blind) | **low** | Confirmed, but the rows are invisible, tiny, and bounded by the partial unique index; cleanup adds a reaper for negligible harm | rejected |
+| 7 | `use-devices.ts` swallows fetch errors → backend-down renders the fresh-tenant empty state (blind) | **low** | Confirmed (`use-devices.ts:51-53`); fix adds an error-state branch; dev-time confusion only | rejected |
+| 8 | Enroll's auth-time replay lookup queries by key alone — cross-tenant 422 (blind + edge) | **low** | Confirmed (`enrollment.command.ts:332-336`), but identical to the accepted registration/accept-invite precedent (`registration.command.ts:74-78`); a cross-tenant 422 requires knowing a foreign key | defer — pre-existing pattern; consolidate payload-hash-into-lookup across all three pre-auth commands |
+| 9 | OpenAPI example drift + unbounded `code` (blind) | **low** | Confirmed: `devices.dto.ts:11` example is a 16-hex string vs the 43-char base64url reality (`openapi.json:5067` carries it); `EnrollDeviceDto.code` has no `@Length` | patch — realistic example + length bound |
+| 10 | README claims "every mutating route requires Idempotency-Key," contradicting keyless badge-in (blind) | **false** | The blanket sentences are scoped to the 1.3/1.5 surfaces (`README.md:53,65`); the devices section (lines 90-96) documents badge-in without a key, correctly | — |
+| 11 | `BadgeInDto.operatorEmail` is `@IsString` only vs declared `format: email` (blind) | **low** | Confirmed; non-email input just 401s at lookup, so no functional harm — but the boundary is weaker than its own contract | patch — one decorator |
+| 12 | Revoked device is a dead end: `deviceStore.reset()` never called; reinstall is the only path (blind) | **low** | Confirmed — no screen calls `reset()`; `/revoked` offers no affordance | patch — reset button on `/revoked` (with row 25's purge fix) |
+| 13 | Expired-code redemption untested (blind) | **low** | Confirmed — the spec covers unknown/used/wrong-tenant/race but never a TTL-passed code | patch — test arm |
+| 14 | Devices keyset-cursor path has zero test coverage (blind + verification-gap, pre-verified) | **medium** | Filed evidence: no `cursor` reference in `devices.spec.ts`; siblings (`users.spec.ts:477-507`, `tenancy.spec.ts:432-475`) pin the identical contract at the same boundary | patch — cursor-chain walk + malformed-cursor 400 test |
+| 15 | `devices` lacks a tenant-led index; per-tenant pagination degrades to scans (blind) | **low** | Confirmed — only `(created_at, id)`; every query filters `tenant_id`; repo convention is tenant-led indexes (e.g. `audit_events_tenant_id_occurred_at_idx`) | patch — add `(tenant_id, created_at, id)` to 0012 + snapshot |
+| 16 | wms-mobile version mismatch: package.json 0.2.0 vs app.json 0.1.0 (blind) | **low** | Confirmed | patch — align |
+| 17 | Provenance notes say "7 files" but the repo lands ~30 source files (blind) | **false** | The sentence describes the extraction *source* (`wms-fe/mobile/`, 7 files per the frozen Intent), not the new repo's contents | — |
+| 18 | `RevokeDeviceDto` is dead code (blind) | **low** | Confirmed — referenced by no controller or test | patch — delete |
+| 19 | No auto-replay when connectivity returns; airplane mode is simulated; copy promises auto-sync (blind) | **low** | Confirmed — manual "Sync queued scans" button only; the simulation is a documented dev stand-in; auto-replay needs a network-state dependency; one-tap sync exists | rejected — mechanism choice for when the app ships to real networks |
+| 20 | Enroll redemption UPDATE doesn't re-check expiry or device status in-tx (edge, 2 findings) | **low** | Confirmed (`enrollment.command.ts:384-400`): a code expiring — or a pending row revoked — between the auth read and the tx still redeems | patch — add expiry + `status='active'` to the UPDATE's WHERE (both arms land the same 400) |
+| 21 | `selfTestEcho` doesn't check `users.status` — suspended operator keeps working (edge) | **false** | No code path writes `users.status` off `active` post-acceptance (`users.command.ts`: only `invited`→`active` at lines 449/485); the claimed trigger is unreachable, and `getMemberRoleIn` doesn't check status either | — |
+| 22 | `MissingEncryptionKeyError` escapes enroll as a raw 500 (edge) | **low** | Confirmed — `seal()` inside the tx throws untyped on a missing/short `DEVICE_ENCRYPTION_KEY` | patch — typed 503 problem |
+| 23 | Settings copy button: unhandled clipboard rejection (edge) | **low** | Confirmed (`devices-card.tsx:145` — void'd promise) | patch — `.catch(() => undefined)` |
+| 24 | Enroll burns the code before unwrapping the offline-store key; fresh ULID per attempt defeats replay (edge + verification-gap) | **low** | Confirmed (`device-store.ts:110-122`), but reachable only under an unwrap misconfiguration (dev key unset in a build); recovery is minting a fresh code | rejected — misconfiguration path; the retry restructure is not a small fix |
+| 25 | `reset()` deletes the keychain key before purging the DB rows it sealed → later decrypts throw (edge) | **low** | Confirmed (`device-store.ts:244-247`) | patch — purge `outbox` + `secrets` before dropping the key |
+| 26 | `getSecret` catches only `SealedBlobError`; noble GCM failures throw generic Errors (edge) | **low** | Confirmed (`sqlite.ts:90-95`) — the SealedBlobError branch is dead for the actual failure mode | patch — catch all open failures → null |
+| 27 | One corrupt outbox row makes `listOps` throw, freezing queueDepth + replay (edge) | **medium** | Confirmed (`sqlite.ts:58-70`) — no per-row handling; violates the substrate's work-continues guarantee | patch — per-row try/catch |
+| 28 | Replay maps `401 unauthenticated` / `403 role-denied` to 'rejected' — session expiry retracts the whole queue (edge) | **medium** | Confirmed (`device-store.ts:221-224`): any non-revoked ApiProblem → retraction; a 30-day session expiry destroys queued work instead of pausing for re-badge | patch — map `unauthenticated` → unreachable (stays queued); `role-denied` stays rejected (the server denied the op — AD-4) |
+| 29 | Offline restore compares operator email case-sensitively (edge) | **low** | Confirmed (`device-store.ts:170`) — the server lowercases at badge-in | patch — compare lowercased |
+| 30 | Self-test `run()` has no catch — a throw mid-run goes unhandled, banner stale (edge) | **low** | Confirmed (`self-test.tsx:38-89` — try/finally only) | patch — catch → failure step + banner |
+| 31 | Pending-redemption devices untested against the list's hidden-pending contract (verification-gap, pre-verified) | **medium** | Filed evidence: lists asserted only after redemption; dropping the `isNull(enrollmentCodeHash)` filter fails nothing | patch — assert the pending row absent between mint and enroll |
+| 32 | wms-mobile's test suite is wired into no verification path (verification-gap, pre-verified) | **medium** | Filed evidence: no `.github/`, no remote, no sibling CI reference — the 18 tests run for the author only | patch — add a minimal `ci.yml` (bun install/test/typecheck) mirroring the siblings |
+| 33 | wms-fe CI still runs the deleted `mobile/` job — fails every future FE PR (verification-gap) | **high** | Confirmed (`.github/workflows/ci.yml`: `cd mobile && bun run typecheck` against a directory commit 03cf6ef deleted; "workspaces incl. mobile" labels stale) | patch — remove the mobile job, fix the labels |
+| 34 | Revoked-phase flip requires `rejected.length === 0` — a rejected op before the revocation leaves the operator in the inbox (verification-gap) | **medium** | Confirmed (`device-store.ts:231`): the heuristic misses the mixed summary; the AC's full-screen state never fires | patch — flip when any quarantined op carries `device-revoked` |
 
 ## Design Notes
 
