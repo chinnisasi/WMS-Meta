@@ -47,7 +47,7 @@ development_status:
   2-1-append-only-ledger-core-and-derived-quantities: done
   2-2-continuous-replay-reconciliation: done
   2-3-real-time-atp-and-atomic-reservations: done
-  2-4-batch-and-serial-traceability: backlog
+  2-4-batch-and-serial-traceability: done
   2-5-inventory-surfaces-stock-batches-and-the-ledger-timeline: backlog
   epic-2-retrospective: optional
 
