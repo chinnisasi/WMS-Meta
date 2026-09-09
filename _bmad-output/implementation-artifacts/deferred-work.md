@@ -66,3 +66,21 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
   summary: `anchorChain` commits a digest without running the chain verifier over the anchored range — the contiguity check lands in this story's patch, but full verify-before-anchor (recompute the range's hashes before committing) is the fuller guarantee.
   evidence: Verified — `anchorChain` reads only `(seq, event_hash)` and computes `digestOverRange` with no `verifyChainInTx` call. The full check is a Story-2.2-shaped addition (its reconciliation job is the natural runner); what settles it is deciding whether anchoring is verifier-gated in 2.2's design.
+
+## Deferred from: review of spec-outbox-relay (2026-09-09)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-outbox-relay.md`
+  summary: Consolidated RLS ::uuid-cast hardening now spans seven policies across four migrations (0007's `outbox_messages_tenant_isolation` joins the 2.1-deferred list) — non-uuid non-empty `app.tenant_id` errors the session (22P02) instead of failing closed.
+  evidence: Verified in `drizzle/0007_pretty_silver_samurai.sql` — same `NULLIF(current_setting(...))::uuid` pattern as 0005/0006; app code always sets a validated uuid via `withTenantTransaction`. Settle with the already-deferred shared `to_uuid_or_null` hardening in one follow-up migration covering all policies.
+- source_spec: `_bmad-output/implementation-artifacts/spec-outbox-relay.md`
+  summary: `drizzle/meta/0007_snapshot.json` records `outbox_messages` as `isRLSEnabled: false` while migration 0007 enables RLS — the snapshot misrepresents the live table (extends the 1.4-deferred drizzle-RLS limitation to the new table).
+  evidence: Verified — drizzle 0.45 cannot model RLS; the hand-appended policy is invisible to drizzle-kit. Settle when drizzle-orm ships `enableRLS` (same trigger as the existing entry).
+- source_spec: `_bmad-output/implementation-artifacts/spec-outbox-relay.md`
+  summary: The operator DLQ runbook (quarantined rows + `OUTBOX_OPERATOR_REPLAY_SQL`) exists only in code — no operator-facing doc says quarantined rows exist or how to re-drain them.
+  evidence: Verified — the SQL is exported in `src/shared/events/outbox.ts` with a doc comment, nothing else. Settle in the post-merge meta docs pass (interface contract + ops note), which is already planned for this story.
+- source_spec: `_bmad-output/implementation-artifacts/spec-outbox-relay.md`
+  summary: A hung `drain()` (no statement/connection timeout is configured on the postgres.js pool) would leave the worker's `running` flag stuck true — the relay silently stops draining.
+  evidence: Maybe-false (unverified) — a hang needs an indefinite connection stall; if true, severity medium (silent stop). Settle by configuring/verifying postgres.js `connection_timeout`/statement timeouts, then decide whether the worker needs a drain timeout race.
+- source_spec: `_bmad-output/implementation-artifacts/spec-outbox-relay.md`
+  summary: `verifyChain`'s new fail-loud contract for the chain-broken alert append (a throwing append now rejects `verifyChain` instead of being swallowed) is unpinned by any test.
+  evidence: Verified — `test/ledger.spec.ts` tamper probe exercises the success arm only; re-wrapping the append in try/catch would pass unchanged. The failure arm needs a fault-injected `OUTBOX_SINK` stub; settle when the next ledger-verification story touches `verifyChain` anyway.
