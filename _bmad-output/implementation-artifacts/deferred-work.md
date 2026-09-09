@@ -87,3 +87,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-3-real-time-atp-and-atomic-reservations.md`
   summary: The `db:verify` drift guard round-trips only `app_metadata`, so hand-appended migration SQL (RLS policies and CHECK constraints on 0006-0009 tables) is never verified to exist by CI.
   evidence: Verification-gap review of story 2-3 (triage row R62): `src/shared/db/verify.ts:11-22` round-trips only app_metadata; a regeneration or dropped hand-append on any of these tables would pass the migrations CI job. Pre-existing repo-wide pattern (0006-0008), extended by 0009 — not caused by story 2-3; a repo-wide guard fix belongs to its own change.
+
+## Deferred from: review of spec-2-4 (2026-09-09)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-batch-and-serial-traceability.md`
+  summary: The adjustment endpoint's OpenAPI failure surface is under-documented — the new 400/404/409 `serial-elsewhere`/422 `@ApiResponse` descriptions (and the batch/serial arms' error semantics) are not in `openapi/openapi.json`.
+  evidence: Verified — only the request-body schemas gained properties; no response-documentation additions were made. Deferred because frozen CHECKPOINT 1 pins the 2.4 openapi diff to request-body-additive only; HTTP error-surface documentation belongs to story 2.5, which owns the inventory HTTP read/response surfaces.
