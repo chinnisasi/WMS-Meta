@@ -84,3 +84,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-outbox-relay.md`
   summary: `verifyChain`'s new fail-loud contract for the chain-broken alert append (a throwing append now rejects `verifyChain` instead of being swallowed) is unpinned by any test.
   evidence: Verified — `test/ledger.spec.ts` tamper probe exercises the success arm only; re-wrapping the append in try/catch would pass unchanged. The failure arm needs a fault-injected `OUTBOX_SINK` stub; settle when the next ledger-verification story touches `verifyChain` anyway.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-real-time-atp-and-atomic-reservations.md`
+  summary: The `db:verify` drift guard round-trips only `app_metadata`, so hand-appended migration SQL (RLS policies and CHECK constraints on 0006-0009 tables) is never verified to exist by CI.
+  evidence: Verification-gap review of story 2-3 (triage row R62): `src/shared/db/verify.ts:11-22` round-trips only app_metadata; a regeneration or dropped hand-append on any of these tables would pass the migrations CI job. Pre-existing repo-wide pattern (0006-0008), extended by 0009 — not caused by story 2-3; a repo-wide guard fix belongs to its own change.
