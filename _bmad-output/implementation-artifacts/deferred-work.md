@@ -49,8 +49,8 @@
   evidence: CI migrates only fresh databases, so a regenerated migration silently dropping the hand-appended UPDATE would go undetected until deploy, demoting every pre-existing account to `operator`. Settling it needs a migration-state test harness (apply 0001–0004, seed rows, apply 0005, assert role) the repo doesn't have; a release-checklist note is the interim guard.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
-  summary: Transactional outbox substrate + relay (jobs shell) and the retrofit of the five epic-1 command files' `publishSafely` call sites onto in-tx outbox inserts with `{snapshot, replayed}` suppression parity — carries retro action item `epic-1-retro-item-3`; must land within Epic 2 before stories 2.2 (reconciliation alerts) and 2.3 (reservation decisions) consume the relay.
-  evidence: User chose Split at the step-02 token gate (~1.6k tokens): the outbox relay is a self-contained event-delivery deliverable reviewable as its own PR, while the ledger core (events, projections, replay, hash chain, adjustment command) stays within budget. Ledger core ships without it (LoggingEventBus stays the seam); the relay spec picks the outbox table, drain worker, and retrofit up.
+  summary: ~~Transactional outbox substrate + relay (jobs shell) and the retrofit of the five epic-1 command files' `publishSafely` call sites onto in-tx outbox inserts with `{snapshot, replayed}` suppression parity~~ **RESOLVED 2026-09-09** — landed as its own spec (`spec-outbox-relay.md`, PR #9, merged `ee543d9`); retrofit scope widened at CHECKPOINT 1 to all 12 publish sites across 9 files (AD-6 as tightened); retro item `epic-1-retro-item-3` (users.command replay suppression) closed.
+  evidence: Implemented per spec with migration 0007, `PostgresOutboxSink`/`PostgresOutboxRelay`, env-gated `OutboxRelayWorker`, and the 11-type event coverage pinned in `test/outbox.spec.ts` / `test/outbox-worker.spec.ts`; review triaged 38 findings (9 patch groups applied, 5 deferred above, 14 rejected); 119/119 tests green.
 
 ## Deferred from: review of spec-2-1 (2026-09-08)
 
