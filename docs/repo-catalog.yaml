@@ -22,3 +22,11 @@ repos:
     default_branch: main
     status: active
     docs_dir: docs/repos/wms-be
+
+  - id: wms-mobile
+    path: workspace/core/mobile/wms-mobile
+    remote: https://github.com/chinnisasi/WMS-Mobile.git
+    role: mobile
+    default_branch: main
+    status: active
+    docs_dir: docs/repos/wms-mobile
