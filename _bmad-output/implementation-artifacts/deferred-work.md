@@ -47,3 +47,22 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-users-roles-and-permission-gating.md`
   summary: Migration 0005's owner backfill (`UPDATE users SET role = 'owner'`) is never verified against a database containing pre-0005 user rows.
   evidence: CI migrates only fresh databases, so a regenerated migration silently dropping the hand-appended UPDATE would go undetected until deploy, demoting every pre-existing account to `operator`. Settling it needs a migration-state test harness (apply 0001–0004, seed rows, apply 0005, assert role) the repo doesn't have; a release-checklist note is the interim guard.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
+  summary: Transactional outbox substrate + relay (jobs shell) and the retrofit of the five epic-1 command files' `publishSafely` call sites onto in-tx outbox inserts with `{snapshot, replayed}` suppression parity — carries retro action item `epic-1-retro-item-3`; must land within Epic 2 before stories 2.2 (reconciliation alerts) and 2.3 (reservation decisions) consume the relay.
+  evidence: User chose Split at the step-02 token gate (~1.6k tokens): the outbox relay is a self-contained event-delivery deliverable reviewable as its own PR, while the ledger core (events, projections, replay, hash chain, adjustment command) stays within budget. Ledger core ships without it (LoggingEventBus stays the seam); the relay spec picks the outbox table, drain worker, and retrofit up.
+
+## Deferred from: review of spec-2-1 (2026-09-08)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
+  summary: `idempotencyKeyReuse()` lives in `tenancy/registration.command.ts`, and `inventory.command.ts` adds an eighth importer across three modules (users/warehouse/zone/bin within tenancy, catalog sku/import cross-module since epic 1) — the helper belongs beside `hashCommandPayload` in `tenancy/idempotency-guard.ts`.
+  evidence: Verified import graph (`grep idempotencyKeyReuse src/`) — the misplacement is pre-existing epic-1 shape, not introduced by this story; the fix is a cross-module refactor moving the helper and updating all import sites, belonging to its own cleanup rather than this story's patch.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
+  summary: No controller in `src/api` validates uuid path params with `ParseUUIDPipe` (incl. the two new inventory routes) — a non-uuid path param reaches the drizzle `::uuid` binding and renders as 500 instead of 400.
+  evidence: Verified — repo-wide grep finds zero `ParseUUIDPipe` in `src/api`; the new endpoints mirror every epic-1 controller's shape. Settling it is a repo-wide hardening pass (add the pipe across all controllers), not a per-endpoint patch.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
+  summary: The RLS policies' `NULLIF(current_setting('app.tenant_id', true), '')::uuid` cast errors the session (22P02) instead of failing closed when the setting holds a non-uuid non-empty string — now on six policies across three migrations.
+  evidence: Confirmed as coded, but it is the 0005-established repo-wide pattern (app code always sets a validated uuid via `withTenantTransaction`); settling it needs one shared `to_uuid_or_null` hardening across all policies in a single follow-up migration.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-append-only-ledger-core-and-derived-quantities.md`
+  summary: `anchorChain` commits a digest without running the chain verifier over the anchored range — the contiguity check lands in this story's patch, but full verify-before-anchor (recompute the range's hashes before committing) is the fuller guarantee.
+  evidence: Verified — `anchorChain` reads only `(seq, event_hash)` and computes `digestOverRange` with no `verifyChainInTx` call. The full check is a Story-2.2-shaped addition (its reconciliation job is the natural runner); what settles it is deciding whether anchoring is verifier-gated in 2.2's design.
