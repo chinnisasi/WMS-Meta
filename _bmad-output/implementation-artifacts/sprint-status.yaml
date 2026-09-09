@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-08-2026 23:45
+last_updated: '09-09-2026'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -44,7 +44,7 @@ development_status:
   epic-1-retrospective: done
 
   epic-2: in-progress
-  2-1-append-only-ledger-core-and-derived-quantities: review
+  2-1-append-only-ledger-core-and-derived-quantities: done
   2-2-continuous-replay-reconciliation: backlog
   2-3-real-time-atp-and-atomic-reservations: backlog
   2-4-batch-and-serial-traceability: backlog
