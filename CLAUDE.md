@@ -4,6 +4,7 @@ WMS Meta is a **control-plane repo**, not an application. It gives an agent shar
 
 - `wms-fe` (frontend) → `workspace/core/frontend/wms-fe`
 - `wms-be` (backend) → `workspace/core/backend/wms-be`
+- `wms-mobile` (mobile) → `workspace/core/mobile/wms-mobile`
 
 ## Where a change belongs
 
@@ -13,6 +14,7 @@ Commit every change in the repo whose history it belongs to:
 | --- | --- |
 | Frontend code, config, deps | `workspace/core/frontend/wms-fe` |
 | Backend code, config, deps | `workspace/core/backend/wms-be` |
+| Mobile code, config, deps | `workspace/core/mobile/wms-mobile` |
 | Cross-repo initiative notes | `docs/initiatives/` (this repo) |
 | Repo-specific durable notes, interface contracts | `docs/repos/<repo-id>/` (this repo) |
 | Catalog/routing metadata | `docs/repo-catalog.yaml` (this repo) |

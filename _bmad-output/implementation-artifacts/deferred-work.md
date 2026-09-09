@@ -105,3 +105,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-1-po-creation-and-lifecycle.md`
   summary: The new `vendor.manage`/`po.manage` capabilities widen the unguarded wms-fe `ROLE_CAPABILITIES` UI mirror — nothing fails in wms-be CI when the backend capability matrix changes (open retro item A12, epic-1 item 4).
   evidence: Verified — `wms-fe/src/lib/users.ts` hand-duplicates the backend matrix; the capability-count pin there now drifts from `permissions.ts`. Settle with the A12 cross-repo drift guard (generate the mirror from the backend or pin via OpenAPI extension) — existing deferred machinery, not this story's patch.
+
+## Deferred from: review of spec-3-2 (2026-09-09)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-mobile-client-substrate-enrollment-badge-in-inbox-scanning.md`
+  summary: The pre-auth idempotency replay lookup (device enroll, like registration/accept-invite before it) queries `idempotency_keys` by key alone — a tenant A replay of a tenant B's key is answered with tenant B's cached response instead of a 422.
+  evidence: Verified — `enrollment.command.ts:332-336` key-only AUTH_DATABASE lookup, identical to the accepted precedent `registration.command.ts:74-78` (documented intentional at `docs/repos/wms-be/README.md:19`). Requires knowing a foreign tenant's key to exploit; response is a 422-shaped error, no data leak. Consolidate all three pre-auth commands onto a payload-hash-including lookup in one shared-primitives change.
