@@ -93,3 +93,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-4-batch-and-serial-traceability.md`
   summary: The adjustment endpoint's OpenAPI failure surface is under-documented — the new 400/404/409 `serial-elsewhere`/422 `@ApiResponse` descriptions (and the batch/serial arms' error semantics) are not in `openapi/openapi.json`.
   evidence: Verified — only the request-body schemas gained properties; no response-documentation additions were made. Deferred because frozen CHECKPOINT 1 pins the 2.4 openapi diff to request-body-additive only; HTTP error-surface documentation belongs to story 2.5, which owns the inventory HTTP read/response surfaces.
+
+## Deferred from: review of spec-3-1 (2026-09-09)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-po-creation-and-lifecycle.md`
+  summary: The PO responses pin `openQty` with `minimum: 0` in `openapi/openapi.json`, but story 3.3's over-receipt-approval design may let received exceed ordered (openQty negative) — under the additive-only OpenAPI rule (AD-8), relaxing a schema constraint later is a breaking contract change.
+  evidence: Verified — the PO line response schemas declare `openQty` with `minimum: 0`; 3.1's invariant holds (received ships 0), but the 3.3 over-receipt decision could invalidate it. Settle when story 3.3 defines over-receipt semantics: either relax `minimum` in that story's additive diff or confirm the floor holds.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-po-creation-and-lifecycle.md`
+  summary: `decodeCursorSafe` now exists in a 4th place (`inbound.facade.ts`, alongside tenancy.service, inventory.facade, and the reservation read) and `canonicalInstant` in a 5th — the A3-style consolidation that unified `UUID_RE` did not cover these.
+  evidence: Verified by grep — four module-local `decodeCursorSafe` copies and five `canonicalInstant` copies; the inbound copy additionally diverged (shape-regex instead of `Date.parse`, patched back to parity in this story). Settle with a shared-primitive cleanup: export one `decodeCursorSafe`/`canonicalInstant` from `src/shared/primitives/` and update all call sites.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-po-creation-and-lifecycle.md`
+  summary: The new `vendor.manage`/`po.manage` capabilities widen the unguarded wms-fe `ROLE_CAPABILITIES` UI mirror — nothing fails in wms-be CI when the backend capability matrix changes (open retro item A12, epic-1 item 4).
+  evidence: Verified — `wms-fe/src/lib/users.ts` hand-duplicates the backend matrix; the capability-count pin there now drifts from `permissions.ts`. Settle with the A12 cross-repo drift guard (generate the mirror from the backend or pin via OpenAPI extension) — existing deferred machinery, not this story's patch.
