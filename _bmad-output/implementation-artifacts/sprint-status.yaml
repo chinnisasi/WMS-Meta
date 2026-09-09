@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-09-2026'
+last_updated: '09-09-2026 19:05'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -49,7 +49,7 @@ development_status:
   2-3-real-time-atp-and-atomic-reservations: done
   2-4-batch-and-serial-traceability: done
   2-5-inventory-surfaces-stock-batches-and-the-ledger-timeline: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   epic-3: backlog
   3-1-po-creation-and-lifecycle: backlog
@@ -116,7 +116,7 @@ action_items:
     epic: 1
     action: "Epic 2 outbox: replay-suppression parity for users.command.ts publishes"
     owner: "epic 2 spec"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
   - id: "epic-1-retro-item-4-fe-capability-mirror-drift-guard-before"
     epic: 1
@@ -154,5 +154,118 @@ action_items:
     epic: 1
     action: "Process: run the retrospective at every epic boundary"
     owner: "Sasidhar (sprint ritual)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
+  - id: "epic-2-retro-a1-keyset-cursor-ms-truncation-skips-rows"
+    epic: 2
+    action: "Fix keyset cursor to full timestamp precision (F1, high): encode the
+      raw timestamptz instead of the ms-truncated ISO instant in encodeCursor/decodeCursorSafe;
+      add a same-timestamp page-boundary walk test (timeline + stock list)"
+    owner: "Claude (next inventory story or fix branch)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a2-grant-ceiling-vs-concurrent-adjustment-race"
+    epic: 2
+    action: "Close the grant-ceiling gap (F2, high): re-validate committed on-hand
+      after the Valkey script win before the journal insert, or weaken the module
+      header's never-oversells claim to the actual guarantee — decide in the Epic
+      4 story-1 spec"
+    owner: "Claude (Epic 4 story-1 spec)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a3-uuid-path-query-param-guard-mechanism"
+    epic: 2
+    action: "Guard or document every uuid path/query param (F3+F8): adopt one mechanism
+      (repo-wide ParseUUIDPipe deferral from 2-1) — at minimum extend the UUID_RE
+      404 guard to warehouseId on the three warehouse-scoped read routes; consolidate
+      the 6 regex copies onto one shared constant"
+    owner: "Claude (next backend story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a4-multi-serial-response-snapshot-mismatch"
+    epic: 2
+    action: "Fix the multi-serial adjustment response snapshot (F4, medium): stop
+      pairing the last per-unit event id/seq with the aggregate delta (response +
+      outbox payload); add a timeline-vs-response consistency test; openapi:export
+      + FE api:generate ride along"
+    owner: "Claude (fix branch)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a5-env-example-missing-reconcile-poll-ms"
+    epic: 2
+    action: "Add OUTBOX_RECONCILE_POLL_MS to .env.example (F5, medium) and reconcile
+      local .env worker/valkey entries with the example"
+    owner: "Claude (fix branch, with A4)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a6-reconciliation-starvation-guards"
+    epic: 2
+    action: "Reconciliation starvation guards (F6+F16, medium): re-queue never-checkpointed
+      partitions on failure; schedule a periodic full pass so the bounded-scan escape
+      hatch is reachable; pair with the parseLastDivergences guard test and the failure-stamp
+      test"
+    owner: "Claude (next reconciliation story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a7-close-verified-verification-gaps"
+    epic: 2
+    action: "Close the verified verification gaps (F9): exportDigest's three refusal
+      arms, anchorChain empty-ledger arm + concurrent-anchor test, outbox ack-delete/bookkeeping
+      failure injection, reconcile failure-stamp, parseLastDivergences malformed entry,
+      pin OUTBOX_MAX_ATTEMPTS=5 literally in the quarantine test"
+    owner: "Claude (verification pass, batched PR)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a8-unavailable-code-double-meaning"
+    epic: 2
+    action: "Settle the unavailable double-meaning (F7): give the 503 fail-closed
+      ATP path its own machine code before Epic 4 consumers branch on it"
+    owner: "Claude (Epic 4 story-1 spec)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a9-real-http-smoke-ritual-in-step05"
+    epic: 2
+    action: "Process: make the real-HTTP behavior check a step-05 ritual — live run
+      caught two behaviors the 212-test suite never observed (F3, F4); fold a minimal
+      smoke script into the bmad-build verification runbook"
+    owner: "Sasidhar (bmad-build template)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a10-shared-test-bootstrap-and-lock-registry"
+    epic: 2
+    action: "Promote shared test bootstrap + lock-key registry (S1): extract the 9-suite
+      deployment-parity block into test/helpers/; give advisory keys (742105/742106
+      + production string keys) a single registry file"
+    owner: "Claude (first refactor pass)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a11-reconcile-2-1-frozen-chain-scope-text"
+    epic: 2
+    action: "Reconcile the 2-1 frozen text (S4): amend spec-2-1's per-tenant chain
+      wording to the as-built per-(tenant, warehouse) chain in the spec change log"
+    owner: "Claude (one meta-repo edit)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a12-fe-capability-mirror-drift-guard"
+    epic: 2
+    action: "FE capability-mirror drift guard (Epic-1 item 4, drift now evidenced):
+      cross-check generated client capabilities against ROLE_CAPABILITIES in wms-fe
+      before Epic 3/4 stories consume capabilities"
+    owner: "Claude (next wms-fe story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a13-blocked-status-draw-unenforcement-note"
+    epic: 2
+    action: "Record the blocked-status draw-side unenforcement (F10): deferred-work
+      entry so the Epic 3/4 blocked-batch story knows the FEFO draw must consult status"
+    owner: "Claude (deferred-work entry)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-2-retro-a14-typed-error-hardening-batch"
+    epic: 2
+    action: "Small typed-error hardenings (F11/F13/F15): reject ttlSeconds:0 with
+      400; validate verifyChain range input; turn the int4 ceiling overflow into a
+      typed 422"
+    owner: "Claude (next adjustment story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
