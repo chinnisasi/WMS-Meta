@@ -2,7 +2,7 @@
 title: 'Story 3.5: Directed putaway'
 type: 'feature'
 created: '2026-09-10'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'f86451b42c64d439c222e64aec426104f4076241' # wms-be main
@@ -84,16 +84,16 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0015_*.sql` -- `putaway_placements` + RLS/CHECKs/index -- the placement data model.
-- [ ] `wms-be/src/modules/inventory/ledger-registry.ts` -- register `putaway.placed` + the `putaway` arm -- the ledger truth.
-- [ ] `wms-be/src/modules/tenancy/permissions.ts` -- add `putaway.execute` (owner/ops_manager/operator) -- the authority.
-- [ ] `wms-be/src/modules/putaway/` (command + facade + dto) + `PutawayController` -- tasks read (derive + suggest), placement command (idempotent, guarded, outbox, audit), placements read -- the module.
-- [ ] `wms-be/src/modules/inbound/receiving.facade.ts` -- snapshot gains `bins` + `putawayTasks` (additive) -- the mobile decision surface.
-- [ ] `wms-be bun run openapi:export` -- additive diff (three routes + snapshot fields) -- drift guard.
-- [ ] `wms-be/test/putaway.spec.ts` -- e2e per the matrix incl. capacity/block/authority/replay/quarantine arms -- the matrix pinned.
-- [ ] `wms-mobile` -- OpType + sender + api fn + snapshot fields + inbox Putaway tab + `app/putaway.tsx` flow (scan SKU → qty → scan/enter bin with wrong-bin/blocked pre-check → confirm enqueues `putaway.place`) + `src/putaway/draft.ts` -- the operator flow.
-- [ ] `wms-mobile` typecheck + tests (op-dispatch exhaustiveness, draft decisions).
-- [ ] `wms-fe bun run api:generate` + `src/lib/users.ts` mirror + `users.test.ts` pin -- typed consumers.
+- [x] `wms-be drizzle/0015_*.sql` -- `putaway_placements` + RLS/CHECKs/index -- the placement data model.
+- [x] `wms-be/src/modules/inventory/ledger-registry.ts` -- register `putaway.placed` + the `putaway` arm -- the ledger truth.
+- [x] `wms-be/src/modules/tenancy/permissions.ts` -- add `putaway.execute` (owner/ops_manager/operator) -- the authority.
+- [x] `wms-be/src/modules/putaway/` (command + facade + dto) + `PutawayController` -- tasks read (derive + suggest), placement command (idempotent, guarded, outbox, audit), placements read -- the module.
+- [x] `wms-be/src/modules/inbound/receiving.facade.ts` -- snapshot gains `bins` + `putawayTasks` (additive) -- the mobile decision surface.
+- [x] `wms-be bun run openapi:export` -- additive diff (three routes + snapshot fields) -- drift guard.
+- [x] `wms-be/test/putaway.spec.ts` -- e2e per the matrix incl. capacity/block/authority/replay/quarantine arms -- the matrix pinned.
+- [x] `wms-mobile` -- OpType + sender + api fn + snapshot fields + inbox Putaway tab + `app/putaway.tsx` flow (scan SKU → qty → scan/enter bin with wrong-bin/blocked pre-check → confirm enqueues `putaway.place`) + `src/putaway/draft.ts` -- the operator flow.
+- [x] `wms-mobile` typecheck + tests (op-dispatch exhaustiveness, draft decisions).
+- [x] `wms-fe bun run api:generate` + `src/lib/users.ts` mirror + `users.test.ts` pin -- typed consumers.
 
 **Acceptance Criteria:**
 - Given a GRN with applied stock in the Receiving bin, when the operator opens the Putaway tab, then each line shows a suggested bin and the placement scan-confirms it (FR-10)
@@ -106,6 +106,7 @@ context:
 <!-- Append-only during implementation. -->
 
 - **Ledger serial guard gained the relocation arm (2026-09-10, `ledger.service.ts` `assertSerialArmLegal`).** A placement's per-serial event is ONE two-arm event per unit (`quantityDelta = +1` with BOTH `fromBinId` (the Receiving bin) and `toBinId` (the target) — the qc.held two-arm convention, so the fold moves the unit in a single event). The pre-existing guard treated every positive movement as a pure intake and 409'd `duplicate-serial` on any located serial — correct for `stock.adjustment` (single-arm: intake `toBinId` only, draw `fromBinId` only), wrong for the two-arm placement event. The guard now branches on `fromBinId`: a positive movement WITHOUT a from-bin is a pure intake (duplicate check, unchanged); a positive movement WITH a from-bin is a relocation and takes the draw-side semantics (latest event must be an intake into the movement's `fromBinId`, else 409 `serial-elsewhere` naming the serial's actual bin; never-moved → 404 `serial-unknown`). Consequence for callers: `duplicate-serial` can only fire on a pure intake — a placement that re-scans a serial already living in the target bin surfaces as `serial-elsewhere` naming that bin (the serial is not in the from-bin), not `duplicate-serial`. No existing producer writes two-arm serial events, so `stock.adjustment` behavior is unchanged.
+- **Verification re-run (2026-09-10, step-03):** all suites green on my side — BE 289/289 across 19 suites (incl. 16 putaway e2e), lint + typecheck + build + `db:migrate` + `db:verify` round-trip clean (0015 drift guard passes); mobile typecheck clean + 66/66; FE 76/76 + lint + typecheck + build clean. Full-diff read complete (34 files); matrix audit: all 13 matrix rows covered by the 16 e2e tests, each verified against its expected behavior in the diff.
 - **e2e note (2026-09-10):** the concurrent-drain arm parks the placement by holding the per-(tenant, warehouse) advisory lock in a manual `postgres` session and polling `pg_stat_activity` for an active lock-wait on the append's `pg_advisory_xact_lock` query. Matching `pg_locks.objid` directly does NOT work for bigint advisory keys — the key is split into `classid`/`objid` halves and `objid = hashtextextended(...)` overflows the oid type range ("OID out of range"). The supertest request must also be dispatched (its `.then` registered) BEFORE the poll — a supertest `Test` only sends when awaited.
 
 ## Spec Change Log
@@ -120,6 +121,47 @@ context:
 <!-- Append-only. Populated by step-04 on every review pass: one row per reviewer finding —
      verdict (high/medium/low/false/maybe-false) with its evidence: the refutation for
      false, what would settle it for maybe-false. Empty until the first review pass. -->
+
+<!-- ── Review pass 1 (2026-09-10, step-04): 33 findings — 13 edge-case, 15 blind-hunt, 2+3 verification-gap. ── -->
+
+**Edge-case-hunter findings:**
+1. **high** — `serials: null` crashes the placement command. VERIFIED: mobile `confirmPayload` (draft.ts:205) always sends `serials: null`; `@IsOptional()` skips validation for null; controller (:98) forwards it; `putaway.command.ts:208` spreads null inside `hashCommandPayload` → TypeError → 500 before the tx opens. **Every mobile placement fails.** → patch.
+2. **medium** — batch never checked against the GRN line. VERIFIED: the batch arm (:320-352) validates the batch exists for (tenant, sku) but never `line.batchId !== command.batchId`; a batch from another line of the same SKU is accepted and recorded against the wrong line. → patch.
+3. **medium** — concurrent capacity race. VERIFIED: remaining/occupancy reads (:476-509) run before `appendLedgerEventInTx` takes the per-(tenant, warehouse) advisory lock; two concurrent placements into the same bin both pass capacity, then append serially → over capacity (the ledger's insufficiency guard covers draining, not filling). → patch.
+4. **medium** — serial arm drops the batch. VERIFIED: per-unit events (:408-428) carry `batchRef: null` even when `batchId` is resolved; batch/serial tracking are independent booleans (no exclusivity), so a both-tracked SKU's batch arm in Receiving never drains — tasks keep promising moved stock. Receiving (:714) and adjustment (:454) carry the batch on per-serial events. → patch.
+5. **low** — `reasonCode` on a match silently accepted. VERIFIED: only the mismatch direction is enforced (:526-530); a stale reason on a match is recorded. Fix is a strip (not a reject — the server's re-derived suggestion can legitimately differ from the device's task suggestion, so a supplied reason on a server-derived match is stale, not illegal). → patch.
+6. **low** — snapshot composition failure blocks the whole device snapshot. REJECTED: fail-closed is the design — a device that cannot read its task surface should not operate; speculative robustness. → reject.
+7. **low** — unbounded tasks read (no limit on `lineRows`). VERIFIED but bounded: the read covers pending-receipt lines only, which drain as stock is placed; no pagination in the frozen matrix. → reject.
+8. **high** — legacy sealed-cache crash (inbox). PRE-VERIFIED by verification-gap layer (Gap A): `device-store.getCatalogSnapshot()` JSON.parses with no shape check; `inbox.tsx:302` `.map` on undefined for a pre-3.5 cache. → patch.
+9. **high** — legacy sealed-cache crash (putaway.tsx:71/93/252). Same root cause as 8. → patch (grouped).
+10. **low** — `tenantId ?? ''` at confirm queues an unsendable op. REJECTED: a snapshot can only be cached by an enrolled device whose tenantId secret is set; not met in everyday use. → reject.
+11. **medium** — POST documents 200, returns 201. VERIFIED: `@HttpCode(CREATED)` (:50) vs `@ApiResponse(status: OK)` (:60); `openapi/openapi.json` documents 200. → patch.
+12. **low** — task-cap docstring overclaims. VERIFIED: facade comment (:191) claims a cross-line cap the per-line `min(applied, onHand)` does not provide; the (non-frozen) Design Notes say per-line completion is approximate. Comment fix. → patch.
+13. **medium** — serial arm `batchRef: null`. Duplicate of 4. → patch (same fix).
+
+**Blind-hunter findings:**
+1. **medium** — 200-vs-201. Duplicate of edge-11. → patch.
+2. **low** — task-cap docstring. Duplicate of edge-12. → patch.
+3. **medium** — All tab renders only the receive list. VERIFIED: `inbox.tsx:94-97` renders `ReceiveTaskList` for `Receive || All` and `PutawayTaskList` only for `Putaway` — its own comment promises both. → patch.
+4. **medium** — placedAt is server time documented as device time. VERIFIED: the row gets `nowIso()` (:536) while `PutawayPlacementDto` documents "Device time of the placement (AD-1)"; the GRN-note pattern (schema.ts:1089) keeps device `occurred_at` + server `recorded_at`. → patch (placedAt = occurredAt).
+5. **low** — chooseBin docstring backwards. VERIFIED: draft.ts:161 says "a mismatch clears any stale reason"; the code clears on a match (behavior right, comment wrong). → patch.
+6. **high** — no pre-3.5 cache compatibility. Duplicate of Gap A (edge-8/9). → patch.
+7. **low** — "oldest receipt first" is GRN-code order. REJECTED: codes are allocated sequentially (`allocateGrnCode`), so code order is receipt order; the comment is accurate in effect. → reject.
+8. **low** — suggestions ignore cumulative fit across tasks. BY DESIGN: the frozen intent is per-task capacity-only suggestions and frozen Never excludes claim/reservation machinery; suggestions are advisory and the server re-gates. → reject (out of scope per frozen intent).
+9. **low** — documented 409 `duplicate-serial` unreachable for putaway. VERIFIED: a relocation event always carries fromBinId, so the guard surfaces `serial-elsewhere`; the controller's 409 doc still names `duplicate-serial`. Docstring fix. → patch.
+10. **medium** — relocation 404 `serial-unknown` / drawn-out arm untested. VERIFIED: no e2e arm draws a serial out (−1) then places it; the guard's relocation semantics are pinned only on the intake arm (overlaps Gap B). → patch (test arms).
+11. **false** — `serialElsewhere(latest.toBinId ?? latest.fromBinId!)` can name a null bin. REFUTED: every ledger event carries at least one bin arm (intake: toBinId; draw: fromBinId; two-arm: both), so the coalesce never resolves null; the draw case names the bin drawn out of — the intended last-known-bin semantics. → reject.
+12. **low** — concurrent-drain test witnesses brittle. Magic-number heuristics in one test; deterministic in practice. → reject.
+13. **false** — inbox-routed preselected task resets on re-tap. REFUTED: putaway.tsx loads the draft once on mount (:64-76, "Load once"); `chooseTask`'s reset is its documented contract. → reject.
+14. **low** — mismatch rule duplicated inline in putaway.tsx. VERIFIED: :190 inlines the `isMismatch` expression; the exported function exists. → patch.
+15. **low** — web read surface has no FE consumer; mismatch enum hand-copied without a drift test. The web report surface is the human-deferred Split; the enum drift rides with that story. → defer.
+
+**Verification-gap layer findings:**
+- **high** (primary, pre-verified) — Gap A: legacy cached snapshot crashes putaway readers. → patch (with edge-8/9).
+- **medium** (primary, pre-verified) — Gap B: relocation guard's "already drawn out" arm unverified (no test draws a serial out then places it). → patch (test arms, with blind-10).
+- **low** — task-cap comment. Duplicate of edge-12. → patch.
+- **medium** — status-code contract mismatch. Duplicate of edge-11. → patch.
+- **low** — no per-surface OpenAPI companion test for putaway. VERIFIED: the drift-guard companion pattern exists in five other specs (catalog/api/devices/tenancy/users); putaway.spec.ts lacks it. → patch (one test).
 
 ## Design Notes
 

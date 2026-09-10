@@ -56,7 +56,7 @@ development_status:
   3-2-mobile-client-substrate-enrollment-badge-in-inbox-scanning: done
   3-3-scan-based-receiving-and-grn: done
   3-4-qc-hold-and-release: done
-  3-5-directed-putaway: in-progress
+  3-5-directed-putaway: review
   3-6-bin-administration: backlog
   epic-3-retrospective: optional
 
