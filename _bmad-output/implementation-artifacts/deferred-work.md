@@ -117,3 +117,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-3-scan-based-receiving-and-grn.md`
   summary: The mobile repo's real HTTP transport is never executed by any test — every suite injects fake senders, so a transport regression in `submitGoodsReceipt` (wrong path, dropped `Idempotency-Key` header, payload serialization drift) would quarantine every offline device receipt at replay with all test suites green.
   evidence: Verified — `src/api.ts:213` defines the real sender; `op-dispatch.test.ts` and `engine.test.ts` both inject fakes; the payload shape is pinned on both sides (`draft.test.ts` payload `toEqual`, wms-be e2e) but the transport wrapping is not. Settle with a stubbed-`fetch` transport test in the mobile repo — a test harness convention that repo does not have today; a separate initiative, not this story's patch.
+
+## Deferred from: review of spec-3-4 (2026-09-10, review iteration 1)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-4-qc-hold-and-release.md`
+  summary: The holds-list keyset cursor encodes the ms-truncated canonical instant (`canonicalInstant` = `toISOString()`, ms precision) while the ledger's `created_at` keeps Postgres microseconds — rows whose `created_at` shares the boundary millisecond but carries a later sub-ms component are skipped on the next page. Same root cause as epic-2 retro item A1 (the shared cursor primitive encodes from the already-canonicalized item value via `buildPage`).
+  evidence: Verified (edge-hunter E5, triage row E5) — `src/shared/primitives/pagination.ts` `buildPage` encodes from `items.at(-1).createdAt`, which the facades map through `canonicalInstant` before returning; `qc_holds` list is one more call site of the pre-existing pattern. Settle with epic-2-retro-a1 (encode full timestamptz precision in `encodeCursor`/`decodeCursorSafe`), not a story-local patch.

@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-10-2026 10:45'
+last_updated: '09-10-2026 13:10'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -55,7 +55,7 @@ development_status:
   3-1-po-creation-and-lifecycle: done
   3-2-mobile-client-substrate-enrollment-badge-in-inbox-scanning: done
   3-3-scan-based-receiving-and-grn: done
-  3-4-qc-hold-and-release: backlog
+  3-4-qc-hold-and-release: review
   3-5-directed-putaway: backlog
   3-6-bin-administration: backlog
   epic-3-retrospective: optional
