@@ -2,7 +2,7 @@
 title: 'Story 4.1: Orders — manual entry, idempotent ingestion, acceptance reservation'
 type: 'feature'
 created: '2026-09-10'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 baseline_commit: '33f57ea' # wms-be main
 baseline_commit_fe: 'c2173d1' # wms-fe main
@@ -121,7 +121,7 @@ _Four layers (blind hunter, edge cases, verification gaps, acceptance audit) —
 - [x] [Review][Patch] `quantity` has `@IsInt() @Min(1)` and no upper bound — an int4 overflow raises 22003 after the grants land, returning 500 instead of 400 [`src/modules/outbound/outbound.dto.ts:38-43`]
 - [x] [Review][Patch] The schema comment claims `integration_id` is "asserted in the command transaction"; there is no integrations table until Epic 7 and nothing asserts it — correct the comment [`src/shared/db/schema.ts`]
 - [x] [Review][Patch] Dead exports (`ORDER_LINE_STATUSES`, `OrderLineStatus`, `ORDER_BACKORDER_POLICY`), status vocabulary duplicated in three places while `source` correctly derives its DTO enum, and every new file lands without a trailing newline — the `0017` SQL one matters because migrations are hand-appended here [`src/modules/outbound/order.command.ts`, `outbound.dto.ts`, `drizzle/0017_ambiguous_santa_claus.sql`]
-- [ ] [Review][Patch] The A8 rename is a contract change to every reserving flow (QC, receiving, putaway), but `docs/repos/wms-be/README.md` still documents "409 unavailable / 503 fail-closed on Valkey down" — update in the meta docs PR [`docs/repos/wms-be/README.md`]
+- [x] [Review][Patch] The A8 rename is a contract change to every reserving flow (QC, receiving, putaway), but `docs/repos/wms-be/README.md` still documents "409 unavailable / 503 fail-closed on Valkey down" — update in the meta docs PR [`docs/repos/wms-be/README.md`]
 
 - [x] [Review][Defer] Keyset cursors truncate Postgres microseconds to milliseconds, so orders sharing a boundary millisecond can be skipped between pages [`src/modules/outbound/outbound.facade.ts:160-167`] — deferred: pre-existing pattern shared with `putaway.facade.ts` and the other list surfaces; orders is the first table facing bulk ingestion (Epic 7), so fix it there across all surfaces at once
 - [x] [Review][Defer] A crash between the grant phase and the create tx, or a `releaseAll` that itself fails while the store is down, orphans holds that suppress ATP for the full 7-day TTL [`src/modules/outbound/order.command.ts:288-306`, `:583-601`] — deferred: fail-safe direction (ATP understated, never oversold) and documented in code, but no reaper covers it; a reconciler is new surface, not this story's patch
