@@ -2,7 +2,7 @@
 title: 'Story 3.4: QC hold and release'
 type: 'feature'
 created: '2026-09-10'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '3344061ac4fae5acb0eff176053afb6b0a9c0128' # wms-be main
