@@ -129,3 +129,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5-directed-putaway.md`
   summary: The web suggestion-vs-actual putaway report surface (SM-3) — a report reading `putaway_placements` (compliance rate, per-line suggestion vs actual + recorded reason) — plus the pieces that make suggestions meaningful over time: the SKU velocity class (derived from ledger movement history), a nullable `zones.putaway_class` affinity field with the Settings zone-form dropdown, and the PRD's nightly slotting-suggestions job.
   evidence: Split at story 3.5's token gate (spec ≈2,700 tokens vs the 1,600 ceiling); the backend + mobile operator flow are one goal, the report surface is independently shippable (reads `putaway_placements`, no flow dependency). Human decision 2026-09-10: Split.
+
+## Deferred from: review of spec-3-5 (2026-09-10, review iteration 1)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-directed-putaway.md`
+  summary: `PUTAWAY_MISMATCH_REASON_CODES` is hand-copied across surfaces without a drift guard (wms-be `putaway.dto.ts`, mobile `src/putaway/draft.ts`, the openapi enum, and the mobile UI's reason labels) and the web report surface has no FE consumer in this story (the Split). Settle with the deferred report story: export the enum from the OpenAPI document (the FE mirror pattern) or add a cross-repo drift test when the report story consumes placements.
+  evidence: Verified (blind-hunter B15, triage row blind-15) — the enum literal appears in ≥4 places; the FE `api:generate` client regenerates it but nothing consumes it this story. The report surface (SM-3) is the human-deferred Split from the planning gate; the drift guard rides with it.
