@@ -2,7 +2,7 @@
 title: 'Story 3.4: QC hold and release'
 type: 'feature'
 created: '2026-09-10'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '3344061ac4fae5acb0eff176053afb6b0a9c0128' # wms-be main
@@ -100,7 +100,7 @@ context:
 - Movement truth: a hold appends one `qc.held` event per on-hand arm into the warehouse's lazily-ensured system `QC-HOLD` bin (reference arm `{kind:'qc-hold', holdId, fromBinId}`); a release replays the hold's own `qc.held` arms (`qcHeldArmsInTx` — same batch refs, same magnitudes) into `qc.released` events back to the recorded origin bin. No zero-delta events, no direct `stock_on_hand` writes, no held-qty column. `qc.held`/`qc.released` register sinceVersion 1 (no grammar bump); mobile untouched.
 - ATP: `qcHeldUnits()` populated at both `atp()` and `committedCeiling()` call sites; a refused grant names the held units ("of which N are QC-held").
 - Migration 0014: `qc_holds` with the partial unique index `qc_holds_open_scope_unique` (one open hold per scope), release-pairing CHECKs, fail-closed RLS — all in migration SQL only. Release guards origin-bin existence (`409 qc-hold-origin-bin-gone`, hold stays open; the 'retired' bin state arrives with story 3.6 and will extend this path).
-- e2e `test/qc-holds.spec.ts`: 11 tests per the I/O matrix incl. ATP-snapshot pins (`qcHeld > 0`), replay (same snapshot, mismatch → 422), double hold/release 409s, empty-scope 400 naming the scope, operator role-denied + foreign-path permission-denied, reserve refusal naming held units + ATP restored on release, origin-bin-gone, holds-list status filters + crafted-cursor 400, RLS invisibility + fail-closed INSERT, and the migration backstops (release-pairing CHECK, partial unique index, released twin OK). All green: 270 tests / 18 suites; lint/typecheck/build/db:migrate/db:verify clean; `openapi:export` purely additive.
+- e2e `test/qc-holds.spec.ts`: 14 tests per the I/O matrix incl. ATP-snapshot pins (`qcHeld > 0`), replay (same snapshot, mismatch → 422), double hold/release 409s, empty-scope 400 naming the scope, operator role-denied + foreign-path permission-denied, reserve refusal naming held units + ATP restored on release, origin-bin-gone, holds-list status filters + crafted-cursor 400, RLS invisibility + fail-closed INSERT, and the migration backstops (release-pairing CHECK, partial unique index, released twin OK) — plus the review-loop-1 arms: whitespace-only and >200-char reason 400s, the QC-bin-as-origin 400, the serial-tracked-SKU 400 (zero rows moved), the multi-batch one-movement-per-batch arm, and the holds-list `warehouseId` filter + foreign-warehouse 404 + `nextCursor` walk (no repeats) + limit clamped to 200. All green: 270 tests / 18 suites; lint/typecheck/build/db:migrate/db:verify clean; `openapi:export` purely additive.
 - Frontend: `QcHoldsCard` (open/released tabs, Release inside the Status column, place-hold form from `useStockScopes`) as the third Inbound sibling; `useQcHolds`/`useStockScopes`/`useBinCodeMap` external-store hooks; `qcReason()` problem map; `qc.manage` mirrored into `users.ts` (owner + ops_manager) with matrix test pins; generated client regenerated (additive). FE test/lint/typecheck/build all clean (71 tests).
 - Pre-existing gap noted, unchanged by this story: the FE capability mirror covers only the capabilities its surfaces gate on (now incl. `qc.manage`); backend-only capabilities (`stock.adjust`, `vendor.manage`, `po.manage`) remain unmirrored.
 
@@ -111,6 +111,49 @@ context:
 ## Review Triage Log
 
 <!-- Append-only. Populated by step-04 on every review pass. -->
+
+### Review loop 1 (2026-09-10) — layers: blind-hunter (16), edge-case-hunter (11), verification-gap (3 gaps + 2 other)
+
+**Blind hunter:**
+
+- B1 `src/lib/use-inbound.ts` — `useQcHolds` fetches without the `warehouseId` filter the backend and client helper both support; the warehouse-scoped card lists the whole tenant's holds — **medium** — verified in the diff: the card renders under the active-warehouse switcher, its doc comment and the README contract both claim the warehouse's holds, yet `fetchApiListQcHolds(tenantId, { status })` never passes `warehouseId`; origin bins of other warehouses' holds resolve to "—". Patch.
+- B2 `inbound-cards.tsx` place-hold form offers scopes already under an open hold and the QC bin's own rows (guaranteed 400/409 submits) — **medium** — verified: `useStockScopes` filters only `quantity > 0` over the stock read, which excludes neither open-held scopes nor system bins; the QC-bin-as-origin 400 is the only guard for the latter. Patch.
+- B3 `receiving-bin.ts` — the ensure's re-selects lack a `systemOwned` filter, so a user bin named `QC-HOLD` (created before the first hold) is returned as the QC bin while `qcHeldUnits` (which requires `system_owned = true`) counts zero — ATP never drops — **medium** — verified: `onConflictDoNothing({ target: [bins.warehouseId, bins.code] })` + re-select by `(tenant, warehouse, code)` returns the user's non-system bin; no code-reservation guard exists anywhere in the diff. Patch.
+- B4 `qc.command.ts` — batch arms not checked against the plain quantity; zero arms skipped → a hold with no movements whose release 409s forever — **false** — `stock_on_hand` and `batch_on_hand` are folds of the same event stream (every movement folds both), so `sum(batch rows) = plain` by construction; zero batch rows are legitimately nothing-to-move, and `scope.quantity <= 0` is already a 400. No program path reaches the divergence.
+- B5 release's empty-arms path reuses `qc-hold-origin-bin-gone`, a wrong-signal code — **false** — the only reachable empty-arms state is ledger tampering (the code comment says exactly that); the program cannot produce a hold with zero movements (B4 disproven), and renaming/reusing codes is a public-surface change for an unreachable case.
+- B6 release doesn't verify QC-bin on-hand; a blind release could drive `stock_on_hand` negative — **false** — `appendMovement` refuses over-draws with 422 `insufficient-on-hand` (ledger.service.ts:268-276, applied at :627) and the projection carries a non-negative CHECK; a mid-hold QC-bin draw makes release fail safe (hold stays open), not corrupt.
+- B7 no supporting index for `qcHeldArmsInTx`'s `referenceDoc->>'holdId'` query — **low** — real but release is a rare admin action on a small tenant ledger; the fix churns an already-applied migration for no everyday impact. Reject.
+- B8 snapshot instant-format inconsistency (place returns raw `nowIso()`, release/list canonicalize) — **false** — `nowIso()` is `new Date().toISOString()` (time.ts:8) and `canonicalInstant(value)` is `new Date(value).toISOString()` (ledger.service.ts:232-234); the DB round-trip preserves the instant, so both paths emit byte-identical strings.
+- B9 missing e2e arms: reason >200/whitespace, multi-batch one-movement-per-arm, `nextCursor` walk, warehouseId filter 404, limit clamp — **medium** — verified against the 11-test suite: none of these documented arms is exercised (the batch-arm test uses a single batch; the list test sends only status-filter and garbage-cursor requests). Patch (with the verification-gap gaps below).
+- B10 Release is a one-click terminal decision with no confirm dialog (sibling revoke has one) — **low** — release is recoverable in effect (a new hold on the released scope is legal — the partial unique index only bars open duplicates), and the fix adds a dialog component rather than a direct correction. Reject.
+- B11 `useQcHolds`/`useStockScopes`/`useBinCodeMap` swallow fetch errors → indistinguishable empty state — **low** — this is the repo's deliberate external-store convention ("quiet chrome on failure", identical in the sibling hooks); a fix means error-state plumbing across the hook family for a rare condition. Reject.
+- B12 spec task line says the table carries `from_bin_id`; the shipped column is `bin_id` (origin) — **verified mismatch, but the fix edits this build's spec** — reject per rule (the frozen text's concept wording; the contract READMEs correctly say `bin_id`).
+- B13 wms-be README Story 3.4 entry omits the "No FKs — app-validated" convention note its 0012/0013 siblings carry — **low** — direct doc-sentence fix; developers read this contract first. Patch.
+- B14 OpenAPI: release/list `200` descriptions empty, `releasedAt` missing the ISO description its siblings carry, place `400` omits the QC-bin-as-origin rejection — **low** — direct annotation corrections + `openapi:export`. Patch.
+- B15 files shipped without trailing newlines — **low** — lint passes (no rule enforces it), cosmetic. Reject.
+- B16 migration comment glued onto the index line — **low** — valid SQL, purely cosmetic. Reject.
+
+**Verification-gap (pre-verified gap findings — filed evidence trusted):**
+
+- G1 the QC-bin-as-origin 400 guard (`qc.command.ts:176-180`) has no test; deleting the branch passes all 270 tests — **medium** — patch (add the e2e arm).
+- G2 the holds-list `warehouseId` filter and its out-of-tenant 404 are documented contract surface with zero coverage — **medium** — patch (extend the list test).
+- G3 `qcReason()` ships untested while its same-file sibling `decisionReason()` is branch-pinned in `over-receipt.test.ts` — **medium** — patch (add the matrix in the same style).
+
+**Verification-gap, other findings** — VG-o1 (card tenant-wide vs warehouse claim) merges into B1; VG-o2 (form offers the QC-bin scope) merges into B2.
+
+**Edge-case hunter:**
+
+- E1 batch arms zero/divergent → unreleasable hold — **false** — same refutation as B4 (fold construction).
+- E2 user-created `QC-HOLD` bin/zone hijacks the ensure; ATP never drops — **medium** — same verification as B3; the zone arm is benign (zones carry no systemOwned and the ensure's bin still lands system-owned), the bin arm is the defect. Patch.
+- E3 `stock.adjustment` can move units into or out of the system QC-HOLD bin — ATP drops with no hold row and no release path — **medium** — verified: `inventory.command.ts` contains no `systemOwned` exclusion; a QC-bin intake is counted by `qcHeldUnits` yet no release path exists; a mid-hold out-adjustment makes release fail safe (422, hold stays open). This directly violates the frozen boundary "only the hold/release commands ever move stock through it". Patch (reject adjustments whose from/to bin is the system QC-hold bin).
+- E4 a serial-tracked SKU's scope can be held bulk (`serialRef: null`), leaving serial location records at the origin bin — serial/stock divergence — **medium** — verified: `placeHold` never checks `serialTracked`, the serial fold ignores null-ref bulk movements (ledger.service.ts:364-367), and `qc.held` registers `allowsSerialArm: false`. One safe reading exists (v1 holds no serials) → reject serial-tracked holds with 400. Patch.
+- E5 holds-list cursor encodes the ms-truncated canonical instant, so rows sharing the boundary millisecond with later sub-ms timestamps are skipped — **medium** — verified: `buildPage` encodes from the mapped item's `createdAt` (`canonicalInstant` = `toISOString()`, ms precision) while Postgres keeps microseconds; the exact pattern epic-2 retro A1 already logs for the shared cursor primitive. Defer (pre-existing, fix lands with A1).
+- E6 card shows cross-warehouse holds — merges into B1. Patch.
+- E7 form offers the QC-bin scope — merges into B2. Patch.
+- E8 concurrent `placeHold` on one scope with different keys → the loser surfaces 422 `insufficient-on-hand` instead of the documented 409 — **low** — verified real (the movement-append precedes the hold insert), but it needs two different-key commands in flight on the same scope in the same instant, the refusal is still a deterministic 4xx with zero corruption (the movement guard holds), and the same-key path replays correctly. Reject.
+- E9 (claim) the task list names a `from_bin_id` column that does not exist — merges into B12. Reject (spec edit).
+- E10 (claim) the adjustment command has no systemOwned exclusion — merges into E3. Patch.
+- E11 (claim) a pre-render double-click fires two distinct fresh ULIDs, so the second is a new command: a spurious 409 banner ("already covers this scope"/"already released") right after the action succeeded — **medium** — verified plausible: both handlers run before the disabling state renders, each generating its own key, so the fresh-key-per-click design does not deliver the "double click replays" contract for this window. Patch (re-entry guard so the second click is a no-op, not a new command).
 
 ## Design Notes
 
