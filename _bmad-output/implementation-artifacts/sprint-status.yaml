@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '10-09-2026 18:20'
+last_updated: '09-10-2026 21:33'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -58,7 +58,7 @@ development_status:
   3-4-qc-hold-and-release: done
   3-5-directed-putaway: done
   3-6-bin-administration: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
   epic-4: backlog
   4-1-orders-manual-entry-idempotent-ingestion-acceptance-reservat: backlog
@@ -269,3 +269,98 @@ action_items:
     owner: "Claude (next adjustment story)"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
+  - id: "epic-3-retro-a1-over-receipt-approve-closed-po-gate"
+    epic: 3
+    action: "Over-receipt approve: re-validate PO + line status in decideOverReceipt,
+      lock the line before the ceiling bump (A2/E1/V3 + A3); e2e arm close-then-approve"
+    owner: "Claude (fix branch, before Epic 4 consumes over-receipts)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a2-system-bin-identity-reserve-codes"
+    epic: 3
+    action: "System-bin identity: systemOwned filter in ensureReceivingBinInTx, reserve
+      RECEIVING/QC-HOLD codes, e2e arms (A5/E3/V1/V2)"
+    owner: "Claude (next bin/inbound story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a3-releasehold-lock-and-blocked-arm"
+    epic: 3
+    action: "releaseHold hardening: .for(update) on origin read; pin release-into-blocked-bin
+      behavior (A1/E4/V5)"
+    owner: "Claude (next inbound story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a4-retirebin-serial-arm-empty-gate"
+    epic: 3
+    action: "retireBin serial-arm empty gate (A11; 3-6 review deferral #2/#31)"
+    owner: "Claude (next bin story, with a2)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a5-po-amend-received-line-guard"
+    epic: 3
+    action: "PO amend received-line guard: refuse delete/sku rewrite when receivedQty
+      > 0 (A4/E6)"
+    owner: "Claude (next inbound story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a6-badge-in-hardening-batch"
+    epic: 3
+    action: "badge-in hardening: PIN attempt lockout, role gate on binding, tenantId
+      on enroll replay lookup (A8-E5/A9/A10/E15)"
+    owner: "Claude (next tenancy story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a7-vacuous-facade-guard-decision"
+    epic: 3
+    action: "Architecture guard decision: vacuous facade-guard test fix-or-delete
+      + AD-6 read policy (F-4/F-5/F-6)"
+    owner: "Claude (Epic 4 story-1 spec or refactor pass)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a8-scaffolding-extraction-pass"
+    epic: 3
+    action: "Scaffolding extraction pass: writeIdempotencyKey x5, cursor guards, FE
+      useCursorPage + shared rejectionReason (F-7/F-12/F-14/F-15)"
+    owner: "Claude (first refactor pass)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a9-mobile-hardening-batch"
+    epic: 3
+    action: "Mobile hardening batch: batchCode-null confirm, wrong-shape seal, undecryptable
+      row, refresh single-flight, stale retired-bin, reset confirm (E9-E14/A15/F-17)"
+    owner: "Claude (next mobile story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a10-record-diverged-3-2-items"
+    epic: 3
+    action: "Record silently-diverged 3.2 items (claim UX, nearest-correct-bin hint,
+      Queued microcopy) in deferred-work.md"
+    owner: "Claude (one meta-repo edit)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a11-claim-routing-ritual"
+    epic: 3
+    action: "Process: claim routing - every open retro item claimed into a story spec
+      or explicitly closed at the next epic boundary"
+    owner: "Sasidhar (sprint ritual)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a12-measure-scan-budgets"
+    epic: 3
+    action: "Measure 1.5s/500ms scan budgets on a real mid-range Android; record numbers"
+    owner: "Sasidhar (device in hand)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a13-catalog-snapshot-single-tx"
+    epic: 3
+    action: "Catalog-snapshot single-tx composition + bounded fan-out (A13/E7)"
+    owner: "Claude (next receiving story)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-3-retro-a14-small-guards-batch"
+    epic: 3
+    action: "Small guards: GRN sequence-exhaustion 409 (E2); occurredAt drift bound
+      decision (A12); use-inbound.ts tests (F-18)"
+    owner: "Claude (respective next stories)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
