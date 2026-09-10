@@ -111,3 +111,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-2-mobile-client-substrate-enrollment-badge-in-inbox-scanning.md`
   summary: The pre-auth idempotency replay lookup (device enroll, like registration/accept-invite before it) queries `idempotency_keys` by key alone — a tenant A replay of a tenant B's key is answered with tenant B's cached response instead of a 422.
   evidence: Verified — `enrollment.command.ts:332-336` key-only AUTH_DATABASE lookup, identical to the accepted precedent `registration.command.ts:74-78` (documented intentional at `docs/repos/wms-be/README.md:19`). Requires knowing a foreign tenant's key to exploit; response is a 422-shaped error, no data leak. Consolidate all three pre-auth commands onto a payload-hash-including lookup in one shared-primitives change.
+
+## Deferred from: review of spec-3-3 (2026-09-10, review iteration 1)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3-scan-based-receiving-and-grn.md`
+  summary: The mobile repo's real HTTP transport is never executed by any test — every suite injects fake senders, so a transport regression in `submitGoodsReceipt` (wrong path, dropped `Idempotency-Key` header, payload serialization drift) would quarantine every offline device receipt at replay with all test suites green.
+  evidence: Verified — `src/api.ts:213` defines the real sender; `op-dispatch.test.ts` and `engine.test.ts` both inject fakes; the payload shape is pinned on both sides (`draft.test.ts` payload `toEqual`, wms-be e2e) but the transport wrapping is not. Settle with a stubbed-`fetch` transport test in the mobile repo — a test harness convention that repo does not have today; a separate initiative, not this story's patch.
