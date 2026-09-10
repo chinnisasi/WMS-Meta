@@ -123,3 +123,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-4-qc-hold-and-release.md`
   summary: The holds-list keyset cursor encodes the ms-truncated canonical instant (`canonicalInstant` = `toISOString()`, ms precision) while the ledger's `created_at` keeps Postgres microseconds — rows whose `created_at` shares the boundary millisecond but carries a later sub-ms component are skipped on the next page. Same root cause as epic-2 retro item A1 (the shared cursor primitive encodes from the already-canonicalized item value via `buildPage`).
   evidence: Verified (edge-hunter E5, triage row E5) — `src/shared/primitives/pagination.ts` `buildPage` encodes from `items.at(-1).createdAt`, which the facades map through `canonicalInstant` before returning; `qc_holds` list is one more call site of the pre-existing pattern. Settle with epic-2-retro-a1 (encode full timestamptz precision in `encodeCursor`/`decodeCursorSafe`), not a story-local patch.
+
+## Deferred from: planning spec-3-5 (2026-09-10)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-directed-putaway.md`
+  summary: The web suggestion-vs-actual putaway report surface (SM-3) — a report reading `putaway_placements` (compliance rate, per-line suggestion vs actual + recorded reason) — plus the pieces that make suggestions meaningful over time: the SKU velocity class (derived from ledger movement history), a nullable `zones.putaway_class` affinity field with the Settings zone-form dropdown, and the PRD's nightly slotting-suggestions job.
+  evidence: Split at story 3.5's token gate (spec ≈2,700 tokens vs the 1,600 ceiling); the backend + mobile operator flow are one goal, the report surface is independently shippable (reads `putaway_placements`, no flow dependency). Human decision 2026-09-10: Split.
