@@ -2,7 +2,7 @@
 title: 'Story 4.2: Waves and picklists'
 type: 'feature'
 created: '2026-09-11'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '3fec363' # wms-be main
