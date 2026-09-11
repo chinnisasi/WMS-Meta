@@ -162,3 +162,17 @@
 - source_spec: none
   summary: The web Outbound surface — the orders card (deferred out of story 4.1), the waves/picklists UI, and the `orders.manage` FE permissions mirror in `wms-fe src/lib/users.ts`.
   evidence: Split from story 4.2 at the multi-goal gate (human decision 2026-09-11). Waves/picklists backend and the Outbound web surface are two independently shippable deliverables — each reviewable and mergeable as its own PR. The backend is what unblocks story 4.3 (mobile picking needs picklists as its task substrate); the web surface does not. **Tracked as its own story, not a deferred bullet** — `4-2b-outbound-web-surface` in sprint-status.yaml — because this surface has already been deferred once (out of 4.1) and `src/app/(app)/outbound/page.tsx` is still a literal placeholder reading "functionality lands in a later story". It must not slip a third time.
+
+## Deferred from: code review of spec-4-2-waves-and-picklists (2026-09-12)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-2-waves-and-picklists.md`
+  summary: Batch expiry is judged on a UTC day boundary, so a batch expiring today stops being drawable from 05:30 IST — inside a codebase that otherwise reasons in Asia/Kolkata.
+  evidence: `wave.command.ts` does `Date.parse(batch.expiryDate) >= now` on a `YYYY-MM-DD` column, which parses as UTC midnight. Real, but NOT introduced by story 4.2 — the shipped FEFO path at `src/api/inventory.controller.ts:368` uses the identical comparison, so this is a repo-wide semantic. Fixing it only in waves would make waves and stock adjustments disagree about what "expired" means. Fix both together, ideally when warehouses gain a timezone column.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-2-waves-and-picklists.md`
+  summary: A reservation can expire between wave generation and release, so a released picklist may direct picks against holds that no longer exist.
+  evidence: Reachable via the 7-day reservation TTL and the reaper on an order still `accepted`. Bounded by the story's frozen design: a picklist's bin/batch is a suggestion re-derived at pick time, never an allocation, so story 4.3 re-validates before any draw. A release-time hold re-read would be a second, weaker guard invented outside the module that owns reservations — close it as part of 4.3's re-derivation instead.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-2-waves-and-picklists.md`
+  summary: Two open waves can suggest the same bin units for different orders; the second picker finds the bin already emptied.
+  evidence: The direct and intended consequence of the frozen decision that a picklist line is a suggestion, not a bin-level allocation — reservations bind to (tenant, warehouse, sku) with no bin, and the spec's Never list forbids bin-level reservation. Closing it requires bin-level allocation machinery that Epic 2 does not have. Revisit if short-picks caused by cross-wave bin contention show up as a real signal in 4.4's short-pick aggregation.
