@@ -2,7 +2,7 @@
 title: 'Story 4.3: Scan-verified picking with offline tolerance'
 type: 'feature'
 created: '2026-09-12'
-status: 'ready-for-dev'
+status: 'review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '877993f' # wms-be main
@@ -84,20 +84,20 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0019_*.sql` — `picks` table (the settlement record) + the `picked` arm on the `picklist_lines` status CHECK + hand-appended RLS
-- [ ] `wms-be src/shared/db/schema.ts` — the `picks` table per conventions
-- [ ] `wms-be src/modules/inventory/ledger-registry.ts` — the `pick` reference-doc arm + `pick.picked` registration (batch and serial arms allowed)
-- [ ] `wms-be src/modules/inventory/inventory.facade.ts` — `commitReservationInTx` passthrough
-- [ ] `wms-be src/modules/outbound/pick.command.ts` — `recordPick`: device authority, replay, validation, bin lock, ledger draw + hold commit in one tx, line flip, outbox, audit, key
-- [ ] `wms-be src/modules/tenancy/permissions.ts` — `picks.execute` (Operator + Ops Manager + Owner)
-- [ ] `wms-be src/api/outbound.controller.ts` + `devices.controller.ts` — `POST .../picks` (device-gated) and `pickTasks` on the catalog snapshot
-- [ ] `wms-be test/picking.spec.ts` — the matrix e2e including the stale-replay 422 and the serial arm
-- [ ] `wms-mobile src/picking/draft.ts` — pure resolvers: bin, item, expected-SKU verification, the next-walk-bin hint, `confirmPayload`
-- [ ] `wms-mobile app/pick.tsx` + `app/inbox.tsx` — the pick flow and the task list replacing the placeholder
-- [ ] `wms-mobile src/offline/types.ts`, `src/state/op-dispatch.ts`, `src/api.ts`, `src/state/catalog-snapshot.ts` — the `pick.record` op end to end
-- [ ] `wms-mobile src/components/scan-banner.tsx` + `app/receive.tsx` + `app/putaway.tsx` — `Recorded · queued` wording, closing retro F-2
-- [ ] `wms-mobile src/picking/draft.test.ts` + `src/offline/engine.test.ts` — resolver arms and a `pick.record` FIFO replay test
-- [ ] `wms-be bun run openapi:export` + `wms-fe bun run api:generate` — additive contract
+- [x] `wms-be drizzle/0019_*.sql` — `picks` table (the settlement record) + the `picked` arm on the `picklist_lines` status CHECK + hand-appended RLS
+- [x] `wms-be src/shared/db/schema.ts` — the `picks` table per conventions
+- [x] `wms-be src/modules/inventory/ledger-registry.ts` — the `pick` reference-doc arm + `pick.picked` registration (batch and serial arms allowed)
+- [x] `wms-be src/modules/inventory/inventory.facade.ts` — `commitReservationInTx` passthrough
+- [x] `wms-be src/modules/outbound/pick.command.ts` — `recordPick`: device authority, replay, validation, bin lock, ledger draw + hold commit in one tx, line flip, outbox, audit, key
+- [x] `wms-be src/modules/tenancy/permissions.ts` — `picks.execute` (Operator + Ops Manager + Owner)
+- [x] `wms-be src/api/outbound.controller.ts` + `devices.controller.ts` — `POST .../picks` (device-gated) and `pickTasks` on the catalog snapshot
+- [x] `wms-be test/picking.spec.ts` — the matrix e2e including the stale-replay 422 and the serial arm
+- [x] `wms-mobile src/picking/draft.ts` — pure resolvers: bin, item, expected-SKU verification, the next-walk-bin hint, `confirmPayload`
+- [x] `wms-mobile app/pick.tsx` + `app/inbox.tsx` — the pick flow and the task list replacing the placeholder
+- [x] `wms-mobile src/offline/types.ts`, `src/state/op-dispatch.ts`, `src/api.ts`, `src/state/catalog-snapshot.ts` — the `pick.record` op end to end
+- [x] `wms-mobile src/components/scan-banner.tsx` + `app/receive.tsx` + `app/putaway.tsx` — `Recorded · queued` wording, closing retro F-2
+- [x] `wms-mobile src/picking/draft.test.ts` + `src/offline/engine.test.ts` — resolver arms and a `pick.record` FIFO replay test
+- [x] `wms-be bun run openapi:export` + `wms-fe bun run api:generate` — additive contract
 
 **Acceptance Criteria:**
 - Given a released picklist, when the correct bin and item are scanned, then the ledger draws those units, the hold reads `committed` and the line reads `picked` — all from one transaction
@@ -107,7 +107,33 @@ context:
 
 ## Implementation Notes
 
+**Landed as** WMS-BE #24 (backend), WMS-Mobile #4 (device), WMS-FE #16 (client regeneration), in that merge order.
+
+**The one transaction.** `PickCommandService.recordPick` composes the `pick.picked` ledger append and the reservation's `held → committed` through two `InventoryFacade` in-tx passthroughs (`appendLedgerEventInTx`, the new `commitReservationInTx`), so both land in the caller's `withTenantTransaction` or neither does. The outbound module still writes no inventory table — the architecture test pins that (`the pick command moves stock ONLY through the inventory facade`).
+
+**A pick is a pure draw.** `fromBinId` is the bin the operator scanned, `toBinId` is null, the delta is negative. The frozen matrix's serial row says "both bin arms", which is carried over from the putaway relocation; a pick has no destination bin in this story (pack/dispatch are 4.5/4.6 and the Never list excludes them), so inventing a staging bin would be scope the story rejects. The serial arm is therefore one magnitude-1 draw event per unit, with the batch arm riding each event — both projections drain, and the ledger's own `serial-elsewhere` guard still decides location truth.
+
+**The hold settles on the LAST slice.** An order line whose reserved quantity spans two bins emits two picklist slices that share one `reservation_id`, and a reservation is a whole-quantity row with no partial commit. Committing on the first slice would settle units still sitting in the other bin, so the command settles only when no sibling slice of that order line is still `planned`. `picks.reservation_committed` records which pick did it (with a CHECK pairing it to a non-null `reservation_id`).
+
+**`cancelWave` no longer touches picked lines.** Story 4.2's cancel flipped *every* line of the wave to `cancelled`, which is exactly what frees its orders through the partial unique index. With a `picked` arm that would free an order line whose units have already left the bin, so the flip now excludes `picked`. This is the same invariant the spec states from the other side ("it must stay outside `'cancelled'`") — the status arm alone was not enough; the cancel path had to stop overwriting it.
+
+**The batch is re-derived, not carried.** The device sends no `batchId` at all. The server re-derives the FEFO arms inside the bin that was actually scanned, against live `batch_on_hand` and the catalog's batch status/expiry (a blocked or expired batch is never drawn — epic-2 retro a13's draw side). Expiry is judged against the op's own `occurredAt`, so a pick queued before a batch expired is not re-judged at replay. A draw spanning several batches emits one event per arm; the pick row then records `batch_id` null (the arms are on the events).
+
+**"Nearest correct bin" = next on the walk.** `nextWalkBinFor` returns the next stop by `walkSeq` carrying the expected SKU, falling back to the first such stop when the operator has walked past it, and null when the walk carries none (the rejection then names the reason only). A bin that is *another stop of the same walk for the same SKU* is not rejected — it passes as `offPlan`, because the plan's bin is a suggestion and the server re-checks live stock.
+
+**Rejected replays.** The engine now stamps session attribution on `rejected` outcomes and continues the drain past them (the tail is not blocked). The outcome stays in the summary's `rejected` bucket rather than `quarantined`: `quarantined` is the revocation semantics (the whole tail stranded, the device dead), and a 422 stale pick is a single refused op the operator can re-record. "Quarantines client-side only" is honoured in the sense the decision names — parked on the device, surfaced in the sync summary, with no backend rejected-op table.
+
+**Retro F-2 closed.** `scanStates.queued.word` is now `Recorded · queued`; `app/putaway.tsx`'s bin-mismatch banner stopped using the green `accepted` state for an on-device decision. `app/health.tsx` keeps the amber fill for its pending probe but overrides the word to `Checking` — it records nothing, so the queue vocabulary would be a lie there.
+
+**Not done / deliberate:** the `picks.execute` capability is NOT mirrored into `wms-fe src/lib/users.ts` — the FE mirror is already missing `orders.manage` / `waves.manage` (deferred to `4-2b`), there is no web pick surface in this story, and `picks.execute` is a device capability. It belongs with `4-2b`'s mirror pass.
+
 ## Spec Change Log
+
+**2026-09-12 — code-map corrections found during implementation (no scope change):**
+- The sealed catalog snapshot is served by `src/api/receiving.controller.ts:119` and composed in `src/modules/inbound/receiving.facade.ts`, not `devices.controller.ts` (the Code Map named the wrong file). `pickTasks` was added there, additively beside `bins`/`putawayTasks`, with `InboundModule` now importing `OutboundModule` (acyclic — outbound imports shared/inventory/catalog only).
+- The banner's `queued` word lives in `src/theme.ts`'s `scanStates`, which `src/components/scan-banner.tsx` renders; changing it there also reaches `app/health.tsx`, whose pending arm now overrides the word to `Checking` (a health probe records nothing).
+- The I/O matrix's serial row says "both bin arms". A pick has no destination bin in this story, so it ships as a pure draw (`fromBinId` = the scanned bin, `toBinId` null), one magnitude-1 event per serial unit with the batch arm carried. See Implementation Notes.
+- Story 4.2's `cancelWave` had to change: it flipped every line to `cancelled`, which would have freed an order line whose units were already drawn. It now excludes `picked` lines.
 
 ## Review Triage Log
 

@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-12-2026 03:00'
+last_updated: '09-12-2026 05:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -67,7 +67,7 @@ development_status:
   # Outbound surface is its own shippable deliverable. Carries story 4.1's
   # deferred orders card + the `orders.manage` FE mirror.
   4-2b-outbound-web-surface: backlog
-  4-3-scan-verified-picking-with-offline-tolerance: ready-for-dev
+  4-3-scan-verified-picking-with-offline-tolerance: review
   # Split out of 4.3 at the build multi-goal gate (2026-09-12, human):
   # AD-14's state_epoch and the 4-case conflict taxonomy are their own
   # deliverable. state_epoch has no producer, wire field or comparison
