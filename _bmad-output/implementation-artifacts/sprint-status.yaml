@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-12-2026 05:00'
+last_updated: '09-12-2026 09:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -74,6 +74,12 @@ development_status:
   # contract defined anywhere, and story 3.5 deferred it explicitly. Lands
   # with or before 4.4, which consumes taxonomy case 3 (re-plan).
   4-3b-state-epoch-and-conflict-taxonomy: backlog
+  # INFRASTRUCTURE, not a feature story. Opened 2026-09-12 after story 4.3's
+  # review: the wms-be e2e suite fails intermittently (~1 run in 5) once the
+  # suite count grows. PROVEN pre-existing and NOT caused by 4.3 — `main` with
+  # two throwaway duplicate suites and zero 4.3 code flakes at the same rate.
+  # Every future story adds suites and makes this worse; epic 4 has three left.
+  infra-1-e2e-harness-scaling: backlog
   4-4-short-pick-re-planning: backlog
   4-5-pack-station-verification: backlog
   4-6-carrier-rating-labels-and-dispatch: backlog
