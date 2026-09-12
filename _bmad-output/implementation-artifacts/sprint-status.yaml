@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-12-2026 10:00'
+last_updated: '09-12-2026 13:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -79,7 +79,14 @@ development_status:
   # suite count grows. PROVEN pre-existing and NOT caused by 4.3 — `main` with
   # two throwaway duplicate suites and zero 4.3 code flakes at the same rate.
   # Every future story adds suites and makes this worse; epic 4 has three left.
-  infra-1-e2e-harness-scaling: backlog
+  infra-1-e2e-harness-scaling: done
+  # Partial outcome, deliberately: infra-1 shipped per-suite database
+  # isolation (migrations once, ~50s runs, suites can no longer corrupt each
+  # other) and cut the flake from ~1-in-5 to ~1-in-7 — but did NOT eliminate
+  # it. The residual is now known to be HTTP/app layer, not the database:
+  # the original `expected 201, got 200` still occurs with every suite on its
+  # own database. See infra-1's doc for the nine hypotheses already ruled out.
+  infra-2-residual-e2e-flake: backlog
   4-4-short-pick-re-planning: backlog
   4-5-pack-station-verification: backlog
   4-6-carrier-rating-labels-and-dispatch: backlog
