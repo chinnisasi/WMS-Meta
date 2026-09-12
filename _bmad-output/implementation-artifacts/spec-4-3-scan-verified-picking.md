@@ -2,7 +2,7 @@
 title: 'Story 4.3: Scan-verified picking with offline tolerance'
 type: 'feature'
 created: '2026-09-12'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '877993f' # wms-be main
