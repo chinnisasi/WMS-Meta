@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-11-2026 02:00'
+last_updated: '09-12-2026 01:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -62,7 +62,7 @@ development_status:
 
   epic-4: in-progress
   4-1-orders-manual-entry-idempotent-ingestion-acceptance-reservat: done
-  4-2-waves-and-picklists: in-progress
+  4-2-waves-and-picklists: done
   # Split out of 4.2 at the build multi-goal gate (2026-09-11, human): the web
   # Outbound surface is its own shippable deliverable. Carries story 4.1's
   # deferred orders card + the `orders.manage` FE mirror.
