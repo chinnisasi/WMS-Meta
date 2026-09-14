@@ -2,7 +2,7 @@
 title: 'Story 4.3b: state_epoch and the AD-14 conflict taxonomy'
 type: 'feature'
 created: '2026-09-14'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '2523f42' # wms-be main
@@ -79,17 +79,17 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0021_*.sql` — `bin_state_epochs` (unique on tenant+warehouse+bin) + RLS
-- [ ] `wms-be src/shared/db/schema.ts` — the table per conventions
-- [ ] `wms-be src/modules/inventory/ledger.service.ts` — bump in both folds and in `rebuildProjectionsInTx`
-- [ ] `wms-be src/modules/inventory/inventory.facade.ts` — an in-tx epoch read seam for the outbound module
-- [ ] `wms-be src/modules/outbound/pick.command.ts` — classification between the bin lock and the draw; epoch on the task projection; epoch excluded from the payload hash
-- [ ] `wms-be src/modules/outbound/outbound.dto.ts` + `src/api/outbound.controller.ts` — the optional epoch field and the two new codes in OpenAPI
-- [ ] `wms-be test/picking.spec.ts` — all four cases driven deterministically, plus the no-epoch and unknown-bin arms
-- [ ] `wms-mobile src/picking/draft.ts`, `src/api.ts` — capture and carry the epoch
-- [ ] `wms-mobile src/offline/engine.ts` — case 3 keeps the op, case 4 quarantines; sync summary distinguishes them
-- [ ] `wms-mobile src/offline/engine.test.ts`, `src/picking/draft.test.ts` — the retained-op and quarantine arms
-- [ ] `wms-be bun run openapi:export` + `wms-fe bun run api:generate`
+- [x] `wms-be drizzle/0021_lean_george_stacy.sql` — `bin_state_epochs` (unique on tenant+warehouse+bin) + RLS, the `epoch > 0` CHECK, and `picks.conflict_class` + its CHECK
+- [x] `wms-be src/shared/db/schema.ts` — the table per conventions
+- [x] `wms-be src/modules/inventory/ledger.service.ts` — bump in both folds and in `rebuildProjectionsInTx`
+- [x] `wms-be src/modules/inventory/inventory.facade.ts` — an in-tx epoch read seam for the outbound module (`binStateEpochInTx` / `binStateEpochsInTx`)
+- [x] `wms-be src/modules/outbound/pick.command.ts` — classification between the bin lock and the draw; epoch on the task projection; epoch excluded from the payload hash
+- [x] `wms-be src/modules/outbound/outbound.dto.ts` + `src/api/outbound.controller.ts` — the optional epoch field and the two new codes in OpenAPI
+- [x] `wms-be test/picking.spec.ts` — all four cases driven deterministically, plus the no-epoch and unknown-bin arms; `test/reconciliation.spec.ts` covers the repair-path bump; `test/architecture.spec.ts` pins the new table to the inventory module
+- [x] `wms-mobile src/picking/draft.ts`, `src/api.ts` — capture and carry the epoch
+- [x] `wms-mobile src/offline/engine.ts` — case 3 keeps the op, case 4 quarantines; sync summary distinguishes them
+- [x] `wms-mobile src/offline/engine.test.ts`, `src/picking/draft.test.ts` — the retained-op and quarantine arms
+- [x] `wms-be bun run openapi:export` + `wms-fe bun run api:generate`
 
 **Acceptance Criteria:**
 - Given a bin drained after a task started, when its queued pick replays, then it is refused as re-plannable, nothing is written, and the client still holds the op
@@ -98,6 +98,20 @@ context:
 - Given a device that has not refreshed since upgrading, when its pick replays without an epoch, then it behaves exactly as before this story
 
 ## Implementation Notes
+
+**The epoch.** `bin_state_epochs` is `(tenant, warehouse, bin_id, epoch)` with `epoch bigint > 0`, unique on the scope, RLS as the sibling projections. It is minted by `bumpBinEpochInTx` in `ledger.service.ts` — the same file the stock projections are written from, so `test/architecture.spec.ts` now pins it there too (it is listed in `STOCK_TABLES` and in the single-quantity-path assertion). Both folds bump it, so a batch movement bumps its bin's epoch twice in one transaction; that is harmless (the value is opaque and compared only for equality) and keeps each fold's invariant local rather than dependent on call order. `rebuildProjectionsInTx` bumps the epoch of every bin it actually rewrote — and of none it did not, which the reconciliation suite asserts in both directions. Value starts at 1, never 0: a 0 on the wire would be indistinguishable from "no epoch".
+
+**Where the classification runs.** In `recordPick`, between the bin's `for('update')` and the FEFO derivation — after the lock, before any write. The two shortfall producers (the FEFO shortfall inside `deriveBatchArms`, and the whole-bin sufficiency check) were unified behind one `binCannotCover(epochMoved, …)` router, so `deriveBatchArms` now REPORTS a shortfall (`{ drawable }`) instead of throwing one; the caller owns the 409-vs-422 choice. With a moved epoch a shortfall is `409 pick-bin-short`; without one it is the unchanged `422 insufficient-on-hand`, which is exactly the pre-upgrade behaviour AC 4 asks for.
+
+**apply vs settle — what the server can actually prove.** The matrix distinguishes case 1 by "this SKU's on-hand in the bin unchanged". That is not derivable: the device sends no observed quantity, and the epoch is opaque and per-BIN by decision, so nothing stored says which SKU inside the bin moved. Rather than invent a client field or reinterpret the epoch as a sequence, the spine's two names were bound to the distinction the server can prove and that matches the matrix's *outcome* column exactly — `applied` is "drawn normally" (the epoch moved, the draw stood on its own) and `settled` is "drawn and settled" (the epoch moved and this pick flipped the hold `held → committed`). It is recorded on `picks.conflict_class` (`none` | `applied` | `settled`, CHECK-constrained) and returned on the pick snapshot. If a later story wants the literal "this SKU was untouched" test, the honest way is a per-(bin, sku) epoch, not a reinterpretation of this one.
+
+**Case 4's reach.** The spec's case 4 is "hold no longer `held`, or line/wave/order moved terminally". The hold arm is new and lives at the classification point: `state === 'held'` AND `expires_at > now`, which are deliberately two tests — `expireDue` is a job, so a hold can be past TTL and still read `held`, and settling one would commit units nobody holds. The line/wave/picklist/order arms were already deterministic 409s upstream; they now answer `pick-unresolvable` **when the premise is terminal** (cancelled, or a line already picked — including the two concurrency backstops) and keep the plain retryable `conflict` when it is not (a wave still `planned`, a picklist not yet `ready`). Quarantining a not-yet-released wave would be wrong: releasing it later makes the queued op replayable.
+
+**Client behaviour.** `SendResult` gained `re-plannable` and `quarantined` arms beside `rejected`; `SyncSummary` gained `rePlannable`. `pick-bin-short` keeps the op in the durable outbox (it is re-sent on the next sync and survives a restart — the engine test asserts both) and reports it; `pick-unresolvable` drops it and reports it as held-for-review with the creating session's attribution, stranding only itself (unlike a revocation, which still strands the tail). Every other refusal behaves exactly as before. `ApiProblem` now also carries the problem `detail`, so the summary can name the bin and what it now holds instead of only the title. The device captures the epoch of the bin it ACTUALLY scanned: on-plan from the task, off-plan from the walk stop at that bin (the only other draw `evaluateBin` permits) — and `null` when the walk names no stop there, because a guessed epoch would misclassify a healthy pick.
+
+**Excluded from the payload hash.** `hashCommandPayload` does not see `binStateEpoch`; the e2e suite asserts that a replay with a *different* epoch re-serves the stored snapshot while a replay with a different `qty` still fails `422 idempotency-key-reuse`.
+
+**Not done (out of scope, per the spec's Never list).** No short-pick re-planning or alternate-bin suggestion (4.4) — case 3 emits its outcome and stops, which means a re-plannable op is re-sent and re-refused on every sync until 4.4 consumes it. No backend rejected-op table and no Conflicts & Reviews surface (Epic 5 / 5.5). No epoch on putaway or receiving. No web surface.
 
 ## Spec Change Log
 
