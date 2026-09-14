@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-14-2026 09:00'
+last_updated: '09-14-2026 12:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -73,7 +73,7 @@ development_status:
   # deliverable. state_epoch has no producer, wire field or comparison
   # contract defined anywhere, and story 3.5 deferred it explicitly. Lands
   # with or before 4.4, which consumes taxonomy case 3 (re-plan).
-  4-3b-state-epoch-and-conflict-taxonomy: backlog
+  4-3b-state-epoch-and-conflict-taxonomy: review
   # INFRASTRUCTURE, not a feature story. Opened 2026-09-12 after story 4.3's
   # review: the wms-be e2e suite fails intermittently (~1 run in 5) once the
   # suite count grows. PROVEN pre-existing and NOT caused by 4.3 — `main` with
