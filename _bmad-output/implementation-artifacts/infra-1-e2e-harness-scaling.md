@@ -2,7 +2,7 @@
 title: 'Infra 1: the wms-be e2e harness fails intermittently as suite count grows'
 type: 'chore'
 created: '2026-09-12'
-status: 'backlog'
+status: 'in-progress'
 route: ''
 ---
 
@@ -30,19 +30,47 @@ The last row is the decisive one: copying `waves.spec.ts` and `orders.spec.ts` t
 - Never the same test twice; observed across `orders`, `receiving`, `catalog`, `devices`, `inbound`, `picking`.
 - **Vanishes under instrumentation** — which marks it as timing, not logic.
 
-## Leads, in the order worth trying
+## What shipped
 
-1. **Pool sizing.** Each suite boots a Nest app whose `DATABASE` and `AUTH_DATABASE` clients each open `max: 10` (`src/shared/db/db.ts`) against a server with `max_connections = 100`, and 24 suites run serially through it. `postgres.js` queues connection requests with **no timeout**, so pressure never surfaces as an error — it surfaces as a request that waits forever, which fits the 153 s suite exactly. A per-environment `POOL_MAX` (`NODE_ENV === 'test' ? 4 : 10`) was tried during 4.3 and **did not close it** (1 failure in 5 after), so it is necessary-at-best, not sufficient. It was deliberately NOT shipped with 4.3; re-try it here as one part of a fix rather than the whole.
-2. **`ProblemDetailsFilter`'s `headersSent` early-return** (`src/shared/problem-details/problem.filter.ts:64`) is the only path in the app that emits a response with no body. Worth instrumenting to catch a response whose headers were already sent, and working back to what sent them — accepting that the flake hides under instrumentation.
-3. **Per-suite isolation.** Every suite shares one Postgres database and mutates `process.env.DATABASE_AUTH_URL` in `beforeAll`; under `maxWorkers: 1` that env is process-wide across every suite in the run. A database-per-suite (or at least a schema-per-suite) would remove the shared-resource coupling entirely rather than tuning it.
+**One database per e2e suite.** `test/support/global-setup.js` builds a `wms_template` database once per run and migrates it; `useSuiteDatabase(slug)` in `test/support/suite-db.ts` clones it per suite and rewrites `DATABASE_URL`/`DATABASE_AUTH_URL` before the app is created, so everything downstream follows without touching each suite's internals. The clone is dropped in `afterAll`, and leftovers from an interrupted run are swept at the next `globalSetup`. 19 suites converted; `architecture`, `outbox-worker` and `pick-truncation` never touch Postgres and were left alone.
 
-## Ruled out (do not re-tread)
+Wins independent of the flake:
 
-- **Test parallelism** — `jest.config.js` sets `maxWorkers: 1`; suites are serial.
-- **Suite ordering** — 16 shuffled orderings behaved the same as the default.
-- **The advisory-lock id mismatch** — `picking.spec` used 742108 where others used 742107; aligned as hygiene, not a fix, and irrelevant under a single worker.
-- **Teardown completeness** — every suite calls `app.close()` and ends both clients.
+- Migrations run **once per run** instead of once per suite; a full run dropped to **~50 s**.
+- Suites can no longer corrupt each other's fixtures, idempotency rows, advisory locks or connection budget.
+- `maxWorkers: 1` exists only because suites shared a database. That constraint is now gone and parallelism could be raised — deliberately NOT done in the same change, because it would have invalidated the flake measurement.
+- Two `pg_stat_activity` probes (`ledger`, `putaway`) were scoped with `datname = current_database()`; that view is cluster-wide and they were one step from counting a sibling database's backends.
 
-## Why it matters now
+## Outcome: partial
 
-Epic 4 has three stories left, each adding suites. The rate scales with suite count, and a CI that is red one run in five is a CI people learn to re-run rather than read — at which point it stops catching anything, including the real defects this same review pass found (two cross-tenant credential leaks, a phantom-stock cancel hole).
+The flake is **reduced, not eliminated** — 15 consecutive fresh-database runs after the change: **13 clean, 2 failed** (~1 in 7, from ~1 in 5).
+
+The two failures were `tenancy` with the original `expected 201, got 200` signature, and `ledger`'s lock-waiter probe timing out.
+
+**The `tenancy` failure is the important result**: the original signature still occurs while every suite has its own database. Shared database state was never the cause.
+
+## Ruled out, each by measurement
+
+Do not re-tread these. Every one cost a batch of runs:
+
+| Hypothesis | Verdict |
+| --- | --- |
+| Test parallelism | `maxWorkers: 1` — suites are serial |
+| Suite ordering | 16 shuffled orderings behaved identically |
+| Advisory-lock id mismatch | Irrelevant under a single worker |
+| Teardown completeness | Every suite closes its app and both clients |
+| Connection-pool sizing | 10 → 4 in the test env: no effect (1 failure in 5) |
+| HTTP keep-alive | No effect — and `superagent` sets `agent: false`, so supertest never pooled sockets in the first place |
+| Cross-suite idempotency-key collision | Every key is a ULID (80 random bits); replays return **201** here, so an observed 200 is a different handler's response, not a replay |
+| ULID collision | `crypto.getRandomValues`, 80 bits |
+| **Shared database state** | **Disproven by this story's own change** |
+
+## What is left, and what is known about it
+
+The residual failure is in the **HTTP/app layer, not the database**. A POST that normally answers 201 occasionally answers 200, on an isolated database, with a fresh idempotency key, over a non-pooled socket. In this codebase a POST answering 200 means a handler that declares `@HttpCode(HttpStatus.OK)` — so the response looks like it came from a *different route than the one requested*.
+
+Next steps for whoever picks this up:
+
+1. Instrument server-side (not client-side — the bug hides from client instrumentation): log method, matched route handler and status for every request, and catch the mismatch at the source.
+2. Determine whether the `ledger` lock-waiter probe is the same bug or an independently timing-sensitive test; it polls `pg_stat_activity` for a blocked backend and gives up after a fixed number of tries.
+3. Consider whether raising `maxWorkers` now changes the rate — it would be strong evidence either way, and it is newly safe to try.
