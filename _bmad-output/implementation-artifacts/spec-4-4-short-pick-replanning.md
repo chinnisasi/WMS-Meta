@@ -2,7 +2,7 @@
 title: 'Story 4.4: Short-pick re-planning'
 type: 'feature'
 created: '2026-09-14'
-status: 'ready-for-dev'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'd04110f' # wms-be main
@@ -99,9 +99,48 @@ context:
 
 ## Implementation Notes
 
+**A short pick may create MORE than one re-planned slice.** The spec's I/O matrix says "a new slice" (singular), which is what happens whenever one alternate bin covers the whole shortfall — the ordinary case. When none does, `findReplanSlices` walks the SKU's remaining pickable bins in walk order, FEFO within each, and emits one slice per (bin, batch) it draws from, exactly as `planSlices` would have done had the wave been planned against today's stock. Anything still uncovered stays as the short line's recorded `shortfall_qty` — the partial-order path, per slice rather than all-or-nothing. This is a superset of the specified behaviour, not a deviation from it: the alternative (re-plan only when a single bin covers the whole remainder) would drop a line onto the partial-order path while the units it needs are sitting on two shelves.
+
+**What "the remainder" means on a multi-slice order line.** Nothing ever shrinks `reservations.quantity` — a hold is a whole-quantity row whose only mutation is `state` — so after a sibling slice is picked in full the hold still reads the order line's original total. The re-grant therefore nets out the units every TERMINAL sibling already drew (`picked` → its whole `qty`, `short` → `qty - shortfall_qty`) before subtracting this command's own draw. On such a line the short pick's net counter restore legitimately EXCEEDS its own draw: those earlier units left the building under a hold that went on counting them, and the release/re-grant pair is the first moment the journal can say so.
+
+**`grantReservationInTx` is the one grant in the system that does not run the Valkey script.** It re-grants no more than a hold the same transaction just released for the same owner scope, so the scope's journal-reserved total can never rise across the commit and no ATP is created — which is why grant-vs-grant arbitration is not needed here and why the ceiling re-read is only asking "has the stock vanished underneath". The precondition rides the signature (the released snapshot is a required argument and is validated; a violation throws rather than returning the partial-order `null`), and the caller must hold the per-warehouse advisory xact lock. Used to mint a NEW hold, or without that lock, it would be a second unarbitrated grant path and could oversell — see the comment on `ReservationService.grantInTx`.
+
+**Both cancel paths key on one predicate, `picklistLineDrewUnits()`.** A `short` line that actually drew units is not freed by a wave cancel and refuses an order cancel; a ZERO-unit report drew nothing and does neither. Keying either path on `status = 'short'` alone would strand the order line inside `picklist_lines_open_order_line_unique` forever, unwaveable even after stock arrived.
+
 ## Spec Change Log
 
+- **2026-09-15 — "a new slice" is one OR MORE.** The I/O matrix's singular wording is kept; the implementation emits several re-planned slices when no single alternate bin covers the shortfall (see Implementation Notes). Recorded rather than changed: it is a superset of the specified behaviour, reached through the same pool the wave planner uses.
+
 ## Review Triage Log
+
+_Three layers (blind hunter, edge cases, verification gaps) — 2026-09-14. Verification-gap findings arrive pre-verified; every other claim was re-checked against the source before grading._
+
+| # | Finding | Verdict | Evidence | Route |
+|---|---------|---------|----------|-------|
+| 1 | The re-granted remainder double-counts units already drawn by sibling slices | high | All three layers, independently. `remainder = released.quantity - command.qty`, but nothing shrinks `reservations.quantity` as slices are picked — only `state` is ever mutated. An 8-unit line with slice A picked whole (4) then slice B short-picked at 1 re-grants 7 when 3 are owed: 4 phantom reserved units understating ATP, or an over-ask that fails the ceiling and silently drops a re-plannable line onto the partial-order path. **My own ATP verification could not catch this** — `counterRestoreUnits` derives from the same inflated remainder, so counter and journal stay consistent while both are wrong | patch |
+| 2 | `grantInTx` bypasses the Valkey arbitration every other grant uses | high | Confirmed at `reservation.service.ts:1318-1324`: it reads `committedCeiling` and `journalReservedSumInTx` from Postgres, checks, and inserts. `runGrantScript` and the counter never appear. This is a second grant path without grant-vs-grant arbitration, contradicting the spec's "Epic 2's reservation machinery is not touched". It runs under the warehouse advisory lock, which may serialize it in practice — but that is a different guarantee, and nothing says so | patch |
+| 3 | `findReplanSlices` allocates nothing, so it can plan the same units twice | high | It excludes only the short bin and never subtracts units other open `planned` lines already plan to draw — the reason `planSlices` consumes its pool destructively. The new split test plans 7 units out of a bin holding 4 and passes only because it never draws the re-planned slice | patch |
+| 4 | Wave cancel spares a zero-unit `short` line, stranding the order line forever | high | `not in ('picked','short')` is justified by "its drawn units have left the bin" — false when nothing was drawn. The line keeps its claim in the one-open-slice index, so the order can never be re-waved even after stock arrives. `order.command.ts` gets the same distinction right with `shortfall_qty < qty` | patch |
+| 5 | Both halves of the new order-cancel predicate are untested | high | Pre-verified: reverting to `status = 'picked'` leaves the suite green — an order carrying a short line that drew units would cancel, freeing a hold for stock that has left the bin. Dropping the `shortfall_qty < qty` qualifier wedges cancellable orders, also silently | patch |
+| 6 | The wave-cancel `short` exclusion is unexercised | high | Pre-verified: restoring `<> 'picked'` fails nothing; the short line flips `cancelled`, erasing the shortfall and reason the code calls the SM-3 signal | patch |
+| 7 | The short-pick facts on the ledger `reference_doc` are never read back | high | Pre-verified: `ledgerFor` does not select `reference_doc`, so deleting the spread makes short draws indistinguishable from whole ones in the permanent record, with every test green. Putaway's equivalent IS asserted (`putaway.spec.ts:687`) | patch |
+| 8 | The ledger grammar was not extended for the new reference-doc fields | medium | The `kind: 'pick'` arm still declares only the 4.3 fields; `referenceDoc` is assigned to a `const` first so excess-property checking never fires. The ledger persists fields the declared grammar does not name — and putaway's precedent, which this cites, does declare its `reasonCode` | patch |
+| 9 | The serial-tracked zero-quantity branch has no test | high | Pre-verified: removing the `command.qty > 0 &&` guard makes a serial-tracked empty-bin report 400, the precise case the comment says must stay reportable, with the suite green. No fixture combines serial tracking with a short or zero pick | patch |
+| 10 | The pre-4.4 stored-snapshot replay fallbacks are unexercised | medium | Pre-verified: the replay test writes its snapshot through the 4.4 path, so none of the five `??` arms fires. Deleting them fails nothing, and a key written before the deploy replays a `PickDto` missing non-optional fields. The repo has the precedent at `bin-admin.spec.ts:828` | patch |
+| 11 | Migration 0022 leaves the short-pick invariant unenforced | medium | Nothing ties `reason_code` to `status = 'short'`, nothing requires a shortfall on a short line, and the new third slice-shape arm carries no status predicate — so a still-`planned` slice can record a shortfall it never experienced. The suite asserts a reason-less short line **succeeds**, demonstrating the gap | patch |
+| 12 | `pendingCounterRestore` is staged inside the transaction callback and read after it | medium | If `withTenantTransaction` ever retries the callback, a value staged by a failed attempt survives into a successful attempt that stages nothing, decrementing the counter for a transaction that never committed — the overselling direction the surrounding comments guard against | patch |
+| 13 | Typing a quantity and tapping Confirm without blurring queues the PREVIOUS quantity | high | `onEndEditing` is the only path into the model, so the op carries a number the operator never sees. A data-integrity bug on the device, not a UI nit | patch |
+| 14 | An empty or non-numeric quantity yields `NaN`, which the model rejects while the field keeps the bad text | medium | The box then shows something other than what confirm will queue; the `−`/`+` steppers also lack a disabled state, so tapping `−` at zero raises a rejection banner instead of being inert | patch |
+| 15 | The short-pick arm is reachable before a bin is scanned, then silently discarded | medium | `beginShortPick` requires only a task; `chooseBin` resets `short: null` with no banner. The model's own comment ("the short report is about a BIN") is the argument for gating it | patch |
+| 16 | The DTO advertises a closed enum it does not validate | medium | `reasonCode` is documented `enum: [...SHORT_PICK_REASON_CODES]` but validated `@IsString() @Length(1,64)`, so generated clients get a closed type while the pipe accepts any string | patch |
+| 17 | `PickDto.id` became nullable — a breaking response-contract change with no contract-doc update | medium | Widens the type for every existing consumer, and `PICKLIST_LINE_STATUSES` gained an arm, with no update to `docs/repos/*/README.md` as CLAUDE.md requires for a cross-repo change | patch |
+| 18 | Concurrent short picks on one picklist mint the same `walk_seq` | low | The `max(walk_seq)` read is unlocked and cross-order-line, contradicting the method's own comment that the order-line `FOR UPDATE` covers sequencing. Harmless today (non-unique index, ties break on id) | patch |
+| 19 | `insertReplanSlices` selects every `walk_seq` into memory to take a max | low | A `max()` in SQL would do; the read is also the one racing in #18 | patch |
+| 20 | `journalReservedSumInTx` duplicates `journalReservedSums` | low | Near-verbatim copy differing only in opening its own transaction; the existing helper could take an optional `tx` | patch |
+| 21 | The 409 title still reads "Order has picked lines" after the detail was reworded | low | Confirmed | patch |
+| 22 | Multiple re-planned slices where the spec says "a new slice" | low | Real superset, not a deviation — if no single bin covers the shortfall, several slices are created greedily. Worth recording in the Spec Change Log rather than changing code | patch |
+| 23 | `confirmBlocker`'s `qty >= task.qty` branch is unreachable through the exported API | low | `beginShortPick` seeds `task.qty - 1` and `setShortQty` rejects anything higher — defensive, not a coverage gap | rejected |
+
 
 ## Design Notes
 
