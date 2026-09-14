@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-12-2026 13:00'
+last_updated: '09-14-2026 09:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -80,13 +80,20 @@ development_status:
   # two throwaway duplicate suites and zero 4.3 code flakes at the same rate.
   # Every future story adds suites and makes this worse; epic 4 has three left.
   infra-1-e2e-harness-scaling: done
-  # Partial outcome, deliberately: infra-1 shipped per-suite database
-  # isolation (migrations once, ~50s runs, suites can no longer corrupt each
-  # other) and cut the flake from ~1-in-5 to ~1-in-7 — but did NOT eliminate
-  # it. The residual is now known to be HTTP/app layer, not the database:
-  # the original `expected 201, got 200` still occurs with every suite on its
-  # own database. See infra-1's doc for the nine hypotheses already ruled out.
-  infra-2-residual-e2e-flake: backlog
+  # Shipped per-suite database isolation: migrations once per run, ~50s full
+  # runs, suites can no longer corrupt each other, and maxWorkers:1 is now a
+  # free choice rather than a constraint. Kept on those merits — it did NOT
+  # cause or fix the flake, which infra-2 traced to a local port collision
+  # outside this codebase entirely. See infra-1's doc: the premise that CI was
+  # untrustworthy was false, and the nine hypotheses ruled out were all about
+  # our own system when the bug was not.
+  # RESOLVED (WMS-BE #26): the cause was outside this codebase — supertest
+  # binds suite servers with listen(0), the OS assigns from the ephemeral
+  # range, and a local Ollama on 127.0.0.1:56745 answered a test request with
+  # an HTML page. Test servers now bind 21000-24999. 15/15 clean runs with
+  # Ollama still running. CI never saw this; the premise behind both infra
+  # stories was wrong.
+  infra-2-residual-e2e-flake: done
   4-4-short-pick-re-planning: backlog
   4-5-pack-station-verification: backlog
   4-6-carrier-rating-labels-and-dispatch: backlog
