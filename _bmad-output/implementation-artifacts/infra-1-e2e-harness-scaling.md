@@ -41,7 +41,7 @@ Wins independent of the flake:
 - `maxWorkers: 1` exists only because suites shared a database. That constraint is now gone and parallelism could be raised — deliberately NOT done in the same change, because it would have invalidated the flake measurement.
 - Two `pg_stat_activity` probes (`ledger`, `putaway`) were scoped with `datname = current_database()`; that view is cluster-wide and they were one step from counting a sibling database's backends.
 
-## Outcome: partial
+## Outcome: partial (superseded — see RESOLVED below)
 
 The flake is **reduced, not eliminated** — 15 consecutive fresh-database runs after the change: **13 clean, 2 failed** (~1 in 7, from ~1 in 5).
 
@@ -65,12 +65,34 @@ Do not re-tread these. Every one cost a batch of runs:
 | ULID collision | `crypto.getRandomValues`, 80 bits |
 | **Shared database state** | **Disproven by this story's own change** |
 
-## What is left, and what is known about it
+## RESOLVED by infra-2 — and the cause was outside this codebase
 
-The residual failure is in the **HTTP/app layer, not the database**. A POST that normally answers 201 occasionally answers 200, on an isolated database, with a fresh idempotency key, over a non-pooled socket. In this codebase a POST answering 200 means a handler that declares `@HttpCode(HttpStatus.OK)` — so the response looks like it came from a *different route than the one requested*.
+**supertest binds each suite's server with `app.listen(0)`** (`lib/test.js:63`), so the OS assigns a port from the **ephemeral range** (49152–65535 on macOS). Other local services live in that same range. On the machine where this was investigated, **Ollama's UI listened on `127.0.0.1:56745`**. A request built against a port the test server no longer owned reached Ollama, and the suite received a valid `200 OK` carrying a 6.3 KB HTML page titled *Ollama*.
 
-Next steps for whoever picks this up:
+Every symptom follows from that: a wrong-but-valid status on an unrelated route, a different test each run, no relation to what changed, immunity to database isolation, sensitivity to timing rather than logic, and correlation with suite count only because more suites mean more server churn.
 
-1. Instrument server-side (not client-side — the bug hides from client instrumentation): log method, matched route handler and status for every request, and catch the mismatch at the source.
-2. Determine whether the `ledger` lock-waiter probe is the same bug or an independently timing-sensitive test; it polls `pg_stat_activity` for a blocked backend and gives up after a fixed number of tries.
-3. Consider whether raising `maxWorkers` now changes the rate — it would be strong evidence either way, and it is newly safe to try.
+**Fix (WMS-BE #26):** one jest setup file patches `net.Server.prototype.listen` so `listen(0)` binds into 21000–24999, retrying on `EADDRINUSE`. The OS never auto-assigns from that range.
+
+**Verification:** 15 consecutive fresh-database full runs, 15 clean, with Ollama still listening on 56745 throughout — the hostile condition present, not removed.
+
+| Stage | Failure rate |
+| --- | --- |
+| Before any work | ~1 in 5 |
+| After infra-1's per-suite databases | ~1 in 7 |
+| After infra-2's port fix | **0 in 15** |
+
+## The premise of this story was wrong
+
+**CI never saw this.** Fifteen of fifteen recent CI runs succeeded across every branch, because nothing else listens in that range on a runner. The claim that drove both infra stories — that CI was untrustworthy and would degrade as suites were added, and therefore should land before story 4.4 — was false. This only ever cost local runs.
+
+## The lesson, for whoever hits something like this next
+
+Nine hypotheses were eliminated before the right one, and **every single one was about our own system**: parallelism, ordering, advisory locks, teardown, pool sizing, HTTP keep-alive, idempotency-key collision, ULID collision, shared database state. The bug was outside it.
+
+The tell was present in the very first failure examined — a `200` on a route where this app has **no code path that returns 200** — and it was read as "a different handler of ours" rather than "not our app at all".
+
+**Capture the response body, not just its status.** One failing response body ended an investigation that nine measured hypotheses could not. The body said `<title>Ollama</title>`.
+
+## What infra-1 still bought
+
+Per-suite database isolation is kept on its own merits, independent of a flake it did not cause: migrations run **once per run** instead of once per suite (a full run takes ~50 s), suites can no longer corrupt each other's fixtures, idempotency rows, advisory locks or connection budget, and `maxWorkers: 1` — which existed only because suites shared a database — is now a free choice rather than a constraint.
