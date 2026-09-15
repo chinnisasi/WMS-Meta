@@ -2,9 +2,9 @@
 title: 'Story 4.5: Pack station verification'
 type: 'feature'
 created: '2026-09-15'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: 'd226005' # wms-be main
 context:
   - '_bmad-output/implementation-artifacts/epic-4-context.md'
