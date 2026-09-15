@@ -204,3 +204,39 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-3-scan-verified-picking.md`
   summary: A SKU that is BOTH batch- and serial-tracked cannot be picked — the command refuses it with a 400 rather than guessing which batch each serial belongs to.
   evidence: Introduced by the review pass on 4.3. The pick payload carries serial numbers but no batch; `serials` (schema.ts) holds no `batch_id`; and the ledger's serial guard validates LOCATION only. The original code paired FEFO arms to serials positionally, so a unit put away under batch Y could be drawn labelled batch X and `batch_on_hand` would mis-fold with nothing to catch it. Refusing is honest and cheap; the real fix is a `serialBatchInTx` read on `InventoryFacade` that resolves each serial's batch from the `batch_ref` on its latest ledger event (the putaway per-serial events carry it), which is a new inventory seam and its own change. No fixture in either codebase is currently both-tracked, so nothing regresses today.
+
+- source_spec: none
+  summary: Tenant-scoped carrier API credentials under envelope encryption — referenced by id, rotation first-class, disconnect deletes, secret material never in logs or ledger events (AD-15, FR-17).
+  evidence: Split from story 4.6 at the scope gate (2026-09-15, Sasidhar chose dispatch-first). Independently shippable — it is an admin/settings capability with no dispatch dependency, and dispatch needs no carrier at all. Substrate is further along than the epic context implies: `wms-be/src/shared/crypto/envelope.ts` already provides AES-256-GCM seal/open with a documented KMS stand-in (`DEVICE_ENCRYPTION_KEY`), built generically for story 3.2's device enrollment. What does not exist is the tenant-scoped credential table, rotation, or disconnect-deletes. Note the master key is a STAND-IN, not a real KMS — that swap is its own decision when this lands.
+
+- source_spec: none
+  summary: The `CarrierAdapter` port and rate-shopping across configured carriers (FR-17).
+  evidence: Split from story 4.6 at the scope gate (2026-09-15). `wms-be/src/modules/carriers/carriers.module.ts` exists but is a 15-line story-1.1 spine placeholder with no providers — the AD-6 module boundary is declared, the implementation is entirely greenfield. Pairs naturally with the credential store above as one "carrier substrate" story. OQ1 (final carrier set — Delhivery, Blue Dart, Ecom Express, Shiprocket) was deliberately left OPEN at the 4.6 gate: decide it here, when the port shape is concrete, rather than guessing up front and baking a provider's API shape into the port.
+
+- source_spec: none
+  summary: Label generation through the carrier adapter — retryable inline failure that never marks the order dispatched, p95 ≤ 5s.
+  evidence: Split from story 4.6 at the scope gate (2026-09-15). Depends on both carrier-substrate items above. AD-7 explicitly decouples it from dispatch ("dispatch records first, label retries follow"), which is the seam that made dispatch-first the natural split. Retry substrate already exists and does not need building: `wms-be/src/shared/events/outbox.ts` carries a 5-attempt budget, exponential backoff `min(2^(n-1)·5s, 5min)`, and quarantine past budget.
+
+- source_spec: none
+  summary: Carrier manifest generation (FR-17).
+  evidence: Split from story 4.6 at the scope gate (2026-09-15). Depends on the carrier substrate. Nothing in the epic's acceptance criteria for dispatch requires a manifest, so it carries no coupling risk to the dispatch story.
+
+- source_spec: none
+  summary: Tracking writeback — syncing carrier tracking numbers back toward the originating channel.
+  evidence: Split from story 4.6 at the scope gate (2026-09-15). The epic context already notes the channel side lands in Epic 7, so only the writeback machinery is in scope here and it has no consumer until then. Depends on labels having produced a tracking number.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6-dispatch-terminal-order-transition.md`
+  summary: A dispatched order's carrier, tracking number and dispatch time are readable only by scanning `ledger_events.reference_doc` — there is no read-back endpoint and no status filter on the order list.
+  evidence: Review loop 1, blind hunter; verified. `OrderDto` exposes only `status`, `OrderListQuery` (outbound.dto.ts) carries just `cursor`/`limit`, and there is no `GET .../orders/{orderId}/dispatch`. So "what is the tracking number for order X" and "which orders shipped today" need a raw jsonb scan. Deferred rather than patched because the surface belongs to `4-2b`/the carrier arc, which will also replace the free-text carrier fields with a real carrier id and an adapter-issued tracking number — building a read path against the interim shape would be work thrown away.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6-dispatch-terminal-order-transition.md`
+  summary: A short-shipped order leaves no queryable trace and schedules no backorder follow-on.
+  evidence: Review loop 1, blind hunter; verified. `shortfallQty` is computed per line and journalled into the dispatch reference doc, but `order_lines.status` stays on its acceptance-time reservation arm (`open`/`backordered`), `reserved_qty`/`reservation_id` are deliberately left alone, and no arm or flag marks a partially-shipped order. Nothing downstream can find short-shipped orders. Pre-existing shape rather than something 4.6 caused — the order-line status vocabulary predates it — and a backorder follow-on is a product decision, not a patch.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6-dispatch-terminal-order-transition.md`
+  summary: An order packed and then abandoned understates ATP indefinitely — dispatch is now the ONLY `committed → released` writer and nothing sweeps a stalled one.
+  evidence: Review loop 1, blind hunter; verified. `expireDue()` (reservation.service.ts) selects `state = 'held'` only, cancel refuses a `ready_to_dispatch` order, and 4.6 makes dispatch the sole retirement path. So a sale cancelled after packing, a lost parcel, or an operator who never dispatches leaves committed holds deducting ATP forever, with no operational escape hatch. This is the stalled-order variant of the exact double-deduction 4.6 exists to fix. The frozen block knowingly accepted ATP being wrong for the pick→dispatch window, but that decision assumed the window closes; it does not contemplate an order that never dispatches. Needs a human decision — an expiry arm for committed holds, an un-pack path, or an ops tool — so it is recorded rather than guessed at.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6-dispatch-terminal-order-transition.md`
+  summary: The idempotency scaffolding (`replay`, `writeIdempotencyKey`, the under-lock same-key re-read, the post-commit mirror loop) is now duplicated verbatim across nine command files.
+  evidence: Review loop 1, blind hunter; verified — nine files define `private async writeIdempotencyKey` and nineteen sites raise "Concurrent idempotent request". The concrete harm is demonstrated by this very story: 4.5's same-key race fix had to be re-implemented by hand in `dispatch.command.ts`, and finding #1 of this loop (the cancel/dispatch hash collision) is a defect in exactly the copied preamble. A shared replay/insert helper would leave each command's policy untouched. Pre-existing across all nine, so not this story's to fix.
