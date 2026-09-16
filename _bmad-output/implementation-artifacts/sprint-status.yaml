@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-15-2026 23:20'
+last_updated: '09-16-2026 08:30'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -96,7 +96,16 @@ development_status:
   infra-2-residual-e2e-flake: done
   4-4-short-pick-re-planning: done
   4-5-pack-station-verification: done
-  4-6-carrier-rating-labels-and-dispatch: review
+  # Scope gate (2026-09-15): the story as the epic wrote it bundled SIX
+  # independently shippable deliverables. Split dispatch-first, which AD-7
+  # already endorsed ("dispatch records first, label retries follow"). The
+  # shipped 4-6 is the terminal order transition and the ATP correction that
+  # rides it; the carrier arc below is the remainder. OQ1 (the carrier set)
+  # is deliberately still OPEN — it belongs to 4-6b, when the port shape is
+  # concrete, not to a guess made up front.
+  4-6-dispatch-terminal-order-transition: done
+  4-6b-carrier-credentials-adapter-port-and-rating: backlog
+  4-6c-labels-manifests-and-tracking-writeback: backlog
   epic-4-retrospective: optional
 
   epic-5: backlog
