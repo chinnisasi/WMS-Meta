@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-16-2026 23:40'
+last_updated: '09-16-2026 23:55'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -71,7 +71,7 @@ development_status:
   # pack/dispatch pipeline are below. The epic's "retryable inline label
   # error" is BLOCKED rather than deferred — labels are 4-6c, backlog.
   4-2b-outbound-orders-surface: done
-  4-2c-outbound-waves-and-picklists-surface: review
+  4-2c-outbound-waves-and-picklists-surface: done
   4-2d-outbound-pack-and-dispatch-surface: backlog
   4-3-scan-verified-picking-with-offline-tolerance: done
   # Split out of 4.3 at the build multi-goal gate (2026-09-12, human):
