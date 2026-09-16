@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-16-2026 23:55'
+last_updated: '09-17-2026 00:15'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -110,8 +110,20 @@ development_status:
   # is deliberately still OPEN — it belongs to 4-6b, when the port shape is
   # concrete, not to a guess made up front.
   4-6-dispatch-terminal-order-transition: done
-  4-6b-carrier-credentials-adapter-port-and-rating: backlog
+  # Scope gate (2026-09-16, human): 4-6b as written bundled the credential
+  # vault, the adapter port AND rate shopping. Split substrate-first and
+  # the key renamed to match. Rating moved to 4-6d because it is the one
+  # piece that cannot be built against the current schema at all: NO
+  # address model exists anywhere (orders carry no destination,
+  # warehouses carry only code + name), and Indian carrier rating is
+  # origin-pincode -> destination-pincode. OQ1 is now CLOSED: the
+  # registry names Delhivery, Blue Dart and Ecom Express; Shiprocket is
+  # excluded as an aggregator whose shape differs in kind.
+  4-6b-carrier-substrate-credentials-and-adapter-port: review
   4-6c-labels-manifests-and-tracking-writeback: backlog
+  # Split out of 4-6b (2026-09-16). Blocked on an address model, not
+  # merely sequenced after the substrate — see deferred-work.md.
+  4-6d-carrier-rate-shopping: backlog
   epic-4-retrospective: optional
 
   epic-5: backlog
