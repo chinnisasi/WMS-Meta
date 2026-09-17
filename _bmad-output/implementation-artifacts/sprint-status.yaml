@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-17-2026 01:30'
+last_updated: '09-17-2026 02:00'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -137,6 +137,10 @@ development_status:
   # Story keys below are the FR blocks; detailed specs are generated per
   # tier at tier start, per the "create the next story after the previous
   # one is done" convention.
+  # SURFACES RIDE THEIR EPIC (decision 2026-09-17): every epic carries its
+  # own web/mobile surface stories, executed backend-first WITHIN the epic.
+  # The alternative — separate surface epics — is what produced the 26
+  # deferred surface items and stories 4-2b/4-2c/4-2d.
   # ===================================================================
 
   # TIER 0 — the one foundational migration. BLOCKS epic-5: transfers,
@@ -149,6 +153,8 @@ development_status:
   10-2-uom-vocabulary-and-precision: backlog
   10-3-catch-weight-handling-units: backlog
   10-4-measured-stock-reconciliation: backlog
+  10-5-web-fractional-quantity-surfaces: backlog
+  10-6-mobile-decimal-and-catch-weight-capture: backlog
   epic-10-retrospective: optional
 
   # TIER 1 — foundations every domain needs.
@@ -161,6 +167,8 @@ development_status:
   11-3-product-variants: backlog
   11-4-kits-and-bundles: backlog
   11-5-dimensional-capacity: backlog
+  11-6-web-variant-and-kit-surfaces: backlog
+  11-7-mobile-variant-aware-picking: backlog
   epic-11-retrospective: optional
 
   # Touches ALREADY-SHIPPED code: conformance is enforced inside the
@@ -172,12 +180,18 @@ development_status:
   12-4-non-bin-location-types: backlog
   12-5-temperature-excursions: backlog
   12-6-cold-chain-reporting: backlog
+  12-7-web-storage-and-segregation-admin: backlog
+  # The sub-500ms on-device conformance refusal — a refusal the floor never
+  # sees is a cold-chain break the backend correctly prevented.
+  12-8-mobile-conformance-refusal-and-excursions: backlog
   epic-12-retrospective: optional
 
   epic-13: backlog
   13-1-return-authorization: backlog
   13-2-return-receipt-and-inspection: backlog
   13-3-return-disposition: backlog
+  13-4-web-returns-and-disposition: backlog
+  13-5-mobile-return-task-type: backlog
   epic-13-retrospective: optional
 
   # 14-1 deletes the refusal at pick.command.ts:708 (a SKU that is both
@@ -187,6 +201,8 @@ development_status:
   14-1-batch-and-serial-together: backlog
   14-2-minimum-shelf-life-policy: backlog
   14-3-recall-trace-and-quarantine: backlog
+  14-4-web-recall-console-and-shelf-life-policy: backlog
+  14-5-mobile-shelf-life-and-dual-capture: backlog
   epic-14-retrospective: optional
 
   # TIER 2 — high-volume verticals.
@@ -194,6 +210,8 @@ development_status:
   15-1-returnable-containers: backlog
   15-2-container-custody-and-deposits: backlog
   15-3-handling-unit-movement: backlog
+  15-4-web-container-fleet-and-custody: backlog
+  15-5-mobile-container-scanning: backlog
   epic-15-retrospective: optional
 
   # TIER 3 — regulated. All three share ONE mechanism (AD-21): goods carry
@@ -204,6 +222,10 @@ development_status:
   16-2-in-bond-and-ex-bond-movements: backlog
   16-3-free-trade-zone-segregation: backlog
   16-4-duty-calculation: backlog
+  16-5-web-customs-surfaces: backlog
+  # The shared status-gated scan refusal; epic 17 reuses it rather than
+  # shipping a second mobile refusal path.
+  16-6-mobile-status-gated-refusal: backlog
   epic-16-retrospective: optional
 
   epic-17: backlog
@@ -211,6 +233,7 @@ development_status:
   17-2-excise-registers-as-projections: backlog
   17-3-bonded-movement-documents: backlog
   17-4-statutory-loss-recording: backlog
+  17-5-web-excise-registers-and-licence-admin: backlog
   epic-17-retrospective: optional
 
   epic-18: backlog
@@ -218,6 +241,8 @@ development_status:
   18-2-controlled-substance-registers: backlog
   18-3-two-person-custody: backlog
   18-4-controlled-discrepancy-review: backlog
+  18-5-web-controlled-registers-and-licence-admin: backlog
+  18-6-mobile-two-person-custody: backlog
   epic-18-retrospective: optional
 
   # TIER 4 — specialized.
@@ -226,6 +251,8 @@ development_status:
   19-2-jit-sequencing: backlog
   19-3-mro-issue: backlog
   19-4-production-kits: backlog
+  19-5-web-work-order-issue: backlog
+  19-6-mobile-jit-sequencing-cards: backlog
   epic-19-retrospective: optional
 
   epic-20: backlog
@@ -233,6 +260,8 @@ development_status:
   20-2-tank-and-silo-reconciliation: backlog
   20-3-temperature-compensated-volume: backlog
   20-4-weighbridge-and-meter-capture: backlog
+  20-5-web-bulk-variance-review: backlog
+  20-6-mobile-weighbridge-and-level-capture: backlog
   epic-20-retrospective: optional
 
   # RE-SEQUENCED by the 2026-09-17 expansion: epic-5 now depends on

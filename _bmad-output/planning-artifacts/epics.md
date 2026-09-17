@@ -246,6 +246,24 @@ UX-DR23: Responsive behavior: web ≥ 1024px full sidebar + tables; 768–1023px
 UX-DR24: Key-screen composition references: mockups/key-mobile-pick.html, key-mobile-receive.html, key-web-overview.html (inline-linked in EXPERIENCE.md; spines win on conflict).
 UX-DR25: Banned everywhere: infinite scroll, hover-only affordances on touch surfaces, modal stacks > 1 deep, celebratory animations, badge-count notification spam, hover-only row actions on `sm` viewports.
 
+UX-DR26: Fractional quantity entry and display (web + mobile): every quantity renders at its UoM's **declared precision, never its storage precision** — `18.4 kg`, never `18.400000`. Mobile decimal entry is glove-usable on the scan path (the UX-DR13 stepper gains a decimal mode with a large decimal key); a value below the UoM's declared precision is refused inline naming the precision, never silently rounded. Each-counted UoMs keep the existing integer stepper unchanged. (Epic 10)
+
+UX-DR27: Catch-weight capture (mobile receive + pack): a catch-weight SKU prompts for the handling unit's actual weight after the item scan, with scale/HID input treated the same as a barcode scan (UX-DR9's manual-entry fallback applies). Quantity and weight are visibly distinct fields — the operator is never asked to "enter 18.4 pieces". (Epic 10)
+
+UX-DR28: Variant-aware surfaces (web + mobile): a size×colour range renders as **one product row expanding to a variant matrix**, never as N unrelated SKU rows (the DataTable expanded-row pattern from 4-2b). On the mobile pick path the variant is the largest distinguishing text after the scan result, because picking the wrong size is the dominant apparel error. (Epic 11)
+
+UX-DR29: Storage-conformance refusal (mobile scan path): a non-conforming putaway or pick — frozen SKU into an ambient bin, incompatible hazard classes co-located — rejects in **< 500 ms with the ✕ Rejected banner** (UX-DR4), names both parties and the rule, and offers the nearest conforming location. It is on-device where the storage class is in the cached snapshot, so it works in a dead zone. A conformance refusal the floor never sees is a cold-chain break the backend correctly prevented. (Epic 12)
+
+UX-DR30: Excursion capture and review (mobile + web): an operator can record a temperature excursion against a location or handling unit from the task screen; affected stock shows a quarantine badge everywhere it appears, and the Conflicts & Reviews queue (UX-DR11) gains an excursion item with the reading, the affected units and the ledger context. (Epic 12)
+
+UX-DR31: Returns surfaces (web + mobile): web creates and tracks return authorizations and holds the disposition decision (restock / quarantine / scrap) as an approval-card pattern (UX-DR15). Mobile gains a **Return task type in the inbox switcher** (UX-DR6) — scan-verified receipt against the authorization, reusing the receiving flow's shape rather than inventing a second one. (Epic 13)
+
+UX-DR32: Shelf-life and recall (web + mobile): stock too close to expiry is refused at allocation and pick with the ✕ banner naming the policy and the batch; the web recall console traces a lot or serial to every location, order and customer **and quarantines what remains in one action**, with the trace rendered as the ledger timeline (UX-DR14). (Epic 14)
+
+UX-DR33: Container custody (web + mobile): mobile scans returnable containers in and out as a distinct step from their contents; web shows fleet, per-customer custody, deposit balances and an overdue view. A pallet or handling unit moves as one unit on the floor while its contents stay individually traceable. (Epic 15)
+
+UX-DR34: Regulated status and registers (web, mobile where it gates the floor): customs, excise and controlled status render as status badges wherever stock appears, and a status-gated movement refuses on the scan path with the reason. Registers are read-only projections with statutory fields and export (UX-DR8's async export); two-person custody prompts for a second authorized witness on-device before the movement commits. (Epics 16–18)
+
 ### FR Coverage Map
 
 FR1: Epic 1 — Tenant/warehouse/zone/bin provisioning, setup checklist
@@ -340,46 +358,57 @@ Priya's live KPI home reconciling to the ledger; the bell/notification panel; th
 
 ### Epic 10: Quantity Model — Measured Goods & Catch Weight `[TIER 0 — BLOCKING]`
 The one foundational migration of the multi-domain expansion. Quantities become fractional — scaled integers in micro-units, decimals only at the API and UI edges — with each UoM declaring its real precision from a controlled vocabulary. Catch weight arrives separately as a per-handling-unit actual weight, so the risky change stays confined to the quantity columns. Story 2.2's replay-reconciliation is the migration's oracle: every derived balance must reproduce after the change. **Blocks Epic 5** — transfers, adjustments and counts built on integers would all be rewritten.
+**Surfaces:** web — decimal quantity rendering at declared precision across every form and table; mobile — decimal entry on the scan path and catch-weight capture at receive and pack (UX-DR26, UX-DR27).
 **FRs covered:** FR-31, FR-32, FR-33, FR-34
 
 ### Epic 11: Product & Shipment Model `[TIER 1]`
 Shipment addresses (order destination, warehouse origin) unblock carrier rating; weight and dimensions unblock labels, manifests and dimensional capacity; a two-level product→variant identity makes size×colour first-class **without touching the ledger** (AD-19); kits hold stock on components and explode at acceptance. Gates Epic 7's channel mapping and story 4-6d.
+**Surfaces:** web — variant matrix in the catalog, kit composition editor, address entry on orders, SKU attribute fields; mobile — variant-aware pick display and kit picking (UX-DR28).
 **FRs covered:** FR-35, FR-36, FR-37, FR-38, FR-39
 
 ### Epic 12: Storage Conformance, Segregation & Location Types `[TIER 1]`
 Storage class becomes first-class on SKUs and locations with a controlled vocabulary, enforced in putaway and pick — a frozen SKU cannot enter an ambient bin and an oxidiser cannot sit beside a fuel, by rule not convention (AD-18). Adds a hazard segregation matrix, a secure/cage class for high-value and controlled stock, locations beyond bins (yards, floor-stack, tanks, silos), dimensional and weight capacity, and temperature excursions as ledger events.
+**Surfaces:** web — storage/hazard class admin on SKUs and locations, segregation matrix config, excursion review queue; mobile — **sub-500ms conformance refusal on the scan path, on-device and dead-zone tolerant**, plus excursion capture (UX-DR29, UX-DR30).
 **FRs covered:** FR-40, FR-41, FR-42, FR-43, FR-44, FR-45
 
 ### Epic 13: Returns & Reverse Logistics `[TIER 1]`
 The first reverse flow. Units return under an authorization, are received and inspected scan-first on the existing mobile substrate, and are dispositioned — restocked to sellable, quarantined for review, or scrapped — every outcome its own registered ledger event (AD-20), never a sign-flipped receipt.
+**Surfaces:** web — RMA creation, returns queue, disposition as an approval card; mobile — a **new Return task type in the inbox**, scan-verified receipt against the authorization (UX-DR31).
 **FRs covered:** FR-46, FR-47, FR-48
 
 ### Epic 14: Traceability & Shelf Life `[TIER 1]`
 A SKU can be batch- **and** serial-tracked at once, each serial's lot resolved from its own ledger history — deleting the refusal at `pick.command.ts:708`. Shelf-life policy refuses to allocate stock with too little life remaining; recall traces a lot or serial to every location, order and customer it reached and quarantines what remains.
+**Surfaces:** web — recall console (trace and quarantine in one action), shelf-life policy config; mobile — shelf-life refusal at pick and batch+serial dual capture on scan (UX-DR32).
 **FRs covered:** FR-49, FR-50, FR-51
 
 ### Epic 15: Returnable Containers & Handling Units `[TIER 2]`
 Cylinders, kegs, crates and pallets are assets that cycle, tracked distinctly from the stock they carry, with per-customer custody and deposit balances (AD-22). Handling units also give bulky-goods and pallet operations a unit of movement above the SKU.
+**Surfaces:** web — container fleet, per-customer custody, deposits, overdue view; mobile — container scan in/out and pallet move-as-unit (UX-DR33).
 **FRs covered:** FR-52, FR-53, FR-54
 
 ### Epic 16: Customs, Bonded Storage & Free Trade Zones `[TIER 3]`
 Stock carries a customs status that gates movement — duty-unpaid stock cannot be dispatched domestically (AD-21). In-bond and ex-bond movements are auditable state transitions; FTZ stock never commingles silently with duty-paid stock.
+**Surfaces:** web — customs status badges, in-bond/ex-bond movement views, FTZ segregation; mobile — status-gated scan refusal (UX-DR34).
 **FRs covered:** FR-55, FR-56, FR-57, FR-58
 
 ### Epic 17: Excise & Duty Control `[TIER 3]`
 Excisable goods — alcohol, tobacco, petroleum — carry an excise status and licence context that gates movement. Registers are **projections over ledger events, never a separately maintained book**, so the register and the stock can never disagree.
+**Surfaces:** web — excise status, register views with statutory export, licence admin, movement documents; mobile — status-gated scan refusal (UX-DR34).
 **FRs covered:** FR-59, FR-60, FR-61, FR-62
 
 ### Epic 18: Controlled & Licensed Goods `[TIER 3]`
 Licence context gates every controlled movement and an expired licence blocks it. Registers are ledger projections with statutory fields; movements may require two-person custody; any discrepancy raises a non-dismissible review that blocks further movement of the affected scope.
+**Surfaces:** web — licence admin, controlled registers with export, blocking discrepancy review; mobile — **two-person custody witness capture on-device** before the movement commits (UX-DR34).
 **FRs covered:** FR-63, FR-64, FR-65, FR-66
 
 ### Epic 19: Manufacturing Flows `[TIER 4]`
 Inventory held in work-in-progress states distinct from sellable on-hand; components staged and sequenced for an assembly line in consumption order; MRO consumables issued against cost centres and work orders; production kits distinct from sales bundles.
+**Surfaces:** web — work-order and cost-centre issue, WIP visibility; mobile — JIT sequencing task cards and WIP staging scans, following the Epic 3 card pattern.
 **FRs covered:** FR-67, FR-68, FR-69, FR-70
 
 ### Epic 20: Bulk & Tank Storage `[TIER 4]`
 Tanks, silos and yards hold measured stock with capacity in the stock's own UoM. Levels are measurements that reconcile against the ledger and raise a variance beyond tolerance; temperature-sensitive volumes carry the temperature at measurement; weighbridge and meter capture are first-class quantity sources.
+**Surfaces:** web — bulk location admin and measured-stock variance review; mobile — weighbridge and meter capture as a scan-equivalent input, tank/silo level reading.
 **FRs covered:** FR-71, FR-72, FR-73, FR-74
 
 **Dependency flow (all backward):** Epic 2 ← 1; Epic 3 ← 1+2; Epic 4 ← 2+3; Epic 6 ← 2; Epic 8 ← 4; Epic 9 ← 2+4. Multi-domain expansion: Epic 10 ← 1+2 (migration); Epic 11 ← 1+2; Epic 12 ← 2+3+11; Epic 13 ← 2+3+4; Epic 14 ← 2+10; Epic 15 ← 2+12; Epics 16/17/18 ← 2+4+12; Epic 19 ← 2+10+11; Epic 20 ← 10+12. Re-sequenced by the expansion: **Epic 5 ← 2+3+10+12** and **Epic 7 ← 2+4+11**. No epic requires a future epic to function.
