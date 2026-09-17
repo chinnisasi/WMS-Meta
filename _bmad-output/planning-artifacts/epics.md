@@ -85,6 +85,94 @@ FR29: An Operator sees their assigned/pickable tasks (picklists, putaways, count
 
 FR30: The mobile client scans barcodes via device camera and paired HID scanners, supporting Code 128, EAN-13, QR at minimum; the product generates SKU barcode values at catalog entry — scan-to-decision ≤ 1.5 s on mid-range Android, on-device where network-independent; a barcode value resolving to two SKUs within a Tenant prevented at catalog entry. (PRD FR-30)
 
+FR31: Quantities are fractional — a SKU's base UoM declares its decimal precision (each = 0 dp, kg/litre = 3 dp, tonne = 3 dp), and every quantity in the system honours it; a quantity below the declared precision is rejected, never silently rounded. (Multi-domain expansion 2026-09-17, AD-9 amended)
+
+FR32: UoM values come from a controlled vocabulary with declared conversions and precision — free-text UoM is rejected at catalog entry, so `pcs`, `PCS` and `pieces` cannot coexist as three units. (Multi-domain expansion)
+
+FR33: A handling unit (pallet, case, cylinder, keg) may carry its own identity, location and **actual weight** — catch-weight goods are handled by unit and priced by weight, and the actual weight is recorded at receipt and carried to pack and invoice. Catch weight is never modelled as quantity. (AD-22)
+
+FR34: Measured stock reconciles — replay-reconciliation reproduces every fractional balance exactly, and a rounding policy is declared once and applied everywhere. (NFR-1 extension)
+
+FR35: An order carries a destination address and a warehouse carries an origin address, both structured (pincode-bearing), so shipments can be rated, labelled and manifested. (Unblocks FR-17 rating)
+
+FR36: A SKU carries physical attributes — weight, dimensions — and country of origin. (Supports FR-17, import documentation, dimensional capacity)
+
+FR37: Products and variants are two-level: a product groups variants that differ on declared axes (size, colour), each variant remaining a SKU. Channel mappings bind to variants without a ledger change. (AD-19)
+
+FR38: Kits and bundles are composed of component SKUs; stock is held on components and a kit allocates by exploding its BOM at order acceptance — a kit is never counted as independent stock. (AD-19)
+
+FR39: Bin and location capacity is dimensional and weight-bearing, not a bare unit count; oversize and floor-stacked goods are placeable. (Supports furniture, construction)
+
+FR40: Every SKU and location carries a storage class from a controlled vocabulary (ambient, chilled, frozen, controlled, hazardous, secure), and putaway and pick refuse a non-conforming placement. (AD-18)
+
+FR41: Incompatible goods cannot be co-located — a segregation matrix over hazard classes refuses the placement naming both parties. (AD-18; chemicals, LPG, ammonium nitrate, ammunition)
+
+FR42: High-value and controlled stock is held in locations with a secure/cage class, and movement in or out is authority-gated and audited. (Electronics, jewellery, controlled drugs)
+
+FR43: Locations may be non-bin — yards, floor-stack areas, tanks and silos — participating in putaway and pick under their own placement rules. (Construction, agri, petroleum)
+
+FR44: Temperature excursions are captured as ledger events against the affected stock, and quarantine the affected units pending review. (AD-18; dairy, meat, seafood, pharma)
+
+FR45: Cold-chain state is reportable end to end — for any dispatched unit, the storage classes and excursions it passed through are reconstructible from the ledger. (AD-18)
+
+FR46: A dispatched order's units can be authorized for return (RMA), with the authorization naming the expected units and reason. (Apparel, ecommerce)
+
+FR47: Returned units are received and inspected scan-first on the existing mobile substrate, against the authorization. (Reuses FR-8/FR-29/FR-30 substrate)
+
+FR48: Every returned unit is dispositioned — restocked to sellable, quarantined for review, or scrapped — and each outcome is its own ledger event; a restock returns the unit to ATP. (AD-20)
+
+FR49: A SKU may be batch-tracked and serial-tracked simultaneously, each serial's batch resolved from its own ledger history — picking such a SKU is supported, not refused. (UDI-shaped; medical devices, pharma)
+
+FR50: A minimum-remaining-shelf-life policy is enforced at allocation and pick — stock with too little life remaining is not allocated, and the refusal names the policy and the batch. (Pharma, FMCG, cosmetics)
+
+FR51: A recall traces a batch or serial to every location, order and customer it reached, and quarantines what remains on hand in one operation. (Pharma, food, devices)
+
+FR52: Returnable containers (cylinders, kegs, crates, pallets) are assets tracked distinctly from the stock they carry — location, custody and condition survive the contents being consumed. (AD-22)
+
+FR53: Container custody is per-customer with deposit balances, and an overdue container is reportable. (LPG, beverages, dairy)
+
+FR54: Handling units move as a unit — a pallet moves its contents in one operation, and its contents remain individually traceable. (Bulky goods, pallet operations)
+
+FR55: Stock carries a customs status (bonded, duty-paid, in-transit, FTZ) that gates movement — duty-unpaid stock cannot be dispatched to a domestic destination. (AD-21)
+
+FR56: In-bond and ex-bond movements are recorded as auditable state transitions with their supporting documents. (AD-21)
+
+FR57: Free Trade Zone stock is segregated from duty-paid stock by location and by status, and the two never commingle silently. (AD-21)
+
+FR58: Duty is computed at clearance from the goods' declared value, HSN and origin, and the calculation is reproducible from the recorded event. (Supports FR-26)
+
+FR59: Excisable goods (alcohol, tobacco, petroleum) carry an excise status and a licence context that gates movement. (AD-21)
+
+FR60: Excise registers are projections over ledger events, never a separately maintained book — the register and the stock can never disagree. (AD-21, NFR-1)
+
+FR61: Bonded movement documents for excisable goods are generated from the recorded events. (AD-21)
+
+FR62: Excise losses (evaporation, breakage) are recorded as reason-coded ledger events within statutory allowances. (AD-21)
+
+FR63: Controlled substances require a valid licence context on the tenant and the movement; an expired licence blocks the movement and alerts. (NDPS, ammunition, explosives precursors)
+
+FR64: Controlled-substance registers are maintained as ledger projections with statutory fields and are exportable for inspection. (AD-21)
+
+FR65: Movements of controlled stock may require two-person custody — a second authorized witness recorded on the event. (Defence-adjacent, NDPS)
+
+FR66: Any discrepancy on controlled stock raises an immediate, non-dismissible review that blocks further movement of the affected scope. (AD-21)
+
+FR67: Inventory may be held in work-in-progress states (staged, consumed, produced) distinct from sellable on-hand. (Manufacturing, automotive)
+
+FR68: Components can be staged and sequenced for an assembly line, delivered in consumption order against a schedule. (JIT; automotive)
+
+FR69: MRO consumables are stocked and issued against cost centres or work orders rather than customer orders. (MRO)
+
+FR70: A kit can be staged and picked as a production kit, distinct from a sales bundle. (Manufacturing; extends FR-38)
+
+FR71: Bulk locations (tanks, silos, yards) hold measured stock with a capacity expressed in the stock's own UoM. (Petroleum, agri)
+
+FR72: Tank and silo levels are recorded as measurements that reconcile against the ledger, and a divergence beyond tolerance raises a variance. (Petroleum, agri; extends FR-21)
+
+FR73: Volumes of temperature-sensitive liquids are recorded with the temperature at measurement so a standard-temperature volume is derivable. (Petroleum)
+
+FR74: Bulk receipts and issues support weighbridge and meter capture as the quantity source, with the measurement retained on the event. (Agri, petroleum, construction)
+
 ### NonFunctional Requirements
 
 NFR1: Inventory correctness — zero tolerance for ledger/derived-state divergence; automated replay-reconciliation runs continuously and alerts on any mismatch (validates FR-4 constantly, not just at test time). (PRD NFR-1)
@@ -191,6 +279,27 @@ FR28: Epic 9 — Global audit trail, filtered view, async export
 FR29: Epic 3 — Mobile task inbox (born here; extended by Epics 4/5 with new task types)
 FR30: Epic 3 — Camera + HID barcode scanning, catalog barcode uniqueness (extended by later epics)
 
+**Tier 0 — foundation**
+FR31-34: Epic 10 — Fractional quantities, UoM vocabulary + precision, catch weight, measured reconciliation
+
+**Tier 1 — universal foundations**
+FR35-39: Epic 11 — Shipment address, physical attributes, variants, kits, dimensional capacity
+FR40-45: Epic 12 — Storage class, segregation matrix, secure locations, non-bin locations, excursions
+FR46-48: Epic 13 — Return authorization, scan-based return receipt, disposition
+FR49-51: Epic 14 — Batch+serial together, minimum shelf life, recall
+
+**Tier 2 — high-volume verticals**
+FR52-54: Epic 15 — Returnable containers, custody and deposits, handling-unit movement
+
+**Tier 3 — regulated**
+FR55-58: Epic 16 — Customs status, in-bond/ex-bond, FTZ, duty calculation
+FR59-62: Epic 17 — Excise status, registers as projections, bonded documents, statutory losses
+FR63-66: Epic 18 — Licence gating, controlled registers, two-person custody, blocking review
+
+**Tier 4 — specialized**
+FR67-70: Epic 19 — WIP states, JIT sequencing, MRO issue, production kits
+FR71-74: Epic 20 — Bulk locations, tank/silo level reconciliation, temperature-compensated volume, weighbridge capture
+
 ## Epic List
 
 ### Epic 1: Foundation — Tenant Onboarding & Team
@@ -229,7 +338,53 @@ Dispatches generate GST-compliant invoices from SKU GST/HSN data; single and bat
 Priya's live KPI home reconciling to the ledger; the bell/notification panel; the Owner's filterable, exportable audit trail (async export). Cross-cutting close that aggregates everything shipped before it.
 **FRs covered:** FR-27, FR-28
 
-**Dependency flow (all backward):** Epic 2 ← 1; Epic 3 ← 1+2; Epic 4 ← 2+3; Epic 5 ← 2+3; Epic 6 ← 2; Epic 7 ← 2+4; Epic 8 ← 4; Epic 9 ← 2+4. No epic requires a future epic to function.
+### Epic 10: Quantity Model — Measured Goods & Catch Weight `[TIER 0 — BLOCKING]`
+The one foundational migration of the multi-domain expansion. Quantities become fractional — scaled integers in micro-units, decimals only at the API and UI edges — with each UoM declaring its real precision from a controlled vocabulary. Catch weight arrives separately as a per-handling-unit actual weight, so the risky change stays confined to the quantity columns. Story 2.2's replay-reconciliation is the migration's oracle: every derived balance must reproduce after the change. **Blocks Epic 5** — transfers, adjustments and counts built on integers would all be rewritten.
+**FRs covered:** FR-31, FR-32, FR-33, FR-34
+
+### Epic 11: Product & Shipment Model `[TIER 1]`
+Shipment addresses (order destination, warehouse origin) unblock carrier rating; weight and dimensions unblock labels, manifests and dimensional capacity; a two-level product→variant identity makes size×colour first-class **without touching the ledger** (AD-19); kits hold stock on components and explode at acceptance. Gates Epic 7's channel mapping and story 4-6d.
+**FRs covered:** FR-35, FR-36, FR-37, FR-38, FR-39
+
+### Epic 12: Storage Conformance, Segregation & Location Types `[TIER 1]`
+Storage class becomes first-class on SKUs and locations with a controlled vocabulary, enforced in putaway and pick — a frozen SKU cannot enter an ambient bin and an oxidiser cannot sit beside a fuel, by rule not convention (AD-18). Adds a hazard segregation matrix, a secure/cage class for high-value and controlled stock, locations beyond bins (yards, floor-stack, tanks, silos), dimensional and weight capacity, and temperature excursions as ledger events.
+**FRs covered:** FR-40, FR-41, FR-42, FR-43, FR-44, FR-45
+
+### Epic 13: Returns & Reverse Logistics `[TIER 1]`
+The first reverse flow. Units return under an authorization, are received and inspected scan-first on the existing mobile substrate, and are dispositioned — restocked to sellable, quarantined for review, or scrapped — every outcome its own registered ledger event (AD-20), never a sign-flipped receipt.
+**FRs covered:** FR-46, FR-47, FR-48
+
+### Epic 14: Traceability & Shelf Life `[TIER 1]`
+A SKU can be batch- **and** serial-tracked at once, each serial's lot resolved from its own ledger history — deleting the refusal at `pick.command.ts:708`. Shelf-life policy refuses to allocate stock with too little life remaining; recall traces a lot or serial to every location, order and customer it reached and quarantines what remains.
+**FRs covered:** FR-49, FR-50, FR-51
+
+### Epic 15: Returnable Containers & Handling Units `[TIER 2]`
+Cylinders, kegs, crates and pallets are assets that cycle, tracked distinctly from the stock they carry, with per-customer custody and deposit balances (AD-22). Handling units also give bulky-goods and pallet operations a unit of movement above the SKU.
+**FRs covered:** FR-52, FR-53, FR-54
+
+### Epic 16: Customs, Bonded Storage & Free Trade Zones `[TIER 3]`
+Stock carries a customs status that gates movement — duty-unpaid stock cannot be dispatched domestically (AD-21). In-bond and ex-bond movements are auditable state transitions; FTZ stock never commingles silently with duty-paid stock.
+**FRs covered:** FR-55, FR-56, FR-57, FR-58
+
+### Epic 17: Excise & Duty Control `[TIER 3]`
+Excisable goods — alcohol, tobacco, petroleum — carry an excise status and licence context that gates movement. Registers are **projections over ledger events, never a separately maintained book**, so the register and the stock can never disagree.
+**FRs covered:** FR-59, FR-60, FR-61, FR-62
+
+### Epic 18: Controlled & Licensed Goods `[TIER 3]`
+Licence context gates every controlled movement and an expired licence blocks it. Registers are ledger projections with statutory fields; movements may require two-person custody; any discrepancy raises a non-dismissible review that blocks further movement of the affected scope.
+**FRs covered:** FR-63, FR-64, FR-65, FR-66
+
+### Epic 19: Manufacturing Flows `[TIER 4]`
+Inventory held in work-in-progress states distinct from sellable on-hand; components staged and sequenced for an assembly line in consumption order; MRO consumables issued against cost centres and work orders; production kits distinct from sales bundles.
+**FRs covered:** FR-67, FR-68, FR-69, FR-70
+
+### Epic 20: Bulk & Tank Storage `[TIER 4]`
+Tanks, silos and yards hold measured stock with capacity in the stock's own UoM. Levels are measurements that reconcile against the ledger and raise a variance beyond tolerance; temperature-sensitive volumes carry the temperature at measurement; weighbridge and meter capture are first-class quantity sources.
+**FRs covered:** FR-71, FR-72, FR-73, FR-74
+
+**Dependency flow (all backward):** Epic 2 ← 1; Epic 3 ← 1+2; Epic 4 ← 2+3; Epic 6 ← 2; Epic 8 ← 4; Epic 9 ← 2+4. Multi-domain expansion: Epic 10 ← 1+2 (migration); Epic 11 ← 1+2; Epic 12 ← 2+3+11; Epic 13 ← 2+3+4; Epic 14 ← 2+10; Epic 15 ← 2+12; Epics 16/17/18 ← 2+4+12; Epic 19 ← 2+10+11; Epic 20 ← 10+12. Re-sequenced by the expansion: **Epic 5 ← 2+3+10+12** and **Epic 7 ← 2+4+11**. No epic requires a future epic to function.
+
+**Execution order (tiers, not numbers):** 4-2d → 4-6c → **Epic 10** → Epic 11 → 4-6d → Epics 12, 13, 14 → Epic 15 → Epics 5, 6, 7, 8, 9 → Epics 16, 17, 18 → Epics 19, 20. Tier 0 is first because it is the only item that grows more expensive with delay.
 
 ## Epic 1: Foundation — Tenant Onboarding & Team
 

@@ -29,13 +29,13 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-17-2026 00:45'
+last_updated: '09-17-2026 01:30'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-monorepo-scaffold-and-design-system-shell: done
   1-2-tenant-registration-and-warehouse-creation: done
   1-3-zones-bins-and-the-setup-checklist: done
@@ -43,7 +43,7 @@ development_status:
   1-5-users-roles-and-permission-gating: done
   epic-1-retrospective: done
 
-  epic-2: in-progress
+  epic-2: done
   2-1-append-only-ledger-core-and-derived-quantities: done
   2-2-continuous-replay-reconciliation: done
   2-3-real-time-atp-and-atomic-reservations: done
@@ -51,7 +51,7 @@ development_status:
   2-5-inventory-surfaces-stock-batches-and-the-ledger-timeline: done
   epic-2-retrospective: done
 
-  epic-3: in-progress
+  epic-3: done
   3-1-po-creation-and-lifecycle: done
   3-2-mobile-client-substrate-enrollment-badge-in-inbox-scanning: done
   3-3-scan-based-receiving-and-grn: done
@@ -126,6 +126,119 @@ development_status:
   4-6d-carrier-rate-shopping: backlog
   epic-4-retrospective: optional
 
+  # ===================================================================
+  # MULTI-DOMAIN EXPANSION (Sprint Change Proposal, 2026-09-17, approved)
+  # Numbers are 10-20, NOT inserted as 5-15: renumbering would break every
+  # epic reference across _bmad-output/implementation-artifacts (context
+  # files, retro files, spec frontmatter, the keys in this file).
+  # EXECUTION ORDER IS BY TIER, NOT BY NUMBER:
+  #   4-2d -> 4-6c -> epic-10 -> epic-11 -> 4-6d -> epics 12,13,14
+  #   -> epic-15 -> epics 5,6,7,8,9 -> epics 16,17,18 -> epics 19,20
+  # Story keys below are the FR blocks; detailed specs are generated per
+  # tier at tier start, per the "create the next story after the previous
+  # one is done" convention.
+  # ===================================================================
+
+  # TIER 0 — the one foundational migration. BLOCKS epic-5: transfers,
+  # adjustments and counts built on integer quantities would be rewritten.
+  # AD-9 amended 2026-09-17: quantities become fractional (scaled integers,
+  # micro-units). Oracle: story 2.2 replay-reconciliation must reproduce
+  # every derived balance after the migration.
+  epic-10: backlog
+  10-1-fractional-quantity-migration: backlog
+  10-2-uom-vocabulary-and-precision: backlog
+  10-3-catch-weight-handling-units: backlog
+  10-4-measured-stock-reconciliation: backlog
+  epic-10-retrospective: optional
+
+  # TIER 1 — foundations every domain needs.
+  # Epic 11 unblocks story 4-6d (rating needs an address + weight/dims) and
+  # gates epic-7 (Shopify is product->variant; without variants the channel
+  # mapping is lossy by construction).
+  epic-11: backlog
+  11-1-shipment-address-model: backlog
+  11-2-sku-physical-attributes-and-origin: backlog
+  11-3-product-variants: backlog
+  11-4-kits-and-bundles: backlog
+  11-5-dimensional-capacity: backlog
+  epic-11-retrospective: optional
+
+  # Touches ALREADY-SHIPPED code: conformance is enforced inside the
+  # existing putaway (3.5) and pick (4.3) commands.
+  epic-12: backlog
+  12-1-storage-class-and-conformance: backlog
+  12-2-hazard-segregation-matrix: backlog
+  12-3-secure-locations: backlog
+  12-4-non-bin-location-types: backlog
+  12-5-temperature-excursions: backlog
+  12-6-cold-chain-reporting: backlog
+  epic-12-retrospective: optional
+
+  epic-13: backlog
+  13-1-return-authorization: backlog
+  13-2-return-receipt-and-inspection: backlog
+  13-3-return-disposition: backlog
+  epic-13-retrospective: optional
+
+  # 14-1 deletes the refusal at pick.command.ts:708 (a SKU that is both
+  # batch- AND serial-tracked is currently unpickable — blocks medical
+  # devices under UDI).
+  epic-14: backlog
+  14-1-batch-and-serial-together: backlog
+  14-2-minimum-shelf-life-policy: backlog
+  14-3-recall-trace-and-quarantine: backlog
+  epic-14-retrospective: optional
+
+  # TIER 2 — high-volume verticals.
+  epic-15: backlog
+  15-1-returnable-containers: backlog
+  15-2-container-custody-and-deposits: backlog
+  15-3-handling-unit-movement: backlog
+  epic-15-retrospective: optional
+
+  # TIER 3 — regulated. All three share ONE mechanism (AD-21): goods carry
+  # a fiscal or legal state that gates movement, and registers are
+  # projections over ledger events, never a separately maintained book.
+  epic-16: backlog
+  16-1-customs-status-gating: backlog
+  16-2-in-bond-and-ex-bond-movements: backlog
+  16-3-free-trade-zone-segregation: backlog
+  16-4-duty-calculation: backlog
+  epic-16-retrospective: optional
+
+  epic-17: backlog
+  17-1-excise-status-and-licence-context: backlog
+  17-2-excise-registers-as-projections: backlog
+  17-3-bonded-movement-documents: backlog
+  17-4-statutory-loss-recording: backlog
+  epic-17-retrospective: optional
+
+  epic-18: backlog
+  18-1-licence-gating: backlog
+  18-2-controlled-substance-registers: backlog
+  18-3-two-person-custody: backlog
+  18-4-controlled-discrepancy-review: backlog
+  epic-18-retrospective: optional
+
+  # TIER 4 — specialized.
+  epic-19: backlog
+  19-1-work-in-progress-states: backlog
+  19-2-jit-sequencing: backlog
+  19-3-mro-issue: backlog
+  19-4-production-kits: backlog
+  epic-19-retrospective: optional
+
+  epic-20: backlog
+  20-1-bulk-locations: backlog
+  20-2-tank-and-silo-reconciliation: backlog
+  20-3-temperature-compensated-volume: backlog
+  20-4-weighbridge-and-meter-capture: backlog
+  epic-20-retrospective: optional
+
+  # RE-SEQUENCED by the 2026-09-17 expansion: epic-5 now depends on
+  # epic-10 (fractional quantities) and epic-12 (storage/location model).
+  # Building it first would mean rewriting transfers, adjustments and
+  # counts on the new quantity model.
   epic-5: backlog
   5-1-transfer-orders: backlog
   5-2-stock-adjustments-with-approval-thresholds: backlog
@@ -139,6 +252,7 @@ development_status:
   6-2-expiry-and-aging-alerts: backlog
   epic-6-retrospective: optional
 
+  # RE-SEQUENCED: epic-7 now depends on epic-11's variant model.
   epic-7: backlog
   7-1-channel-connections-buffers-and-availability-sync: backlog
   7-2-channel-order-ingestion-and-fulfillment-writeback: backlog
