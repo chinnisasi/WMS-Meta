@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-18-2026 01:10'
+last_updated: '09-18-2026 01:30'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -157,7 +157,7 @@ development_status:
   # milli-units). Oracle: story 2.2 replay-reconciliation must reproduce
   # every derived balance after the migration.
   epic-10: in-progress
-  10-1-fractional-quantity-migration: review
+  10-1-fractional-quantity-migration: done
   10-2-uom-vocabulary-and-precision: backlog
   10-3-catch-weight-handling-units: backlog
   10-4-measured-stock-reconciliation: backlog
