@@ -58,9 +58,9 @@
 
 Conflating them would make catch weight part of the migration for no reason.
 
-**Recommended representation — scaled integers, not `numeric`.** Quantities become `bigint` in **micro-units** (base UoM × 10⁶), with each UoM declaring its real decimal precision, and decimals converted only at the API and UI edges.
+**Recommended representation — scaled integers, not `numeric`.** Quantities become `bigint` in **milli-units** (base UoM × 10³), with each UoM declaring its real decimal precision, and decimals converted only at the API and UI edges.
 
-*Why this rather than `numeric(18,6)`:* the reservation path decrements ATP counters in **Valkey through a Lua script**, and Lua numbers are IEEE doubles — decimal quantities there would reintroduce exactly the float-precision errors AD-9 was written to prevent. Using `numeric` in Postgres and scaled integers in Valkey means two representations and a conversion boundary in the most concurrency-sensitive code in the system. Scaled integers keep one representation everywhere, stay exact under summation, and follow the repo's own **money-as-integer-paise** precedent. `bigint` micro-units reach 9.2 × 10¹² base units — ample for silo and tank scale.
+*Why this rather than `numeric(18,6)`:* the reservation path decrements ATP counters in **Valkey through a Lua script**, and Lua numbers are IEEE doubles — decimal quantities there would reintroduce exactly the float-precision errors AD-9 was written to prevent. Using `numeric` in Postgres and scaled integers in Valkey means two representations and a conversion boundary in the most concurrency-sensitive code in the system. Scaled integers keep one representation everywhere, stay exact under summation, and follow the repo's own **money-as-integer-paise** precedent. `bigint` milli-units reach 9.2 × 10¹⁵ base units, and the binding limit is not `bigint` but the 2⁵³ exact-integer ceiling of JS and Lua doubles, which milli-unit scaling keeps at ~9.0 × 10¹² base units — ample for silo and tank scale.
 
 The functional outcome is identical to `numeric`: fractional quantities with declared precision. If you'd rather have true `numeric` in Postgres, say so and I'll re-cut Tier 0 — the epic shape is the same either way.
 
@@ -165,7 +165,7 @@ NOW ─────────────────────────�
 **TIER 0**
 
 **Epic 10: Quantity Model — Measured Goods & Catch Weight**
-> The one foundational migration. Quantities become fractional (scaled integers in micro-units, decimals at the edges) with each UoM declaring its real precision; catch weight arrives as a per-handling-unit actual weight, distinct from quantity. Replay-reconciliation (story 2.2) is the migration's oracle: every balance must reproduce after the change. Blocks Epic 5.
+> The one foundational migration. Quantities become fractional (scaled integers in milli-units, decimals at the edges) with each UoM declaring its real precision; catch weight arrives as a per-handling-unit actual weight, distinct from quantity. Replay-reconciliation (story 2.2) is the migration's oracle: every balance must reproduce after the change. Blocks Epic 5.
 > **FRs:** FR-31…FR-34
 
 **TIER 1**
@@ -213,7 +213,7 @@ NOW ─────────────────────────�
 ### 4.3 Architecture
 
 **AD-9 — AMENDED: Deterministic primitive types `[ADOPTED, amended 2026-09-17]`**
-> **Rule change.** Quantities are **fractional**, represented as scaled integers in micro-units (base UoM × 10⁶) and stored as `bigint`; each UoM declares its real decimal precision, and decimal conversion happens **only at API and UI edges**. Money stays integer paise; GST stays basis points; timestamps stay ISO-8601 UTC; ids stay UUIDv7.
+> **Rule change.** Quantities are **fractional**, represented as scaled integers in milli-units (base UoM × 10³) and stored as `bigint`; each UoM declares its real decimal precision, and decimal conversion happens **only at API and UI edges**. Money stays integer paise; GST stays basis points; timestamps stay ISO-8601 UTC; ids stay UUIDv7.
 > **Why scaled integers and not `numeric`:** the reservation path decrements ATP counters in Valkey through a Lua script, and Lua numbers are IEEE doubles — decimals there reintroduce the float errors this decision exists to prevent. One exact representation everywhere beats `numeric` in Postgres plus scaled integers in Valkey and a conversion boundary in the most concurrency-sensitive code in the system.
 > **Catch weight is NOT a quantity** — it is a per-handling-unit actual weight (AD-22), so it never enters this rule.
 > **Migration oracle:** replay-reconciliation (story 2.2) must reproduce every derived balance after the change.

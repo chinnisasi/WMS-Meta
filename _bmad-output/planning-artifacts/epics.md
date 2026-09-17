@@ -357,7 +357,7 @@ Priya's live KPI home reconciling to the ledger; the bell/notification panel; th
 **FRs covered:** FR-27, FR-28
 
 ### Epic 10: Quantity Model — Measured Goods & Catch Weight `[TIER 0 — BLOCKING]`
-The one foundational migration of the multi-domain expansion. Quantities become fractional — scaled integers in micro-units, decimals only at the API and UI edges — with each UoM declaring its real precision from a controlled vocabulary. Catch weight arrives separately as a per-handling-unit actual weight, so the risky change stays confined to the quantity columns. Story 2.2's replay-reconciliation is the migration's oracle: every derived balance must reproduce after the change. **Blocks Epic 5** — transfers, adjustments and counts built on integers would all be rewritten.
+The one foundational migration of the multi-domain expansion. Quantities become fractional — scaled integers in milli-units, decimals only at the API and UI edges — with each UoM declaring its real precision from a controlled vocabulary. Catch weight arrives separately as a per-handling-unit actual weight, so the risky change stays confined to the quantity columns. Story 2.2's replay-reconciliation is the migration's oracle: every derived balance must reproduce after the change. **Blocks Epic 5** — transfers, adjustments and counts built on integers would all be rewritten.
 **Surfaces:** web — decimal quantity rendering at declared precision across every form and table; mobile — decimal entry on the scan path and catch-weight capture at receive and pack (UX-DR26, UX-DR27).
 **FRs covered:** FR-31, FR-32, FR-33, FR-34
 

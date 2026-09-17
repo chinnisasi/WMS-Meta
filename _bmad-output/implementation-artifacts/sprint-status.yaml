@@ -154,7 +154,7 @@ development_status:
   # TIER 0 — the one foundational migration. BLOCKS epic-5: transfers,
   # adjustments and counts built on integer quantities would be rewritten.
   # AD-9 amended 2026-09-17: quantities become fractional (scaled integers,
-  # micro-units). Oracle: story 2.2 replay-reconciliation must reproduce
+  # milli-units). Oracle: story 2.2 replay-reconciliation must reproduce
   # every derived balance after the migration.
   epic-10: backlog
   10-1-fractional-quantity-migration: backlog
