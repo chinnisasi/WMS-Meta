@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-17-2026 02:00'
+last_updated: '09-17-2026 02:30'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -131,9 +131,17 @@ development_status:
   # Numbers are 10-20, NOT inserted as 5-15: renumbering would break every
   # epic reference across _bmad-output/implementation-artifacts (context
   # files, retro files, spec frontmatter, the keys in this file).
-  # EXECUTION ORDER IS BY TIER, NOT BY NUMBER:
-  #   4-2d -> 4-6c -> epic-10 -> epic-11 -> 4-6d -> epics 12,13,14
-  #   -> epic-15 -> epics 5,6,7,8,9 -> epics 16,17,18 -> epics 19,20
+  # EXECUTION ORDER — MVP-FIRST, FOUNDATIONS FRONT-LOADED (human, 2026-09-17):
+  #   PHASE 0  epic-10 -> epic-11                    foundations, 13 stories
+  #   PHASE 1  4-2d -> 4-6c -> 4-6d -> epics 5,6,7,8,9   MVP, 17 stories
+  #   PHASE 2  billing | production ops | data onboarding
+  #            (NO EPIC COVERS THESE - run parallel to Phase 1)
+  #   PHASE 3+ epics 12,13,14,15 -> 16,17,18 -> 19,20   domains, 52 stories
+  # ~30 stories to a sellable D2C product. Only epic-10 is a migration;
+  # everything in Phase 3 is additive (AD-19/20/21), so those epics can be
+  # reordered freely by market demand without rework.
+  # HARD GATES: 10 before 5/14/19/20 | 11 before 4-6d and 7 | 12 before
+  # 16/17/18. Epic 12 before epic 5 is a PREFERENCE, not a gate.
   # Story keys below are the FR blocks; detailed specs are generated per
   # tier at tier start, per the "create the next story after the previous
   # one is done" convention.

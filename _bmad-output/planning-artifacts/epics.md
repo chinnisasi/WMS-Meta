@@ -413,7 +413,18 @@ Tanks, silos and yards hold measured stock with capacity in the stock's own UoM.
 
 **Dependency flow (all backward):** Epic 2 ← 1; Epic 3 ← 1+2; Epic 4 ← 2+3; Epic 6 ← 2; Epic 8 ← 4; Epic 9 ← 2+4. Multi-domain expansion: Epic 10 ← 1+2 (migration); Epic 11 ← 1+2; Epic 12 ← 2+3+11; Epic 13 ← 2+3+4; Epic 14 ← 2+10; Epic 15 ← 2+12; Epics 16/17/18 ← 2+4+12; Epic 19 ← 2+10+11; Epic 20 ← 10+12. Re-sequenced by the expansion: **Epic 5 ← 2+3+10+12** and **Epic 7 ← 2+4+11**. No epic requires a future epic to function.
 
-**Execution order (tiers, not numbers):** 4-2d → 4-6c → **Epic 10** → Epic 11 → 4-6d → Epics 12, 13, 14 → Epic 15 → Epics 5, 6, 7, 8, 9 → Epics 16, 17, 18 → Epics 19, 20. Tier 0 is first because it is the only item that grows more expensive with delay.
+**Execution order — MVP-first with the foundations front-loaded (human decision, 2026-09-17):**
+
+```
+PHASE 0  Epic 10 → Epic 11                       foundations (13 stories)
+PHASE 1  4-2d → 4-6c → 4-6d → Epics 5,6,7,8,9    MVP        (17 stories)  ← ~30 to market
+PHASE 2  billing · production ops · data onboarding           (no epic covers these; run parallel to Phase 1)
+PHASE 3+ Epics 12,13,14,15 → 16,17,18 → 19,20    domains    (52 stories, reorderable by demand)
+```
+
+**Why only two epics precede MVP.** Epic 10 is the *only migration* in the programme — 18 quantity columns and every command — and epic 5 would widen it, so it is cheapest now even though D2C does not need fractional quantities. Epic 11 is needed by the MVP regardless: addresses for labels and rating, weight and dimensions for carriers, and variants because a Shopify product maps to variants (epic 7). Everything after that is additive by construction — AD-19 keeps the SKU as the ledger's unit, AD-20 registers reverse movements as grammar arms, AD-21 gives customs/excise/controlled one shared mechanism — so **Phase 3 epics can be reordered freely by market demand without rework**.
+
+**Hard gates (the only ones):** Epic 10 before Epics 5, 14, 19, 20 · Epic 11 before 4-6d and Epic 7 · Epic 12 before Epics 16, 17, 18. *Epic 12 before Epic 5 is a rework-avoidance preference, not a gate* — counting bins works without storage classes; you revisit it when yards and tanks arrive in Epic 20.
 
 ## Epic 1: Foundation — Tenant Onboarding & Team
 
