@@ -87,11 +87,16 @@ graph BT
 - **Prevents:** hand-copied DTO drift across three repos
 - **Rule:** wms-be exposes a versioned OpenAPI document as the single API truth; wms-fe and wms-mobile commit generated typed clients (type-only: `openapi-typescript`; SDK: `@hey-api/openapi-ts` — pinned in Stack); no hand-written API types on the consuming side. A backend change that breaks the generated types is a build failure in the consuming repo, not a runtime surprise.
 
-### AD-9 — Deterministic primitive types: integers, UTC, UUIDv7 `[ADOPTED]`
+### AD-9 — Deterministic primitive types: exact arithmetic, UTC, UUIDv7 `[ADOPTED, amended 2026-09-17]`
 
 - **Binds:** all repos
-- **Prevents:** float money bugs, quantity-unit ambiguity, timezone chaos, unordered ids across offline clients
-- **Rule:** quantities are integers in the SKU's base UoM (conversions applied only at presentation/ingest edges); money is integer paise; GST rates are basis points; timestamps are ISO-8601 UTC (IST is a display concern); identifiers are UUIDv7 (client-generatable, time-ordered). Every event's `qty` is signed by movement direction, never by convention. Regulatory constants (e-way thresholds, GST rules) live as versioned config data, never code literals.
+- **Prevents:** float money and quantity bugs, quantity-unit ambiguity, timezone chaos, unordered ids across offline clients
+- **Rule:** quantities are **fractional**, represented as **scaled integers in milli-units** (base UoM x 10^3) stored as `bigint`; each UoM declares its real decimal precision, capped at **3 decimal places** by the scale, and decimal conversion happens **only at API and UI edges**. Money is integer paise; GST rates are basis points; timestamps are ISO-8601 UTC (IST is a display concern); identifiers are UUIDv7 (client-generatable, time-ordered). Every event's `qty` is signed by movement direction, never by convention. Regulatory constants (e-way thresholds, GST rules) live as versioned config data, never code literals.
+- **Amendment (2026-09-17, multi-domain expansion).** The original rule was *integers in base UoM*. Measured goods — grain, fertilizer, cement, chemicals, petroleum, LPG, bulk alcohol, and length-measured steel and pipe — cannot live inside it, and the "use a tiny base unit" escape fails twice: `integer` overflows before silo scale (2,147,483,647 g is ~2,147 t), and **catch weight cannot be expressed at any base unit**. Quantities therefore become fractional. `bigint` milli-units reach 9.2 x 10^15 base units, and the binding limit is not `bigint` but the 2^53 exact-integer ceiling of JS and Lua doubles, which milli-unit scaling keeps at ~9.0 x 10^12 base units, ample for silo and tank scale.
+- **Why scaled integers and not `numeric`.** The reservation path decrements ATP counters in Valkey through a Lua script, and Lua numbers are IEEE doubles — decimal quantities there would reintroduce exactly the float-precision errors this decision exists to prevent. `numeric` in Postgres plus scaled integers in Valkey means two representations and a conversion boundary in the most concurrency-sensitive code in the system. One exact representation everywhere, following the repo's own money-as-integer-paise precedent.
+- **Why milli and not micro (human decision, 2026-09-17).** The scale is bounded by the *doubles*, not by `bigint`. Quantities cross two IEEE-double boundaries — Lua 5.1 in the Valkey script and JavaScript itself — both exact only to 2^53 (~9.007 x 10^15). At x10^6 that leaves ~9.0 x 10^9 base units, which caps a grams-based silo at ~9,007 t: better than int4's ~2,147 t but still reachable by a real silo. At x10^3 the same ceiling becomes ~9.0 x 10^12 base units, a thousandfold more headroom, at the cost of capping declared precision at 3 dp — which covers every UoM the domain list needs (kg, litre, tonne, metre all at 3 dp; each at 0 dp). Revisit only if a UoM ever genuinely needs more than 3 decimal places (troy ounces, chemical actives), and understand that doing so trades range for precision against a fixed 2^53 budget.
+- **Catch weight is NOT a quantity.** The actual weight of an individual handling unit (a case of beef is *one* unit weighing 18.4 kg — handled by unit, priced by weight) is a per-handling-unit field under AD-22. It never enters this rule, which is what keeps the migration confined to the quantity columns.
+- **Migration oracle.** Story 2.2's continuous replay-reconciliation recomputes derived quantities from the ledger and compares them against live counters. After the quantity migration, **replay must reproduce every balance** — that is the acceptance test for the change.
 
 ### AD-10 — One command layer owns state mutation `[ADOPTED]` *(tightened by reviewer gate)*
 
@@ -141,12 +146,42 @@ graph BT
 - **Prevents:** background sync/exports/projection rebuilds starving floor scanning during peak; runaway sync storms burning carrier/marketplace quotas; silent cost bleed
 - **Rule:** background work (availability sync, projections, exports, alerts, reaper) is sheddable: under load it yields to scan-path and order-accept traffic (NFR-4's priority). Every integration's outbound call volume is metered per tenant with automatic circuit-breaking on runaway loops — and those same counters are the metering surface that keeps commercial tiering technically meterable (PRD Monetization).
 
+### AD-18 — Storage conformance and segregation are enforced at the command layer `[PROPOSED]`
+
+- **Binds:** wms-be, wms-mobile; FR-40…FR-45
+- **Prevents:** cold-chain breaks invisible until audit; incompatible goods stored together; high-value and controlled stock in open locations
+- **Rule:** every SKU and every location carries a storage class and, where applicable, a hazard class — both from **controlled vocabularies backed by DB CHECKs, never free text**. Putaway and pick refuse a non-conforming placement, and refuse co-location of segregation-incompatible goods. Conformance is a command-layer rule, never a UI convention and never a bin-naming habit. Temperature excursions are ledger events like any other movement, so chain of custody is reconstructible from the ledger alone.
+
+### AD-19 — Product identity is two-level; the SKU stays the ledger's unit `[PROPOSED]`
+
+- **Binds:** all repos; FR-37, FR-38
+- **Prevents:** a variant model that forces a ledger migration; lossy channel mapping
+- **Rule:** `products` sits **above** `skus`; a SKU is the stock-keeping unit and remains what every ledger event, reservation, pick and bin quantity references. Variants are an identity and presentation concern; no table below the catalog ever learns what a variant is. This is what keeps apparel support and Shopify's product→variant mapping additive.
+
+### AD-20 — Reverse movements are registered ledger event types `[PROPOSED]`
+
+- **Binds:** wms-be; FR-46…FR-48
+- **Prevents:** returns arriving as sign-flipped receipts that corrupt receiving analytics and inbound KPIs
+- **Rule:** returns register their own grammar arms under AD-11 (`return.received`, `return.restocked`, `return.scrapped`). A return is never a receipt with a negative quantity and never a reversal of the dispatch event — the dispatch happened, and the ledger is append-only. Disposition decides which arm is written.
+
+### AD-21 — Fiscal and legal state gates movement `[PROPOSED]`
+
+- **Binds:** wms-be; FR-55…FR-66
+- **Prevents:** duty-unpaid stock dispatched as if cleared; three disconnected compliance subsystems
+- **Rule:** customs status, excise status and controlled-substance status are **states on stock, not parallel ledgers**. Movements are gated on them and every transition is an auditable event. One mechanism serves bonded storage, excise control and controlled goods — three regulatory regimes, one model. Statutory registers are projections over those events, never a separately maintained book.
+
+### AD-22 — Handling units carry identity; returnable containers are assets `[PROPOSED]`
+
+- **Binds:** wms-be, wms-mobile; FR-33, FR-52…FR-54
+- **Prevents:** catch weight modelled as quantity; container fleets tracked in spreadsheets
+- **Rule:** a handling unit (pallet, case, cylinder, keg) may carry its own identity, its **actual weight** (catch weight), and its own location. **Returnable containers are assets tracked distinctly from the stock they carry** — a cylinder's location, custody and deposit survive the gas inside being consumed.
+
 ## Consistency Conventions
 
 | Concern | Convention |
 | --- | --- |
 | Naming | DB tables snake_case plural; entities PascalCase singular; ledger event types `<domain>.<verb-past>` (`grn.received`, `order.dispatched`); REST resources plural nouns; Nest modules one-per-domain-folder, kebab-case files |
-| Data & formats | IDs UUIDv7; timestamps ISO-8601 UTC; money integer paise; qty integer base-UoM; GST basis points; API errors RFC 9457 problem-details envelope with machine-readable `code` + `trace_id`; pagination cursor-based; every ledger event distinguishes `occurred_at` (device/event time) from `recorded_at` (server ingest) |
+| Data & formats | IDs UUIDv7; timestamps ISO-8601 UTC; money integer paise; qty fractional as scaled integers (base-UoM x 10^6, `bigint`), decimals only at API/UI edges (AD-9); GST basis points; API errors RFC 9457 problem-details envelope with machine-readable `code` + `trace_id`; pagination cursor-based; every ledger event distinguishes `occurred_at` (device/event time) from `recorded_at` (server ingest) |
 | State & cross-cutting | Mutation only via command services (AD-10); structured JSON logs with `tenant_id`/`warehouse_id`/`request_id` on every line; config via env only, per-tenant customization via metadata tables, never code (addendum §1.2); auth = short-lived JWT + refresh, roles Owner/Ops Manager/Operator/Accountant per FR-3; background jobs run through the same command layer via one scheduler |
 
 ## Stack
@@ -229,6 +264,15 @@ wms-mobile/ `[ASSUMPTION: its own repo — register in docs/repo-catalog.yaml + 
 | GST & e-way (FR-26) | compliance module | AD-7 (retries never block dispatch), AD-15, AD-9 (constants as config) |
 | Dashboard & audit (FR-27, FR-28) | reporting module | AD-1 (KPIs are projections), AD-3, AD-16 |
 | Mobile scan client (FR-29, FR-30) | wms-mobile | AD-4, AD-14, AD-8, AD-9 |
+| Quantity model & catch weight (FR-31…34) | inventory module + all consumers | AD-9 (amended), AD-22 |
+| Product, variants, kits, shipment address (FR-35…39) | catalog + outbound modules | AD-19, AD-9 |
+| Storage conformance & segregation (FR-40…45) | putaway + inventory modules | AD-18, AD-10 |
+| Returns & reverse logistics (FR-46…48) | new returns module | AD-20, AD-11, AD-1 |
+| Traceability & shelf life (FR-49…51) | inventory module | AD-1, AD-11, AD-9 |
+| Containers & handling units (FR-52…54) | new assets module | AD-22, AD-3 |
+| Customs, excise, controlled goods (FR-55…66) | compliance module | AD-21, AD-16, AD-10 |
+| Manufacturing flows (FR-67…70) | new manufacturing module | AD-1, AD-9, AD-10 |
+| Bulk & tank storage (FR-71…74) | inventory + putaway modules | AD-9, AD-18, AD-1 |
 
 ## Deferred
 
@@ -237,6 +281,8 @@ wms-mobile/ `[ASSUMPTION: its own repo — register in docs/repo-catalog.yaml + 
 - **Carrier adapter set** (PRD OQ1): Shiprocket-aggregator-first vs direct Delhivery/Blue Dart/Ecom APIs — same `CarrierAdapter` port; commercial conversations settle it.
 - **Serial tracking v1 vs v1.5** (PRD OQ5): the ledger's batch/serial field is a discriminated union either way; deferring changes catalog surface, not architecture.
 - **Marketplace API approvals** (PRD OQ2): launch fallback is Shopify + manual (addendum §5); adapter architecture unchanged.
+- **True `numeric` quantities, and scales finer than milli** — considered at the AD-9 amendment (2026-09-17). `numeric` rejected because decimals cannot cross the Valkey/Lua reservation path safely; finer scales rejected because the 2^53 double ceiling is a fixed budget split between range and precision, and 3 dp buys ~9.0 x 10^12 base units of range. Revisit only for a UoM that genuinely needs more than 3 dp.
+- **Defence, classified and strategic-reserve depots** — personnel-clearance handling, classified segregation and a government procurement path. The foundations are reachable via AD-18 and AD-21; deliberately not planned (PRD §2.2) as a different product and sales motion.
 - **Multi-region, per-tenant DBs, CRDTs, 2PC, RFID edge, Kafka** — rejected for v1 (addendum §1.4); the rejection is safe because the capture edge produces a normalized, device-agnostic scan-event shape (RFID-tolerance preserved); 3PL multi-client billing (v2) stays reachable through AD-3 tenancy — no single-client assumptions anywhere.
 - **Mobile scanning internals** — camera library vs ML Kit, symbology config: feature-level decision under FR-30; spine fixes only the on-device-decision + ≤1.5 s budget + capture-agnostic scan-event shape.
 - **Count/short-pick mechanics detail** (FR-15/20/21): count snapshots pin bin `state_epoch` at task start; variance routing details are feature-level.
