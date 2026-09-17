@@ -3,7 +3,7 @@ name: WMS
 description: Multi-tenant warehouse management SaaS — web dashboard for managers (shadcn/ui on Next.js) and mobile scan client for floor operators (Expo/RN); this DESIGN.md is the shared token layer plus the web brand delta.
 status: final
 created: '2026-09-08'
-updated: '2026-09-08'
+updated: '2026-09-17'
 sources:
   - ../../prds/prd-WMS-Meta-2026-09-07/prd.md
   - ../../prds/prd-WMS-Meta-2026-09-07/addendum.md
@@ -120,6 +120,10 @@ Tighter than defaults — `{rounded.sm}` (4px) inputs and table cells, `{rounded
 - **Queue indicator** (mobile) — persistent header chip showing queued-op count while offline; amber only, never red — offline is a state, not an error (FR-14).
 - **Ledger timeline** — vertical event list from the inventory ledger; each row: event type, signed qty, actor, time, reference doc link (≤ 2 navigations, FR-28).
 - **Approval card** — pending adjustment/variance with reason code, ledger-history link, approve/reject + threshold context.
+- **Quantity field** — **dual mode, selected by the SKU's UoM.** Each-counted UoMs keep the gloves-friendly +/− stepper unchanged; measured UoMs render a large decimal keypad with an oversized decimal key and the unit beside the field. Values display at the UoM's **declared** precision, never its storage precision. An operator never meets a stepper that cannot reach the value. *(Multi-domain, 2026-09-17)*
+- **Status badge** — pill (`{rounded.full}`) carrying quarantine, excursion, customs, excise and controlled states. **Reuses `warning` amber plus a glyph and a word; no new hue.** Never colour-alone (WCAG 1.4.1), the scan-banner precedent. *(Multi-domain)*
+- **Variant matrix** — one product row expanding to its variant grid (the `DataTable` expanded-row slot). A size run is one row, never N unrelated SKU rows. *(Multi-domain)*
+- **Witness capture** (mobile) — second-identity badge scan inside one operator's session, used only by controlled-goods movements; shows both identities before commit. *(Multi-domain)*
 
 ## Do's and Don'ts
 
@@ -130,4 +134,8 @@ Tighter than defaults — `{rounded.sm}` (4px) inputs and table cells, `{rounded
 | Dense data tables — density is the feature | Card-per-row layouts for list data |
 | One loud element per mobile screen (the scan banner) | Animations, confetti, or haptics celebrating throughput |
 | ₹, dd/mm, IST consistently via shared formatters | Locale-by-screen inconsistency (₹ vs ₹, mm/dd vs dd/mm) |
+| Render quantities at the UoM's declared precision — `18.4 kg` | `18.400000 kg` — storage precision is never a display concern |
+| Align decimals on the decimal point in tables, with tabular numerals | Ragged decimals in a numeric column (the point must form a line) |
+| Show quantity and catch weight as two distinct fields | Asking an operator to "enter 18.4 pieces" |
+| Differentiate new statuses by glyph + word on existing amber | A new hue per domain (cold-chain blue, bonded purple, …) |
 | Inherit shadcn/platform defaults everywhere else | Restyle inherited components "to feel branded" |
