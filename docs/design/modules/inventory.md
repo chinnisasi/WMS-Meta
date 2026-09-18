@@ -27,6 +27,108 @@ Not owned but read for integrity or scope: `bins`, `skus`, `warehouses` (tenancy
 
 ---
 
+## Schema (field level)
+
+Every column of every owned table. `tenantTimestamps` expands to `created_at` / `updated_at`, both `timestamptz NOT NULL DEFAULT now()`. Every `id` is `uuid PRIMARY KEY`, stamped `uuidv7()` **in the app** — no `gen_random_uuid()` default. No FK constraints anywhere (repo convention): a uuid column plus an index, validated in the command transaction.
+
+**Quantities are milli-units** (base UoM × 10³) as `bigint` with Drizzle `mode: 'number'`, which maps through `Number(value)` — exact to 2⁵³, so ~9.0 × 10¹² base units. Raw SQL reads of these columns return **strings** from postgres.js and need `Number(...)` at the boundary.
+
+### `ledger_events` — the only stock truth
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `id` | uuid | NO | uuidv7 (app) | PK | |
+| `tenant_id` | uuid | NO | — | RLS | |
+| `warehouse_id` | uuid | NO | — | keyset idx | |
+| `seq` | integer | NO | — | `ledger_events_tenant_warehouse_seq_unique` | **Gap-free per warehouse**, allocated under the warehouse advisory lock |
+| `type` | text | NO | — | registry, not a CHECK | Grammar arm, e.g. `pick.picked`. Validated by `ledger-registry.ts` before write |
+| `schema_version` | integer | NO | — | — | The arm's `sinceVersion` (AD-11) |
+| `sku_id` | uuid | NO | — | — | Never null — `LedgerMovement` requires it even on zero-quantity events |
+| `quantity_delta` | bigint `mode:'number'` | NO | — | **no CHECK** | **Signed** milli-units; direction is the sign, never a convention. Zero is legal (pack, dispatch) |
+| `from_bin_id` | uuid | **YES** | — | — | Null on a pure receipt |
+| `to_bin_id` | uuid | **YES** | — | — | Null on a pure draw. Both null on a zero-quantity event |
+| `batch_ref` | text | **YES** | — | arm's `allowsBatchArm` | Set only where the arm permits it |
+| `serial_ref` | text | **YES** | — | arm's `allowsSerialArm` | One event per unit when set |
+| `actor_user_id` | uuid | NO | — | — | |
+| `occurred_at` | timestamptz | NO | — | — | **Business time** — the device's clock |
+| `recorded_at` | timestamptz | NO | — | — | **Commit time** — the server's. Deliberately distinct |
+| `reference_doc` | jsonb | NO | — | discriminated union | `kind` + arm-specific fields. **JSON-serialised into the hash**, so a BigInt here throws |
+| `prev_hash` | text | NO | — | — | Chain link |
+| `event_hash` | text | NO | — | — | Over the canonical form. **Migration 0026 rewrote `quantity_delta` without rehashing** — every pre-migration event fails `verifyChain` by design |
+
+**Indexes:** `ledger_events_tenant_warehouse_seq_unique` (tenant, warehouse, seq) · `(tenant_id, serial_ref, seq)` — the one-query serial history · keyset `(tenant_id, warehouse_id, created_at, id)`
+**RLS:** `ledger_events_tenant_isolation`
+**Triggers:** `ledger_append_only_guard` BEFORE UPDATE OR DELETE **and** a statement-level TRUNCATE guard (`0006:84-107`). A table rewrite by `ALTER COLUMN TYPE` fires neither — which is why 0026 could migrate it.
+
+### `stock_on_hand` — the primary projection
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `id` | uuid | NO | uuidv7 | PK | |
+| `tenant_id` · `warehouse_id` · `sku_id` · `bin_id` | uuid | NO | — | scope unique | The projection key |
+| `quantity` | bigint `mode:'number'` | NO | — | `stock_on_hand_quantity_nonnegative` | Milli-units. **Never negative** — the fold refuses the draw first |
+
+**Written by exactly one file** — `ledger.service.ts`, pinned as `PROJECTION_OWNER` in `architecture.spec.ts:37`. **RLS:** `stock_on_hand_tenant_isolation`
+
+### `batch_on_hand` — the batch arm
+
+Same shape as `stock_on_hand` plus `batch_id uuid NOT NULL`; the key is (tenant, warehouse, sku, bin, **batch**). Guard `batch_on_hand_quantity_nonnegative`. The fold rejects a batch over-draw **before** the plain arm, so the refusal names the batch.
+
+### `bin_state_epochs` — AD-14's staleness token
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `tenant_id` · `warehouse_id` · `bin_id` | uuid | NO | — | `bin_state_epochs_scope_unique` | |
+| `epoch` | bigint `mode:'number'` | NO | **`1`** | `bin_state_epochs_epoch_positive` | Opaque monotonic counter. **Starts at 1, never 0** — 0 on the wire is indistinguishable from "no epoch". Compare for **equality only**: never a quantity, timestamp or sequence |
+
+Bumped inside the folds, same transaction and same advisory lock as the movement.
+
+### `ledger_anchors`
+
+| Column | Type | Null | Guard | Meaning |
+|---|---|---|---|---|
+| `from_seq` · `to_seq` | integer | NO | `ledger_anchors_tenant_warehouse_to_seq_unique` | Committed chain head range; the unique index is the backstop against two overlapping anchors |
+| `digest` | text | NO | — | Chain digest over the range |
+| `anchored_at` | timestamptz | NO | — | |
+
+Same append-only trigger pair as `ledger_events`. **No HTTP route and no job** — facade-only, exercised today by tests.
+
+### `reservations` — the hold journal Valkey mirrors
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `tenant_id` · `warehouse_id` · `sku_id` | uuid | NO | — | — | **Scope is (tenant, warehouse, sku) — never bin-level** |
+| `owner_type` | text | NO | — | — | e.g. `order_line`, `picklist_line` |
+| `owner_id` | text | NO | — | — | text, not uuid |
+| `quantity` | bigint `mode:'number'` | NO | — | `reservations_quantity_positive` | Milli-units |
+| `state` | text | NO | `'held'` | `reservations_state_check` | `held \| committed \| released \| expired`. **A typo'd state would silently drop the row out of every `state = 'held'` consumer** and corrupt the mirror |
+| `expires_at` | timestamptz | NO | — | — | TTL; the reaper sweeps `held` only |
+
+**`reservations_open_owner_scope_unique` is PARTIAL on `state = 'held'`** — one open hold per owner scope, and the reason a `committed` owner read cannot use it.
+
+### `reconciliation_checkpoints`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `last_seq` | integer | NO | `0` | `..._last_seq_nonnegative` | Watermark the partition has replayed through |
+| `invalid_attempts` | integer | NO | `0` | — | Repeat counter driving quarantine |
+| `last_divergences` | jsonb | **YES** | — | — | The repeat memory. `parseLastDivergences` must tolerate a malformed entry |
+
+One row per (tenant, warehouse) partition, unique.
+
+### `inventory_quarantines`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `sku_id` · `bin_id` | uuid | NO | — | partial unique on OPEN | The quarantined scope |
+| `from_seq` · `to_seq` | integer | NO | — | `from_seq <= to_seq` | The divergent range |
+| `reason` | text | NO | — | — | |
+| `status` | text | NO | `'open'` | `inventory_quarantines_status_check` | `open \| resolved`. **One OPEN row per scope** (partial unique) |
+
+**Consumed by ATP:** an open quarantine excludes that (sku, bin) from sellable on-hand.
+
+---
+
 ## Public seam
 
 `InventoryFacade` (`src/modules/inventory/inventory.facade.ts`) is the **only** thing a sibling may import — `test/architecture.spec.ts:165` fails any import of `modules/inventory/...` or `../inventory/...` that is not `inventory.facade`, `inventory.module` or `inventory.dto`, in both import-path forms. Types that cross the seam (`LedgerMovement`, `AppendedMovement`, `LedgerReferenceDoc`, `AtpSnapshot`, `GrantReservationCommand`, `ReservationSnapshot`) are **re-exported from the facade** (`inventory.facade.ts:27-36`) precisely so nobody reaches into `ledger.service` or `ledger-registry` for a type.

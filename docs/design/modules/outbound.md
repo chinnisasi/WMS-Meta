@@ -24,6 +24,90 @@ Seven tables, module-exclusive (AD-6, enforced by `test/architecture.spec.ts`). 
 
 ---
 
+---
+
+## Schema (field level)
+
+Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT NULL DEFAULT now()`. Every `id` is `uuid PRIMARY KEY` stamped `uuidv7()` in the app. No FKs — uuid column plus index, validated in the command transaction. **Quantities are milli-units** as `bigint mode:'number'`; a raw-SQL read returns a **string** and needs `Number(...)`.
+
+### `orders`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `status` | text | NO | `'accepted'` | `orders_status_check` | `accepted \| cancelled \| ready_to_dispatch \| dispatched`. **Widened twice** (0023, 0024) by DROP-then-ADD. Every guard reading it is an **allow-list** — the 4.5 review found a deny-list that would have corrupted data |
+| `source` | text | NO | `'manual'` | — | `manual \| channel` |
+| `integration_id` | uuid | **YES** | — | — | Null on a manual order. **Unvalidated** — no integrations table until Epic 7 |
+| `external_event_id` | text | **YES** | — | partial unique | Channel dedup (AD-5) |
+| `source_payload_hash` | text | **YES** | — | — | Ingested payload fingerprint. **Convention changed in 10.2** — base units now, so no pre-10.2 payload matches |
+
+**`orders_source_event_unique`** is PARTIAL on `(tenant, integration_id, external_event_id) WHERE integration_id IS NOT NULL AND external_event_id IS NOT NULL` — manual orders never participate.
+**No address columns.** This is why story 4-6d (rate shopping) is blocked, not merely queued.
+
+### `order_lines`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `qty` | bigint | NO | — | `order_lines_qty_positive` | Ordered, milli-units |
+| `reserved_qty` | bigint | NO | `0` | `..._reserved_qty_nonnegative` **and** `order_lines_reserved_qty_lte_qty` (`reserved_qty <= qty`) | What acceptance actually held. **Shortfall is derived (`qty − reserved_qty`), never stored** |
+| `reservation_id` | uuid | **YES** | — | — | Null on a fully-backordered line — an unavailable line gets no hold |
+| `status` | text | NO | `'open'` | CHECK | `open` when fully reserved, `backordered` when short |
+
+**The live reservation state is read through the inventory facade, never copied here.**
+
+### `wave_policies`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `grouping` | text | NO | `'single'` | CHECK | `single \| batch` |
+| `priority` | integer | NO | `0` | — | **Not a quantity** — unscaled |
+| `max_orders` | integer | **YES** | — | — | Null = uncapped |
+| `cutoff_local_time` | text | **YES** | — | — | Local wall-clock, India-only by design |
+| `carrier_ref` | uuid | **YES** | — | **none** | **Deliberately unvalidated** — story 4-6b added a carriers table but chose not to retro-validate this |
+
+### `waves`
+
+`status` text NOT NULL default `'planned'`, CHECK `planned \| released \| cancelled`. `released_at` / `cancelled_at` timestamptz nullable — stamped on transition.
+
+### `picklists`
+
+`order_id` is **nullable** — null on a batch picklist spanning orders. `status` default `'planned'`, CHECK `planned \| ready \| cancelled`.
+
+### `picklist_lines` — the richest table here
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `bin_id` · `bin_code` | uuid / text | **YES** | — | — | **Null means an unfulfillable shortfall, not a stop.** A surface must not render it as a walk step |
+| `batch_id` | uuid | **YES** | — | — | A **suggestion**; the pick re-derives FEFO |
+| `reservation_id` | uuid | **YES** | — | — | |
+| `qty` | bigint | NO | — | `picklist_lines_qty_nonnegative` | Planned, milli-units |
+| `shortfall_qty` | bigint | NO | `0` | `..._shortfall_qty_nonnegative` | |
+| `reason_code` | text | **YES** | — | `picklist_lines_reason_code_check` | Short-pick reason, closed set |
+| `slice_seq` · `walk_seq` | integer | NO | — | — | **Not quantities** — unscaled. `walk_seq` is the walk order; render by it |
+| `status` | text | NO | `'planned'` | CHECK | `planned \| picked \| short \| cancelled` |
+
+**Two compound CHECKs (0022) — the ones a careless change breaks:**
+- `picklist_lines_short_pairing` — `status = 'short'` and `reason_code` must be set together
+- `picklist_lines_slice_shape` — the slice/shortfall/bin arms must agree
+
+**`picklist_lines` carries the one-open-wave-per-order invariant** via a partial unique index.
+
+### `picks`
+
+| Column | Type | Null | Default | Meaning |
+|---|---|---|---|---|
+| `bin_id` | uuid | NO | — | **What the operator actually scanned** |
+| `suggested_bin_id` | uuid | **YES** | — | What the plan named. **Report actual-vs-suggested, never the plan alone** |
+| `batch_id` / `suggested_batch_id` | uuid | **YES** | — | Same distinction; `batch_id` is server-re-derived FEFO |
+| `reservation_committed` | boolean | NO | `false` | **False on all but the last picked slice** of a multi-bin line |
+| `conflict_class` | text | NO | `'none'` | AD-14 taxonomy arm |
+| `qty` | bigint | NO | — | `picks_qty_positive`, milli-units |
+| `picked_at` | timestamptz | NO | — | **Device time**, not server time |
+| `device_id` | uuid | NO | — | The badge-in session's device |
+
+**`picks_line_unique`** on `(tenant, picklist_line_id)` — the DB backstop against a second draw on one line.
+
+---
+
 ## Public seam
 
 `OutboundFacade` (`src/modules/outbound/outbound.facade.ts`) is the only thing a sibling or the api shell may import. Everything is `(command, idempotencyKey)` for writes and `(tenantId, …)` for reads.

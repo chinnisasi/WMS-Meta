@@ -50,6 +50,28 @@ The implementation agent is dispatched with the spec as its sole source of truth
 
 **Keep them current.** When a review finds a defect whose cause is a pattern nobody wrote down, the fix lands in `IMPLEMENTATION-GUIDE.md` as well as in the code.
 
+## Story workflow — design first, reviewed, committed, then code
+
+Every story produces its design **before** any implementation, and that design is reviewed and committed on its own. Coding against a reviewed design is the point; it is also what stops the same class of defect recurring.
+
+**The order is fixed:**
+
+1. **Design** — the story's architecture (what changes in the spine, if anything), its high-level design (the flows it adds or alters, and which modules they cross), and its low-level design (exact tables and columns, exact commands and their guard order, exact error arms). This is written into the spec: `## Code Map`, `## Tasks & Acceptance`, and a `## Design Notes` section carrying the reasoning.
+2. **Review the design** — run the review layers over the **design**, not the diff. A design review costs one pass; the same finding caught after implementation costs a pass plus a patch round plus a re-verify. Findings are triaged into the spec exactly as code-review findings are.
+3. **Commit the design** — the spec, with its triage log, lands before implementation begins. It is the contract the implementer is held to, and having it in history means a later argument about intent has an answer.
+4. **Then code**, against the reviewed design. The implementation agent receives the spec and the `context:` docs, and nothing else.
+5. **Review the code**, as now.
+
+**Why this order.** Stories 10-1 and 10-2 drew 30 and 24 review findings. Most were not implementation slips — they were design questions answered badly or not at all: a fingerprint convention that changed as a side effect, a canonical list that silently narrowed, a migration whose data statements nothing executed. Every one of those was visible in the design and would have been cheaper to fix there.
+
+**What a design review looks for**, which differs from what a code review looks for:
+- A decision taken implicitly that should have been taken explicitly
+- A list, vocabulary or rule being **replaced** — does the new one cover everything the old one did?
+- A convention changing as a *side effect* of something else (hash inputs, ordering, defaults)
+- Load-bearing claims asserted but not verified — **check them against the code, do not trust the spec**
+- A migration or data change with no stated way to prove it worked
+- Anything the spec says is "obvious" or "trivial"
+
 ## Cross-repo ordering rules
 
 - **Backend first.** For a story that spans both repos, land additive backend changes (new endpoints, fields) before the frontend changes that consume them.
