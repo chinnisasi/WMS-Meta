@@ -29,6 +29,9 @@ Never `git add -f` anything under `workspace/**` into this meta repo — a `hook
 | --- | --- |
 | `docs/design/SYSTEM-DESIGN.md` | High level: the three repos, the ledger-as-truth idea, request lifecycle, module map, the inventory core, offline, outbox, background jobs |
 | `docs/design/IMPLEMENTATION-GUIDE.md` | Low level: the command skeleton and why its order is load-bearing, the four type boundaries, the migration checklist, vocabulary pattern, test conventions, error shape |
+| `docs/design/modules/<module>.md` | Per module: what it owns, its public seam, every command and its guards, key algorithms, invariants, events, and the gotchas that caused real defects |
+| `docs/design/API-SURFACE.md` | Every route, grouped by owning module, with its capability and its error arms |
+| `docs/design/PENDING.md` | Everything known-but-not-done, grouped by module — 65 deferred items and 33 open retro actions |
 | `docs/repos/<repo>/README.md` | The interface contract — what each repo exposes and consumes |
 
 **Every story spec MUST list the design docs in its `context:` frontmatter**, alongside the epic context:
@@ -38,7 +41,10 @@ context:
   - '_bmad-output/implementation-artifacts/epic-<N>-context.md'
   - 'docs/design/SYSTEM-DESIGN.md'
   - 'docs/design/IMPLEMENTATION-GUIDE.md'
+  - 'docs/design/modules/<the module the story changes>.md'
 ```
+
+**Before speccing, read the module's section in `docs/design/PENDING.md`.** Several entries are already-diagnosed defects with the fix identified; folding one into related work is cheaper than scheduling it separately.
 
 The implementation agent is dispatched with the spec as its sole source of truth and loads exactly what `context:` names. Omitting these means it re-derives the command skeleton, the migration checklist and the type boundaries from scratch — which is slow, varies per story, and is where the recurring review findings come from.
 
