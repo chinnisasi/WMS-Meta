@@ -79,6 +79,52 @@ HTTP lives in the api shell (`src/api/carriers.controller.ts`), not here. `rotat
 
 ---
 
+## Flows
+
+### Connecting a carrier — the credential never comes back out
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant C as carriers
+  participant V as envelope crypto
+  participant PG as Postgres
+
+  Ops->>C: GET /carriers
+  C-->>Ops: registry: code, display name, REQUIRED credential fields
+  Ops->>C: POST /carriers/connections {secrets}  (carrier.manage)
+  C->>C: validate against the adapter's required fields
+  C->>V: seal under CARRIER_ENCRYPTION_KEY
+  C->>PG: store sealed blob
+  alt already connected
+    C-->>Ops: 409 carrier-already-connected
+  end
+
+  Ops->>C: GET /carriers/connections
+  C-->>Ops: PUBLIC FACE ONLY — never the secret, never the blob
+
+  Ops->>C: POST /connections/{id}/rotate
+  Note over C: replaces material IN PLACE —<br/>the row id stays the stable handle,<br/>so references survive rotation
+  Ops->>C: POST /connections/{id}/disconnect
+  Note over PG: HARD DELETE. The audit row survives.
+```
+
+### The read with no caller
+
+```mermaid
+flowchart LR
+  A[openCredentialForAdapterUse] -->|the module's ONLY<br/>envelope-opening read| B[(sealed blob)]
+  A -.->|no caller| C["❌ no test"]
+  C --> D["Delete its tenantId predicate and<br/>ANY tenant opens ANY other tenant's<br/>credential — full suite still GREEN"]
+```
+
+Story 4-6c brings the first caller. **Pin the tenant predicate before it lands**, not after.
+
+**Rotating `CARRIER_ENCRYPTION_KEY` is unsupported today** — every stored blob becomes unopenable and idempotent replay breaks with it. The fix is a key id inside the blob plus a re-seal path; neither exists.
+
+---
+
 ## Commands
 
 All three are in `CarrierCommandService` (`carrier.command.ts:180`) and all three gate on `carrier.manage` (Owner + Ops Manager; absent from `operator` and `accountant` — an API key is not a floor verb). The **reads are deliberately ungated**: the catalogue and the connection list are open to any tenant member because reads are never gated in this codebase, and those rows carry the public face only, so there is nothing for a gate to protect (`tenancy/permissions.ts:77-86`).

@@ -176,6 +176,90 @@ In-transaction reads for composing callers: `stockByBinsInTx` :706, `batchOnHand
 
 ---
 
+## Flows
+
+### Adjustment — the only path that opens the ledger from outside a domain flow
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant Ctl as inventory.controller
+  participant Cmd as StockAdjustmentCommand
+  participant PG as Postgres — tenant tx
+  participant OB as outbox_messages
+
+  C->>Ctl: POST /inventory/adjustments + Idempotency-Key
+  Note over Ctl: thin: DTO + header only
+  Ctl->>Cmd: adjust(command, key)
+  Note over Cmd: SHAPE checks — occurredAt UTC,<br/>non-zero delta, serial count vs delta.<br/>Base units. ABOVE the tx.
+  Cmd->>Cmd: payloadHash over BASE units + raw arms
+  Cmd->>PG: BEGIN (tenant scope set)
+  Cmd->>PG: getMemberRoleIn → assertPermission('stock.adjust')
+  Note over Cmd,PG: authority BEFORE replay — a demoted<br/>actor gets 403, never the snapshot
+  Cmd->>PG: idempotency lookup
+  alt same key + same hash
+    PG-->>C: 201 stored snapshot (nothing below runs)
+  else same key + different hash
+    PG-->>C: 422 idempotency-key-reuse
+  end
+  Cmd->>PG: warehouse∈tenant, bin∈warehouse, sku∈tenant → 404
+  Note over Cmd: bin refusals: retired → 400,<br/>QC-hold bin → 400 qc-bin-not-adjustable
+  Cmd->>Cmd: precision refusal, then base→milli
+  Note over Cmd: everything below this line is milli-units
+  Cmd->>PG: appendMovement → ledger_events + stock_on_hand<br/>+ batch_on_hand + bin_state_epochs
+  Cmd->>OB: stock.adjusted (quantityDelta in BASE units)
+  Cmd->>PG: audit_events
+  Cmd->>PG: idempotency_keys ← LAST, the commit marker
+  PG-->>Cmd: COMMIT
+  Cmd-->>C: 201 snapshot
+```
+
+The serial arm (`adjustToSnapshot`) locks the whole serial set first, then appends N events of `QUANTITY_SCALE` each; the snapshot reports the **last** event with the bin's final on-hand — which is the mismatch recorded in `PENDING.md`.
+
+### The ATP decision — deliberately split, and fail-closed
+
+```mermaid
+sequenceDiagram
+  participant Cmd as A granting command
+  participant V as Valkey — counter mirror
+  participant PG as Postgres — the journal
+
+  Cmd->>V: EVAL grant.lua (atomic check-and-decrement)
+  alt counter missing
+    V-->>Cmd: refuse
+    Note over Cmd: FAIL CLOSED — never grant blind
+  else granted
+    V-->>Cmd: ok
+    Cmd->>PG: journal the reservation (held)
+    Note over Cmd,PG: journal is truth; the counter is a cache
+  end
+  Note over V,PG: post-commit mirrors NEVER throw —<br/>a decrement outliving a rollback reads as<br/>ATP the journal still holds. The reaper's<br/>parity pass self-heals; a 500 does not.
+```
+
+### Reconciliation — the correctness oracle
+
+```mermaid
+sequenceDiagram
+  participant J as Reconcile job
+  participant PG as Postgres
+  participant OB as outbox
+
+  loop per tenant partition, sheddable under load
+    J->>PG: replay ledger_events from checkpoint
+    J->>PG: compare against stock_on_hand / batch_on_hand
+    alt divergence
+      J->>OB: reconciliation.divergence (scopes, projected vs replayed,<br/>seq range, repeat flag)
+      J->>PG: quarantine the scope
+    else clean
+      J->>PG: advance checkpoint
+    end
+  end
+```
+
+This is what makes the projections a cache rather than a second source of truth, and it is the acceptance oracle every quantity-shaped migration is judged against. **Nothing schedules `verifyChain` today**, and every pre-migration event reports severity-1 by design since 0026 rewrote `quantity_delta` without rehashing.
+
+---
+
 ## Commands
 
 ### `StockAdjustmentCommand.adjust` (`inventory.command.ts:213`)

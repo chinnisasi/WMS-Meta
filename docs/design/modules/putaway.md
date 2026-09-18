@@ -90,6 +90,39 @@ This is a deliberate seam: the capacity gate and its rejection wording exist onc
 
 ---
 
+## Flows
+
+### Directed putaway — suggestion versus actual
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Op as Operator — device
+  participant Pt as putaway
+  participant T as tenancy — bins
+  participant Inv as inventory
+
+  Op->>Pt: GET /putaway/tasks
+  Pt->>Inv: receiving-bin on-hand → the remaining work
+  Pt->>Pt: binCandidatesInTx → rank by occupancy
+  Note over Pt: occupancy is a ::bigint sum —<br/>Number(row.occupancy) at the mapper.<br/>Miss that cast and you compare a STRING.
+  Pt-->>Op: task + suggested bin
+  Note over Op: the operator may place ELSEWHERE;<br/>the system records both
+  Op->>Pt: recordPlacement(actualBin, qty)
+  Pt->>T: bin ∈ warehouse, not retired, not blocked
+  alt bin full / blocked
+    Pt-->>Op: 400 — key CONSUMED
+  else stock moved underneath
+    Pt-->>Op: 422 insufficient-on-hand — retryable, key UNCONSUMED
+  end
+  Pt->>Inv: putaway.placed — TWO-ARM relocation<br/>(fromBin = receiving, toBin = actual)
+  Note over Pt: suggestion vs actual is the data that<br/>makes the directed algorithm improvable
+```
+
+The 400-vs-422 split is the whole contract with the offline queue: a 400 is the device's fault and must not be retried; a 422 is the world having moved and must be.
+
+---
+
 ## Commands
 
 Both commands follow the repo's invariant order inside `withTenantTransaction`: **authority → idempotency replay → validation → master-data asserts → movement(s) → own-table write → in-tx outbox → audit → idempotency-key snapshot.** Replay semantics are the repo-wide ones (same hash → stored snapshot; different hash → 422 `idempotency-key-reuse`; concurrent key insert → 409 `conflict`).

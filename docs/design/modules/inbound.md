@@ -132,6 +132,56 @@ Three exported facades (`inbound.module.ts:55`). Nothing outside imports a comma
 
 ---
 
+## Flows
+
+### Receiving — PO to putaway task
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  actor Op as Operator — device
+  participant Ib as inbound
+  participant Cat as catalog
+  participant Inv as inventory
+  participant Pt as putaway
+
+  Ops->>Ib: createPurchaseOrder (vendor, lines)
+  Note over Ib: status = expected
+  Op->>Ib: GET catalog-snapshot
+  Note over Ib,Cat: composed at the API SHELL across<br/>inbound + outbound — NOT by importing<br/>a sibling module (tried, reverted, flaked)
+  Op->>Ib: recordGoodsReceipt (scans; ≤4 scans + 1 confirm budget)
+  Ib->>Inv: appendLedgerEventInTx → grn.received (into the RECEIVING bin)
+  Note over Ib: partial · blind · over-receipt all one flow
+  alt over the line ceiling
+    Ib->>Ib: over_receipts row → review queue
+    Ops->>Ib: approve → bumps the PO line ceiling
+    Note over Ib: does NOT re-validate PO/line status —<br/>a close-then-approve bumps a CLOSED line
+  end
+  Ib-->>Pt: stock now sits in the receiving bin = a putaway task
+  Note over Pt: tasks are DERIVED from receiving-bin<br/>on-hand, not a queue table
+```
+
+### QC hold — quarantine without moving the ledger's mind
+
+```mermaid
+sequenceDiagram
+  participant Ops
+  participant Ib as inbound
+  participant Inv as inventory
+
+  Ops->>Ib: createQcHold(sku, bin scope)
+  Ib->>Inv: qc.held → units move to the system QC-HOLD bin
+  Note over Inv: EXCLUDED from ATP while held
+  Ops->>Ib: release
+  Ib->>Inv: qc.released → back to the origin bin
+  Note over Ib: releaseHold lacks .for('update') on the<br/>origin read, and release-into-a-BLOCKED-bin<br/>is unpinned. Both tracked.
+```
+
+An adjustment through the QC bin is refused (`400 qc-bin-not-adjustable`) — it would drop ATP with no hold row and no release path.
+
+---
+
 ## Commands
 
 Every command follows the same invariant order inside `withTenantTransaction`:

@@ -84,6 +84,56 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 
 ---
 
+## Flows
+
+### CSV import — the only creator of SKUs
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant Ctl as catalog.controller
+  participant Cmd as import.command
+  participant PG as Postgres
+
+  Ops->>Ctl: POST /catalog/imports (multipart)
+  Ctl->>Cmd: run(file)
+  Cmd->>Cmd: PARSE the file  (import.command.ts:152-155)
+  Cmd->>Cmd: assertPermission('catalog.import')  (:170)
+  Note over Cmd: ⚠ INVERTED — parse precedes authority.<br/>An unauthorised caller drives a 5 MB parse<br/>and learns parse outcomes. Verified; tracked.
+  loop each row
+    alt valid
+      Cmd->>PG: insert sku
+    else
+      Cmd->>Cmd: collect row failure
+    end
+  end
+  Cmd-->>Ops: 201 — carrying PER-ROW failures
+  Note over Cmd: PARTIAL COMMIT IS THE DESIGN.<br/>Row codes: validation-failed,<br/>duplicate-sku-code, duplicate-barcode
+  Ops->>Ctl: POST again with mode=fix
+  Note over Cmd: reprocesses ONLY the prior run's failures
+```
+
+There is no `POST /skus`. `code` and `uom` are immutable once written — a SKU's UoM is baked into every milli-unit quantity already stored against it, so changing it would silently reinterpret history.
+
+### The UoM vocabulary and its precision
+
+```mermaid
+flowchart TD
+  A["UOMS as const tuple<br/>(TypeScript)"] --> B["DB CHECK constraint"]
+  A --> C["@IsIn + @ApiProperty enum"]
+  A --> D["e2e pin"]
+  A --> E["uomPrecision per unit"]
+  E --> F["base→milli conversion<br/>inside the command"]
+  E --> G["device catalog snapshot"]
+  G -.->|"NOT declared in mobile CatalogSku"| H["❌ unconsumed"]
+  E -.->|"absent from SkuResponse"| I["❌ web cannot format"]
+```
+
+**Replacing this vocabulary must be a superset operation, asserted at module load.** 10.2 replaced a 57-entry allowlist with a 24-entry one and silently made eleven units unrepresentable; any stored row using one would have aborted the migration. `uom_conversions.factor` remains an integer nothing applies — it is stored, echoed, and never used in arithmetic, so fractional conversions (kg↔lb) wait for the story that first applies one.
+
+---
+
 ## Commands
 
 ### `ImportCommand.execute` (`import.command.ts:151`)

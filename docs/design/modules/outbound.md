@@ -168,6 +168,77 @@ Sub-machines this module also owns: **wave** `planned → released`, `planned|re
 
 ---
 
+## Flows
+
+### The order's whole life
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor CS as Ops / channel
+  participant O as outbound
+  participant I as inventory — facade
+  participant D as Device — offline
+  participant OB as outbox
+
+  CS->>O: createOrder (lines)
+  O->>I: grant per line — reserve held
+  Note over O,I: over-ATP is ACCEPTED and backordered,<br/>never refused. Grants land BEFORE the write tx opens.
+  O->>OB: order.created
+  Note over O: status = accepted
+
+  CS->>O: createWave (or sweep eligible, oldest-first)
+  Note over O: selects status='accepted' ONLY
+  O->>O: picklists in walk order
+  CS->>O: releaseWave
+  Note over O: cutoff passed → 409, wave STAYS planned
+
+  D->>O: recordPick (scan-verified, device session)
+  O->>I: appendLedgerEventInTx → pick.picked (pure draw, toBinId null)
+  alt bin short
+    O-->>D: 409 pick-bin-short → RE-PLANNABLE
+    Note over O: bounded by MAX_REPLAN_ATTEMPTS<br/>with a 5-min cooldown so the bound is a<br/>duration, not a tap count
+  else terminal
+    O-->>D: 409 pick-unresolvable → quarantine
+  else stock gone
+    O-->>D: 422 insufficient-on-hand → retryable, key UNCONSUMED
+  end
+
+  CS->>O: packOrder (scan must match what was picked)
+  O->>I: pack.packed — ZERO quantity, both bins null, folds nothing
+  Note over O: status = ready_to_dispatch
+  O->>OB: order.packed
+
+  CS->>O: dispatchOrder
+  O->>I: retire committed holds ← the transition that CORRECTS ATP
+  O->>I: dispatch.dispatched — zero quantity
+  O->>OB: order.dispatched
+  Note over O: status = dispatched ▣
+```
+
+**The reservation lifecycle is the spine of this diagram.** `held` at accept, `committed` at pick, `released` at dispatch or cancel. The known leak: a **packed-but-abandoned order understates ATP indefinitely** — `expireDue` sweeps `held` only, cancel refuses a packed order, and dispatch is the sole `committed → released` writer. There is no path out.
+
+### Why post-commit work never throws
+
+```mermaid
+sequenceDiagram
+  participant Dc as dispatch.command
+  participant PG as Postgres
+  participant I as inventory mirrors
+
+  Dc->>PG: COMMIT (status, ledger, outbox, audit, key)
+  Note over Dc: "NOTHING HERE MAY THROW"
+  loop each restore scope
+    Dc->>I: restoreReservedUnits
+    alt fails
+      Dc->>Dc: logger.error — never rethrow
+      Note over Dc: a 500 here would report failure for<br/>work that COMMITTED, and the replay would<br/>then serve the snapshot without retrying.<br/>The reaper's parity pass self-heals.
+    end
+  end
+```
+
+---
+
 ## Commands
 
 Every command follows the standard skeleton (authority → replay → validate → lock → guard → write → outbox → audit → idempotency key last). Only the outbound-specific parts are below.

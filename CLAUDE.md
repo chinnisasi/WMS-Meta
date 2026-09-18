@@ -27,9 +27,11 @@ Never `git add -f` anything under `workspace/**` into this meta repo — a `hook
 
 | Doc | Holds |
 | --- | --- |
-| `docs/design/SYSTEM-DESIGN.md` | High level: the three repos, the ledger-as-truth idea, request lifecycle, module map, the inventory core, offline, outbox, background jobs |
-| `docs/design/IMPLEMENTATION-GUIDE.md` | Low level: the command skeleton and why its order is load-bearing, the four type boundaries, the migration checklist, vocabulary pattern, test conventions, error shape |
-| `docs/design/modules/<module>.md` | Per module: what it owns, its public seam, every command and its guards, key algorithms, invariants, events, and the gotchas that caused real defects |
+| `docs/design/SYSTEM-DESIGN.md` | **Backend** high level: the three repos, the ledger-as-truth idea, request lifecycle, module map, the inventory core, offline, outbox, background jobs |
+| `docs/design/IMPLEMENTATION-GUIDE.md` | **Backend** low level: the command skeleton and why its order is load-bearing, the **five** type boundaries, the migration checklist, the cross-cutting rules, test conventions, error shape |
+| `docs/design/modules/<module>.md` | Per module: what it owns, its public seam, **its flows as sequence diagrams**, every command and its guards, key algorithms, invariants, events, and the gotchas that caused real defects |
+| `docs/design/frontend/` | **wms-fe** HLD + LLD: the route map and which surfaces are still placeholders, the data layer, session and the capability mirror, the loader skeleton, error contract |
+| `docs/design/mobile/` | **wms-mobile** HLD + LLD: the zero-scan-loss constraint, the offline engine and its WAL, envelope crypto, the replay fate table, the scan path and the four-state banner |
 | `docs/design/API-SURFACE.md` | Every route, grouped by owning module, with its capability and its error arms |
 | `docs/design/PENDING.md` | Everything known-but-not-done, grouped by module — 65 deferred items and 33 open retro actions |
 | `docs/repos/<repo>/README.md` | The interface contract — what each repo exposes and consumes |
@@ -42,6 +44,7 @@ context:
   - 'docs/design/SYSTEM-DESIGN.md'
   - 'docs/design/IMPLEMENTATION-GUIDE.md'
   - 'docs/design/modules/<the module the story changes>.md'
+  - 'docs/design/frontend/…' or 'docs/design/mobile/…' when the story touches that client
 ```
 
 **Before speccing, read the module's section in `docs/design/PENDING.md`.** Several entries are already-diagnosed defects with the fix identified; folding one into related work is cheaper than scheduling it separately.

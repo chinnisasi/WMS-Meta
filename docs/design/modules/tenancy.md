@@ -106,6 +106,58 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 
 ---
 
+## Flows
+
+### Device onboarding — three credentials, three lifetimes
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Mgr as Ops Manager
+  actor Op as Operator
+  participant D as Device
+  participant T as tenancy
+
+  Mgr->>T: POST /devices/enrollment-codes  (device.manage)
+  T-->>Mgr: one-time code (HASHED at rest)
+  Mgr-->>Op: hands over the code
+
+  D->>T: POST /devices/enroll  {code}
+  Note over T: NO @UseGuards on this route —<br/>devices.controller.ts:96. The CODE in the<br/>body is the entire credential.
+  T-->>D: device credential + sealed offline-store key (ONCE, never re-served)
+
+  Op->>D: badge + PIN
+  D->>T: POST /devices/badge-in  (device credential)
+  T-->>D: operator session (30-day floor credential)
+  Note over T: no PIN attempt lockout,<br/>no role gate on binding — tracked
+
+  loop each floor op
+    D->>T: op carries the BADGE-IN session
+    Note over T: replay re-authorises against the session<br/>that CREATED the op — a shared device never<br/>launders authority across badge-ins
+  end
+
+  Mgr->>T: POST /devices/{id}/revoke
+  Note over T: status flip + wipe flag. On endpoints that<br/>never re-resolve the device row, revocation<br/>DOES NOT BITE — see below.
+```
+
+### The one-way claim-shape hole
+
+```mermaid
+flowchart LR
+  A["badge-in device token<br/>sub, tenant_id, exp, device_id"] -->|HS256, same JWT_SECRET| B{"verifyTenantSession<br/>jwt-session.ts:64"}
+  B -->|checks sub, tenant_id, exp only<br/>never rejects device_id| C[✓ TenantSessionGuard PASSES]
+  D[web user token] --> E{device guard}
+  E -->|requires device_id| F[✗ correctly refused]
+```
+
+The docstring asserts the two families are "mutually exclusive by claim shape". **That holds one direction only.** A 30-day floor credential opens the web surface for its own tenant. Not cross-tenant and not privilege escalation — `sub` is the operator, so capabilities are the operator's — but revocation stops biting wherever the device row is not re-resolved. Verified; tracked.
+
+### Bin administration
+
+`merge` moves stock (emitting `bin.merged`, a two-arm relocation) and `retire` is **terminal and requires empty**. Both live in `bin.command.ts`, not putaway — putaway *directs* placement, tenancy *owns* the bin. `bins` is the one table deliberately shared by column: tenancy owns structure and `retired_at`, putaway owns `blocked`. It has **no architecture-test block**, which makes the shared-ownership case the least-guarded one in the repo.
+
+---
+
 ## Commands
 
 Every command follows the skeleton in the implementation guide. Only the deviations and the module-specific guards are listed here.
