@@ -58,7 +58,7 @@ Every column of every owned table. `tenantTimestamps` expands to `created_at` / 
 
 **Indexes:** `ledger_events_tenant_warehouse_seq_unique` (tenant, warehouse, seq) · `(tenant_id, serial_ref, seq)` — the one-query serial history · keyset `(tenant_id, warehouse_id, created_at, id)`
 **RLS:** `ledger_events_tenant_isolation`
-**Triggers:** `ledger_append_only_guard` BEFORE UPDATE OR DELETE **and** a statement-level TRUNCATE guard (`0006:84-107`). A table rewrite by `ALTER COLUMN TYPE` fires neither — which is why 0026 could migrate it.
+**Triggers:** `ledger_append_only_guard` is the *function* (`0006:84`); the triggers are `ledger_events_append_only` (`:90`), `ledger_anchors_append_only` (`:94`) and their statement-level TRUNCATE twins `ledger_events_append_only_truncate` (`:101`) / `ledger_anchors_append_only_truncate` (`:105`). A table rewrite by `ALTER COLUMN TYPE` fires neither — which is why 0026 could migrate it.
 
 ### `stock_on_hand` — the primary projection
 
@@ -98,7 +98,7 @@ Same append-only trigger pair as `ledger_events`. **No HTTP route and no job** �
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
 | `tenant_id` · `warehouse_id` · `sku_id` | uuid | NO | — | — | **Scope is (tenant, warehouse, sku) — never bin-level** |
-| `owner_type` | text | NO | — | — | e.g. `order_line`, `picklist_line` |
+| `owner_type` | text | NO | — | — | **Only `order` is ever written** (`ORDER_OWNER_TYPE`, `order.command.ts:74`, written at `:767`). Picking carries the *order's* hold forward rather than minting a line-scoped one |
 | `owner_id` | text | NO | — | — | text, not uuid |
 | `quantity` | bigint `mode:'number'` | NO | — | `reservations_quantity_positive` | Milli-units |
 | `state` | text | NO | `'held'` | `reservations_state_check` | `held \| committed \| released \| expired`. **A typo'd state would silently drop the row out of every `state = 'held'` consumer** and corrupt the mirror |
@@ -120,7 +120,7 @@ One row per (tenant, warehouse) partition, unique.
 
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
-| `sku_id` · `bin_id` | uuid | NO | — | partial unique on OPEN | The quarantined scope |
+| `warehouse_id` · `sku_id` · `bin_id` | uuid | NO | — | partial unique on OPEN — `(tenant_id, warehouse_id, sku_id, bin_id) WHERE status = 'open'` (`0008:26`) | The quarantined scope |
 | `from_seq` · `to_seq` | integer | NO | — | `from_seq <= to_seq` | The divergent range |
 | `reason` | text | NO | — | — | |
 | `status` | text | NO | `'open'` | `inventory_quarantines_status_check` | `open \| resolved`. **One OPEN row per scope** (partial unique) |

@@ -40,7 +40,7 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 | `barcode` | text | NO | — | `unique (tenant, barcode)` | Collision → `409 duplicate-barcode` naming the conflicting SKU |
 
 ### `uom_conversions`
-`sku_id` · `uom` text NOT NULL (`skus_uom_check` vocabulary) · `factor` **integer** NOT NULL. `unique (sku_id, uom)`.
+`sku_id` · `uom` text NOT NULL, guarded by **`uom_conversions_uom_check`** (`0027:352`) — a *separate* constraint from `skus_uom_check` (`0027:351`) with the same value list, so **widening one without the other is a live bug the shared naming hides** · `factor` **integer** NOT NULL. `unique (sku_id, uom)`.
 **`factor` is an integer nothing multiplies by** — stored at import, echoed back, never applied. Fractional conversions wait for the story that first applies one.
 
 ### `batches`

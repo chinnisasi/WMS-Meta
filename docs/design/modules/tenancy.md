@@ -41,7 +41,7 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 | `email` | text | NO | — | **globally unique** | Not per-tenant — one tenant per email, by design. Duplicate → `409 duplicate-email` |
 | `password_hash` | text | NO | — | — | **scrypt.** Never leaves the row. `DUMMY_HASH` equalises timing so an unknown email and a wrong password are indistinguishable |
 | `role` | `user_role` **pgEnum** | NO | `'operator'` | the enum type | `owner \| ops_manager \| operator \| accountant`. **The only `pgEnum` in the schema** — every later vocabulary uses a CHECK instead, because extending an enum needs `ALTER TYPE` |
-| `status` | text | NO | `'active'` | CHECK | `invited \| active` |
+| `status` | text | NO | `'active'` | **NO CHECK — app-layer only** | `invited \| active`, enforced solely by `USER_STATUSES` (`schema.ts:66`). One of the unguarded vocabularies the docs flag elsewhere |
 | `invite_token_hash` | text | **YES** | — | — | **sha256 of the one-time token.** The raw value is returned once and also persists in the idempotency snapshot so a replay re-serves it |
 | `invite_expires_at` | timestamptz | **YES** | — | — | 7-day TTL |
 

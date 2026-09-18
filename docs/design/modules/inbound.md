@@ -33,7 +33,7 @@ Six module-exclusive tables. All are declared in `src/shared/db/schema.ts`; RLS 
 Seven tables. `tenantTimestamps` = `created_at`/`updated_at` (`timestamptz NOT NULL DEFAULT now()`). Every `id` is `uuid PRIMARY KEY` stamped `uuidv7()` in the app. No FKs. **Quantities are milli-units** (`bigint mode:'number'`); raw-SQL reads return strings and need `Number(...)`.
 
 ### `vendors`
-`code` text NOT NULL (`unique (tenant_id, code)`) · `name` text NOT NULL · `is_default` boolean NOT NULL default `false` — the blind-receipt fallback vendor.
+`code` text NOT NULL (`unique (tenant_id, code)`) · `name` text NOT NULL · `is_default` boolean NOT NULL default `false` — **an unread flag today.** Written and read only by vendor create/list; `receiving.command.ts` references vendors nowhere, and a blind GRN carries `po_id = NULL` with no vendor at all. Its consumer is Epic 6's suggested-PO drafts (`schema.ts:961`), not yet built.
 
 ### `purchase_orders`
 
@@ -58,9 +58,9 @@ Seven tables. `tenantTimestamps` = `created_at`/`updated_at` (`timestamptz NOT N
 
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
-| `code` | text | NO | — | `unique (tenant, code)` | Per-warehouse GRN sequence — **exhaustion should be a typed 409 and currently is not** (epic-3 retro a14) |
+| `code` | text | NO | — | `goods_receipt_notes_tenant_id_code_unique` (`0013:52`) | `GRN-<n>` zero-padded to 4 digits, **unique PER TENANT — two warehouses share one sequence** (`receiving.command.ts:173`, allocator locks `…':grn-seq'` at `:990`). Exhaustion should be a typed 409 and is not (epic-3 retro a14) |
 | `po_id` | uuid | **YES** | — | `goods_receipt_notes_blind_pairing` | **Null on a blind receipt** |
-| `blind_reason_code` | text | **YES** | — | same CHECK | **Compound:** `po_id` null ⟺ `blind_reason_code` set. Quoted in `0013:105` |
+| `blind_reason_code` | text | **YES** | — | same CHECK | **Compound, and stronger than a biconditional — it pins the enum too** (`0013:104-107`): `(po_id IS NULL AND blind_reason_code IN ('unannounced-delivery','po-not-found','other')) OR (po_id IS NOT NULL AND blind_reason_code IS NULL)`. **A new blind reason code needs a migration** |
 | `status` | text | NO | `'recorded'` | CHECK | |
 | `device_id` · `recorded_by` | uuid | NO | — | — | The badge-in session that produced it |
 | `occurred_at` / `recorded_at` | timestamptz | NO | — | — | **Device time vs server time**, deliberately distinct |

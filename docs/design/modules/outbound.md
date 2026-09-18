@@ -35,7 +35,7 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
 | `status` | text | NO | `'accepted'` | `orders_status_check` | `accepted \| cancelled \| ready_to_dispatch \| dispatched`. **Widened twice** (0023, 0024) by DROP-then-ADD. Every guard reading it is an **allow-list** — the 4.5 review found a deny-list that would have corrupted data |
-| `source` | text | NO | `'manual'` | — | `manual \| channel` |
+| `source` | text | NO | `'manual'` | `orders_source_check` (`0017:58`) | `manual \| ingested`. **There is no `channel` arm** — `ORDER_SOURCES`, `order.command.ts:67` |
 | `integration_id` | uuid | **YES** | — | — | Null on a manual order. **Unvalidated** — no integrations table until Epic 7 |
 | `external_event_id` | text | **YES** | — | partial unique | Channel dedup (AD-5) |
 | `source_payload_hash` | text | **YES** | — | — | Ingested payload fingerprint. **Convention changed in 10.2** — base units now, so no pre-10.2 payload matches |
@@ -58,15 +58,16 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
+| `name` | text | NO | — | `wave_policies_warehouse_name_unique` on `(tenant, warehouse, name)` (`0018:66`) | Operator-facing policy name |
 | `grouping` | text | NO | `'single'` | CHECK | `single \| batch` |
 | `priority` | integer | NO | `0` | — | **Not a quantity** — unscaled |
-| `max_orders` | integer | **YES** | — | — | Null = uncapped |
+| `max_orders` | integer | **YES** | — | — | **Null is NOT uncapped** — it inherits `DEFAULT_WAVE_MAX_ORDERS = 200` (`wave.command.ts:99`, applied at `:987`). `schema.ts:1529` says so outright |
 | `cutoff_local_time` | text | **YES** | — | — | Local wall-clock, India-only by design |
 | `carrier_ref` | uuid | **YES** | — | **none** | **Deliberately unvalidated** — story 4-6b added a carriers table but chose not to retro-validate this |
 
 ### `waves`
 
-`status` text NOT NULL default `'planned'`, CHECK `planned \| released \| cancelled`. `released_at` / `cancelled_at` timestamptz nullable — stamped on transition.
+`status` text NOT NULL default `'planned'`, CHECK `planned \| released \| cancelled`. `released_at` / `cancelled_at` timestamptz nullable — and the stamping is a **database rule, not a convention**: `waves_released_at_pairing` and `waves_cancelled_at_pairing` (`0018:145,147`).
 
 ### `picklists`
 
@@ -83,9 +84,9 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 | `shortfall_qty` | bigint | NO | `0` | `..._shortfall_qty_nonnegative` | |
 | `reason_code` | text | **YES** | — | `picklist_lines_reason_code_check` | Short-pick reason, closed set |
 | `slice_seq` · `walk_seq` | integer | NO | — | — | **Not quantities** — unscaled. `walk_seq` is the walk order; render by it |
-| `status` | text | NO | `'planned'` | CHECK | `planned \| picked \| short \| cancelled` |
+| `status` | text | NO | `'planned'` | `picklist_lines_status_check` (`0022:13`) | `planned \| unfulfillable \| picked \| short \| cancelled`. **`unfulfillable` is the arm a null `bin_id` carries** |
 
-**Two compound CHECKs (0022) — the ones a careless change breaks:**
+**Two compound CHECKs — the ones a careless change breaks. Both were dropped and RE-CREATED by `0026:97-98,152-163`, so the live definitions are there, not in their originating migration** (`slice_shape` originates `0018:137`, `short_pairing` `0022:41`):
 - `picklist_lines_short_pairing` — `status = 'short'` and `reason_code` must be set together
 - `picklist_lines_slice_shape` — the slice/shortfall/bin arms must agree
 
@@ -104,7 +105,7 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 | `picked_at` | timestamptz | NO | — | **Device time**, not server time |
 | `device_id` | uuid | NO | — | The badge-in session's device |
 
-**`picks_line_unique`** on `(tenant, picklist_line_id)` — the DB backstop against a second draw on one line.
+**`picks_line_unique`** on `(tenant, picklist_line_id)` — the DB backstop against a second draw on one line. **`picks_reservation_pairing`** (`0019:50`) pairs `reservation_id` with `reservation_committed`.
 
 ---
 
