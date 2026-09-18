@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '09-18-2026 04:30'
+last_updated: '09-18-2026 04:50'
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -158,7 +158,7 @@ development_status:
   # every derived balance after the migration.
   epic-10: in-progress
   10-1-fractional-quantity-migration: done
-  10-2-uom-vocabulary-and-precision: review
+  10-2-uom-vocabulary-and-precision: done
   10-3-catch-weight-handling-units: backlog
   10-4-measured-stock-reconciliation: backlog
   10-5-web-fractional-quantity-surfaces: backlog
