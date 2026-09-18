@@ -35,6 +35,6 @@ Each is a spine placeholder today: a registered NestJS module with empty `provid
 
 **A module owns its tables exclusively.** A sibling reaches it only through its facade or through an event — never by touching its tables, and never by importing past `*.facade`, `*.module` or `*.dto`.
 
-`test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports, per module. When you add a module that owns tables, you add its block there too — and because the detector is only meaningful when something could violate it, the block includes hard-coded specifier strings that self-test the regex.
+`test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports, per module — **for the three module table-sets it covers today** (stock/ledger, order/wave/pick, carrier). Tenancy, catalog, inbound and putaway have no block, so their ownership rests on review alone. When you add a module that owns tables, you add its block there too — and because the detector is only meaningful when something could violate it, the block includes hard-coded specifier strings that self-test the regex.
 
 Where two modules genuinely need each other's reads, the join happens in the **api shell** (`src/api/`), not by one module importing the other. The device catalog snapshot is the worked example: it composes across `inbound` and `outbound` in the controller, because making `inbound` import `outbound` was tried, reverted, and is documented as having caused a cross-suite flake.

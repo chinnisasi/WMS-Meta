@@ -47,13 +47,15 @@ HTTP → Controller (api shell)  ── thin: auth guard, tenant match, DTO vali
      post-commit                ── Valkey counter mirrors, never throwing
 ```
 
-**Controllers are deliberately thin.** They map DTOs and read the idempotency header; they hold no rules. Story 10.2 moved quantity conversion *out* of controllers into commands, because anything in front of the command runs before the replay lookup — and a refusal in front of a replay answers 400 to an op that already committed.
+**Controllers are deliberately thin** — they map DTOs and read the idempotency header. The intent is that they hold no rules; it is not uniformly true. `catalog/import.command.ts:152-155` parses the uploaded file *before* the `catalog.import` check at `:170`, which inverts authority-before-validation (`PENDING.md`, verified finding 2). Treat "thin" as the rule to code to, not a property you may assume when reading. Story 10.2 moved quantity conversion *out* of controllers into commands, because anything in front of the command runs before the replay lookup — and a refusal in front of a replay answers 400 to an op that already committed.
 
 ---
 
 ## Modules (AD-6)
 
-Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.** `test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports.
+Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.**
+
+`test/architecture.spec.ts` scans source for writes and past-the-facade imports, but **it covers three module table-sets, not thirteen**: stock/ledger, order/wave/pick, and carrier — plus one `int4` guard. **`tenancy`, `catalog`, `inbound` and `putaway` table ownership is unenforced**, and `bins` — the one table deliberately shared by column between tenancy and putaway — is the least-guarded case of all. Adding a module block when you add a module is the standing rule; four modules predate it.
 
 | Module | Owns |
 |---|---|
@@ -127,4 +129,4 @@ All poll on configurable intervals and **take explicit tenant context** — AD-3
 
 ## Testing shape
 
-27 e2e suites, each on its own cloned database, driving **real HTTP** against a real Nest app. Plus `architecture.spec.ts`, which is a static scan enforcing module boundaries — the one test that fails when the design erodes rather than when the code breaks.
+27 e2e suites, each on its own cloned database, driving **real HTTP** against a real Nest app. Plus `architecture.spec.ts`, a static scan that fails when the design erodes rather than when the code breaks — over the four blocks it actually covers (see Modules above).

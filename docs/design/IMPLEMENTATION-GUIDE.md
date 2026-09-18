@@ -10,8 +10,21 @@ Companion docs: `SYSTEM-DESIGN.md` (how the system fits together), `../repos/wms
 
 Every mutating operation is a command service method. **The order below is load-bearing** — each step exists because something breaks if it moves. `putaway/bin-state.command.ts` is the tightest complete example; `outbound/pack.command.ts` is the richest.
 
+**Three tiers, not two.** Where a check lives is decided by *what it can do*, and getting this wrong ships a real defect (story 10.2 finding #17):
+
+| Tier | What lives here | Why |
+|---|---|---|
+| **Above the transaction** | Cheap **request-shape** checks needing no DB row — a serial count against a quantity, a malformed id | They are the same checks in the same order they always were. A malformed request must still answer **400, not 404**, and one carrying a used key must still answer **400, not replay** |
+| **Inside, before replay** | Authority (`assertPermission`) | An unauthorised caller must not learn what exists from your error messages |
+| **Behind the replay lookup** | Only rules that can **tighten** — a precision refusal, a new vocabulary constraint | A committed op must re-serve its snapshot whatever today's rules say |
+
+`inventory.command.ts:243-251` and `:302-312` carry this distinction in their own comments; read them before moving a check.
+
 ```ts
 async doThing(command: DoThingCommand, idempotencyKey: string): Promise<Snapshot> {
+  // 0. Cheap SHAPE checks that need no DB row stay HERE, above the transaction.
+  assertSerialCountMatches(command);
+
   // 1. Hash the payload BEFORE the transaction. Fixed key order.
   //    Normalise collections first — key order must not make a replay look different.
   const payloadHash = hashCommandPayload({ tenantId, ...fields });
@@ -72,6 +85,7 @@ The transaction already committed. Throwing returns 500 for work that succeeded,
 | **Drizzle `bigint`** | `mode: 'number'` maps via `Number(value)`; `mode: 'bigint'` returns a real BigInt | Use `mode: 'number'`. BigInt **throws on `JSON.stringify`**, and `quantity_delta` is serialised into the ledger hash chain |
 | **JS / Lua doubles** | Exact only to 2⁵³ | Quantities are milli-units, so the usable ceiling is ~9.0 × 10¹² base units. `assertExactQuantity` guards it |
 | **Valkey Lua** | Lua 5.1 numbers are IEEE doubles; `tostring` uses `%.14g` | Counters stay INCRBY-parsable integer strings. Never a decimal, never exponential notation |
+| **base ↔ milli** | Base units on the wire; milli-units below the command line; base units back out | **The richest source of defects in the last two stories.** Convert *inside* the command, behind the replay lookup — never at the controller edge |
 
 **Two concrete traps that shipped and were caught in review:**
 
@@ -86,7 +100,11 @@ sql`greatest(${delta}, 0)`          // Postgres resolves this to int4 → 22003 
 sql`greatest(${delta}::bigint, 0)`  // correct
 ```
 
-`test/architecture.spec.ts` guards both classes. When you add a quantity-bearing query, assume the guard is the only thing standing between you and a production overflow.
+**The base↔milli floor, which has now shipped twice.** `assertExactQuantity` guards the 2⁵³ *ceiling*. Nothing guards the *floor*: a positive value below half a milli-unit rounds to **zero**. That filed a real pick as an empty-bin short pick (10.1 #6) and made a `0.4` bin capacity permanently unfillable (10.2 #9). **A non-zero input that scales to zero must be refused, never written.**
+
+**The nine quantity write edges** — every one needs conversion, precision validation, and a test that sends a *fractional* value. A suite seeding `pcs` and whole integers proves nothing: `inventory.controller` adjustments · `outbound` order lines, pack scan, pick qty · `receiving` GRN lines · `inbound` PO create and amend · `putaway` placements · `catalog` import reorder fields.
+
+`test/architecture.spec.ts` guards the `::int` and untyped-parameter classes. When you add a quantity-bearing query, assume the guard is the only thing standing between you and a production overflow.
 
 ---
 
@@ -107,6 +125,7 @@ Checklist. **Every item has been missed at least once.**
 - [ ] A **fail-fast guard** at the top that `RAISE`s if already applied. A re-run that silently transforms data twice passes every CHECK and nothing notices
 - [ ] A **pre-flight block** listing everything unmappable at once — an operator should fix all rows in one pass, not one row per run
 - [ ] **Paired columns round together.** Rounding `ordered_qty` and `received_qty` independently can invert their relationship
+- [ ] **Dedupe BEFORE the UPDATE when rewriting a column in a unique index.** Normalising two rows onto the same value raises `23505` and aborts the deploy mid-migration. Dedupe on the *resolved* value, ahead of the rewrite — not after (10.2 #5)
 - [ ] **A test that executes it against seeded pre-migration data.** See §5
 
 RLS policy shape — the `NULLIF` is load-bearing, because PG18 returns `''` for an expired transaction-local setting and the row must then be invisible, not an error:
@@ -130,6 +149,14 @@ Uniform across eleven enums. **Three mirrored layers:**
 3. **API** — `@IsIn(X)` + `@ApiProperty({ enum: [...X] })` over *the same tuple*
 
 Plus **an e2e test pinning the TS list against the DB constraint** (`orders.spec.ts` does this for `ORDER_STATUSES`). Without it the three copies drift silently.
+
+**Replacing a vocabulary, list or guard set: the new one must admit everything the old one did, asserted mechanically.** Story 10.2 replaced a 57-entry allowlist with a 24-entry one and silently made eleven units unrepresentable; any stored row using one would have aborted the migration. The fix is the pattern to copy: **freeze the old set in the new file and assert at module load** that every member still resolves. A review is not a substitute for an assertion.
+
+**A guard over free text must fail CLOSED.** An allow-list of what is permitted, never a deny-list of what is forbidden — every spelling nobody thought of is a silent accept. The same rule governs status guards: an allow-list of legal states, so a new state arm is a compile or runtime error rather than a silent fall-through (`outbound.md` Gotchas #1, #2, #11).
+
+**Changing the representation of a hashed field is a cross-deploy break.** Idempotency payload hashes and `source_payload_hash` are computed over command fields; change a field's *units* or shape and no key written by the deployed build can replay — it answers `422`, or `order-source-conflict` for a channel redelivery. 10.2 did this across nine commands in five modules. Decide it explicitly, record it, and pin it.
+
+**Never retarget a test that failed because of your change.** First establish what it was pinning. 10.2 edited the repo's only cross-version replay guard to match the new convention, which destroyed its only purpose. If the old behaviour is genuinely gone, the test asserts the *new* expectation and says so — it is not quietly re-aimed.
 
 No `pgEnum` for new vocabularies — `userRoleEnum` exists but extending a Postgres enum needs `ALTER TYPE`, where a CHECK is dropped and re-added like everything else here.
 

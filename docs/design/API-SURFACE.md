@@ -145,4 +145,18 @@ Twenty-two, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` a
 
 ## Device-authenticated routes
 
-Six routes take a **device credential** rather than a user session: enroll, badge-in, self-test echo, catalog snapshot, goods-receipts, putaway placements, picks. Every one re-authorises on replay against **the badge-in session that created the op** — shared devices never launder authority across badge-ins.
+**Seven** routes sit outside the ordinary user session — and they are not one uniform class. Read the guard on the route, never this table alone:
+
+| Route | Actual guard |
+|---|---|
+| `POST .../devices/enroll` | **None.** `devices.controller.ts:96` carries no `@UseGuards` — the enrollment code in the body *is* the credential. Unauthenticated by design; the code is the only thing standing in front of it |
+| `POST .../devices/badge-in` | device credential — issues the operator session |
+| `POST .../devices/self-test/echo` | device credential |
+| `GET .../devices/catalog-snapshot` | device session |
+| `POST .../receiving/goods-receipts` | device session |
+| `POST .../putaway/placements` | device session |
+| `POST .../outbound/picks` | device session |
+
+The four device-session routes re-authorise on replay against **the badge-in session that created the op** — shared devices never launder authority across badge-ins.
+
+**A badge-in device token also satisfies `TenantSessionGuard`.** Both JWT families are HS256 under one `JWT_SECRET`, and `verifyTenantSession` (`jwt-session.ts:64`) checks only `sub`, `tenant_id` and `exp` — it never rejects the `device_id` claim a badge-in token carries. The claim-shape exclusivity its docstring asserts holds **one direction only**. Verified; tracked in `PENDING.md`.
