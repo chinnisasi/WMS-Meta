@@ -26,6 +26,78 @@ Six module-exclusive tables. All are declared in `src/shared/db/schema.ts`; RLS 
 
 ---
 
+---
+
+## Schema (field level)
+
+Seven tables. `tenantTimestamps` = `created_at`/`updated_at` (`timestamptz NOT NULL DEFAULT now()`). Every `id` is `uuid PRIMARY KEY` stamped `uuidv7()` in the app. No FKs. **Quantities are milli-units** (`bigint mode:'number'`); raw-SQL reads return strings and need `Number(...)`.
+
+### `vendors`
+`code` text NOT NULL (`unique (tenant_id, code)`) · `name` text NOT NULL · `is_default` boolean NOT NULL default `false` — the blind-receipt fallback vendor.
+
+### `purchase_orders`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `vendor_id` | uuid | NO | — | — | |
+| `code` | text | NO | — | `unique (tenant, code)` | Operator-facing PO number |
+| `status` | text | NO | `'open'` | `purchase_orders_status_check` | `open \| closed` |
+| `carried_from_po_id` | uuid | **YES** | — | — | Set on a **successor** PO created by `close()` carrying open quantity forward. Null on an original |
+
+### `purchase_order_lines`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `ordered_qty` | bigint | NO | — | `..._ordered_qty_positive` | Milli-units |
+| `received_qty` | bigint | NO | `0` | `..._received_qty_nonnegative` | Bumped by GRN apply **and** by an approved over-receipt |
+| `unit_cost_paise` | integer | NO | — | `..._unit_cost_paise_nonnegative` | **Money — integer paise, NOT a quantity.** Deliberately not scaled by 10.1 |
+| `expected_date` | timestamptz | **YES** | — | — | |
+| `status` | text | NO | `'open'` | CHECK | Open quantity is derived (`ordered − received`), never stored |
+
+### `goods_receipt_notes`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `code` | text | NO | — | `unique (tenant, code)` | Per-warehouse GRN sequence — **exhaustion should be a typed 409 and currently is not** (epic-3 retro a14) |
+| `po_id` | uuid | **YES** | — | `goods_receipt_notes_blind_pairing` | **Null on a blind receipt** |
+| `blind_reason_code` | text | **YES** | — | same CHECK | **Compound:** `po_id` null ⟺ `blind_reason_code` set. Quoted in `0013:105` |
+| `status` | text | NO | `'recorded'` | CHECK | |
+| `device_id` · `recorded_by` | uuid | NO | — | — | The badge-in session that produced it |
+| `occurred_at` / `recorded_at` | timestamptz | NO | — | — | **Device time vs server time**, deliberately distinct |
+
+### `goods_receipt_lines`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `po_line_id` | uuid | **YES** | — | — | Null on a blind line |
+| `batch_id` | uuid | **YES** | — | — | Set only for a batch-tracked SKU |
+| `qty` | bigint | NO | — | `..._qty_positive` | **What physically arrived** |
+| `applied_qty` | bigint | NO | `0` | `..._applied_qty_nonnegative` **and** `goods_receipt_lines_applied_le_physical` (`applied_qty <= qty`) | What was applied to the PO line. **The difference is the over-receipt** |
+
+### `over_receipts`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `po_id` · `po_line_id` | uuid | **YES** | — | — | Null when the excess came from a blind receipt |
+| `excess_qty` | bigint | NO | — | `..._excess_qty_positive` | Milli-units. **Parked, not in stock, until approved** |
+| `status` | text | NO | `'pending'` | `over_receipts_status_check` | `pending \| approved \| rejected` |
+| `decided_by` / `decided_at` | uuid / timestamptz | **YES** | — | — | Stamped together on decision |
+
+**Approve re-validates nothing about the PO today** — a close-then-approve bumps a closed line's ceiling (epic-3 retro a1).
+
+### `qc_holds`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `sku_id` · `bin_id` | uuid | NO | — | partial unique on `open` | **The hold scope is (sku, bin)** — not a quantity, not a batch |
+| `reason` | text | NO | — | — | |
+| `status` | text | NO | `'open'` | `qc_holds_status_check` | `open \| released`. **One open hold per scope** |
+| `released_by` / `released_at` | uuid / timestamptz | **YES** | — | — | |
+
+**An open hold excludes that (sku, bin) from ATP** — the exclusion is computed, never written to stock.
+
+---
+
 ## Public seam
 
 Three exported facades (`inbound.module.ts:55`). Nothing outside imports a command service.

@@ -23,6 +23,44 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 
 ---
 
+---
+
+## Schema (field level)
+
+### `skus`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `code` | text | NO | — | `unique (tenant, code)` | **Immutable after import** — `PatchSkuDto` has no `code` |
+| `uom` | text | NO | — | `skus_uom_check` | One of 35 canonical units (10.2). **Also immutable** — no `uom` on the PATCH DTO, which is what makes the serial rule's `current.uom` read sound |
+| `gst_rate_bps` | integer | NO | — | — | **Basis points, not a quantity** (18% = 1800) |
+| `hsn` | text | **YES** | — | — | Goods classification. A 3PL would need SAC instead |
+| `batch_tracked` / `serial_tracked` | boolean | NO | `false` | — | **Both true is refused at pick** until story 14-1 |
+| `reorder_point` / `reorder_qty` | bigint `mode:'number'` | NO | `0` | — | **Milli-units** — UoM-denominated, so 10.1 scaled them. Policy thresholds, not stock |
+| `barcode` | text | NO | — | `unique (tenant, barcode)` | Collision → `409 duplicate-barcode` naming the conflicting SKU |
+
+### `uom_conversions`
+`sku_id` · `uom` text NOT NULL (`skus_uom_check` vocabulary) · `factor` **integer** NOT NULL. `unique (sku_id, uom)`.
+**`factor` is an integer nothing multiplies by** — stored at import, echoed back, never applied. Fractional conversions wait for the story that first applies one.
+
+### `batches`
+`sku_id` · `code` (`unique (tenant, sku, code)`) · `mfg_date` / `expiry_date` timestamptz **nullable** · `status` text NOT NULL default `'active'` (`batches_status_check`).
+**`expiry_date` drives FEFO** — which is why FEFO ordering lives outside inventory, in outbound and the api layer.
+**Blocked status is unenforced on the draw side** (epic-2 retro a13).
+
+### `serials`
+`sku_id` · `serial_number` (`unique (tenant, sku, serial_number)`) · `status` (`serials_status_check`).
+**No location column, by design** — a serial's location is derived from its latest `ledger_events` row via the `(tenant_id, serial_ref, seq)` index. The ledger is the only source of serial location and history.
+
+### `catalog_imports`
+`mode` text NOT NULL (`initial \| fix`) · `committed_rows` / `failed_rows` / `skipped_rows` integer NOT NULL — **counts, not quantities**, deliberately unscaled.
+
+### `catalog_import_errors`
+`import_id` · `row_number` integer NOT NULL · `sku_code` text **nullable** (null when the row failed before a code could be read) · `reason_code` NOT NULL · `reason_detail` NOT NULL.
+**Durable error rows are what make fix mode possible** — it reprocesses the previous run's failed SKU codes. `reason_code` has **no DB CHECK**, so a new row-level arm needs no migration.
+
+---
+
 ## Public seam
 
 `CatalogModule` exports `CatalogFacade` only (`catalog.module.ts:32`). `ImportCommand` and `SkuCommand` are reachable only through this module's controller.

@@ -32,6 +32,29 @@ The module also writes `audit_events` and `idempotency_keys` (tenancy-owned, sha
 
 ---
 
+---
+
+## Schema (field level)
+
+### `carrier_connections` — the credential vault
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `carrier_code` | text | NO | — | registry lookup (no CHECK) | `delhivery \| blue_dart \| ecom_express`. Validated against the import-time registry, not the DB |
+| `account_label` | text | NO | — | `..._account_label_nonblank` | The operator's name for this account |
+| `credential_sealed` | text | NO | — | **`..._credential_sealed_envelope`** (`LIKE 'v1:%'`) | **THE SECRET.** AES-256-GCM envelope `v1:<iv>:<tag>:<ct>` over canonical credential JSON, sealed under `CARRIER_ENCRYPTION_KEY`. The CHECK is the DB-side backstop against a code path ever storing plaintext |
+| `credential_version` | integer | NO | `1` | `..._credential_version_positive` | **Generation counter** — 1 at connect, +1 per rotation. Not a quantity |
+| `connected_by` | uuid | NO | — | — | |
+| `rotated_at` / `rotated_by` | timestamptz / uuid | **YES** | — | **`..._rotation_stamp_paired`** (`(rotated_at IS NULL) = (rotated_by IS NULL)`) | Stamped together or not at all — a row knowing *when* but not *by whom* is an audit gap in the record AD-15 makes first-class |
+
+**`carrier_connections_tenant_carrier_unique`** on `(tenant_id, carrier_code)` — one live connection per carrier per tenant, so a concurrent double-connect is a deterministic constraint violation mapped to `409`, never two live credential rows.
+
+**Confinement — the module's whole point.** `credential_sealed` reaches exactly three files (`schema.ts`, `carrier.command.ts`, `carriers.facade.ts`) and **none under `src/api/`**. It must never appear in a response DTO, a list row, an outbox payload, an audit row, a log line, or `idempotency_keys.response_snapshot`. The e2e suite uses the sealed blob itself as a canary alongside the plaintext.
+
+**Rotation replaces material in place, keeping the row id** — the id is the stable handle AD-15 means by "referenced by id", so a rotation never orphans a reference.
+
+---
+
 ## Public seam
 
 `CarriersModule` exports `CarriersFacade` **alone** (`carriers.module.ts:40`), and the architecture test fails any sibling reaching past it.

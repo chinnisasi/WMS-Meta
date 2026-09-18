@@ -27,6 +27,58 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 
 ---
 
+---
+
+## Schema (field level)
+
+### `tenants`
+`id` uuid PK · `tenant_id` uuid NOT NULL — **self-referencing**, so RLS is uniform across every table including this one · `name` text NOT NULL.
+
+### `users`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `email` | text | NO | — | **globally unique** | Not per-tenant — one tenant per email, by design. Duplicate → `409 duplicate-email` |
+| `password_hash` | text | NO | — | — | **scrypt.** Never leaves the row. `DUMMY_HASH` equalises timing so an unknown email and a wrong password are indistinguishable |
+| `role` | `user_role` **pgEnum** | NO | `'operator'` | the enum type | `owner \| ops_manager \| operator \| accountant`. **The only `pgEnum` in the schema** — every later vocabulary uses a CHECK instead, because extending an enum needs `ALTER TYPE` |
+| `status` | text | NO | `'active'` | CHECK | `invited \| active` |
+| `invite_token_hash` | text | **YES** | — | — | **sha256 of the one-time token.** The raw value is returned once and also persists in the idempotency snapshot so a replay re-serves it |
+| `invite_expires_at` | timestamptz | **YES** | — | — | 7-day TTL |
+
+### `warehouses` / `zones`
+`warehouses`: `code` (unique per tenant), `name`. **No address columns** — the gap blocking story 4-6d.
+`zones`: `warehouse_id`, `code` (unique per warehouse), `name`.
+
+### `devices`
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `operator_user_id` | uuid | **YES** | — | — | Null until badge-in binds an operator |
+| `label` | text | **YES** | — | — | |
+| `status` | text | NO | `'active'` | `devices_status_check` | `active \| revoked` |
+| `revoked_at` / `revoked_by` | timestamptz / uuid | **YES** | — | — | |
+| `wipe_flag` | boolean | NO | `false` | — | Set on revoke; the device wipes its cache on next connection |
+| `enrollment_code_hash` | text | **YES** | — | **partial unique WHERE NOT NULL** | One-way hash of the mint code |
+| `enrollment_code_expires_at` | timestamptz | **YES** | — | — | |
+| `enrolled_at` | timestamptz | **YES** | — | — | |
+| `pin_hash` | text | **YES** | — | — | **scrypt.** No attempt lockout exists (epic-3 retro a6) |
+| `last_seen_at` | timestamptz | **YES** | — | — | |
+
+**No column holds the sealed offline-store key** — it is returned once at enrollment and persists only in `idempotency_keys.response_snapshot`.
+
+### `audit_events`
+`actor_user_id` · `action` (the outbox event name) · `target_type` · `target_id` · `reference` (nullable — the idempotency key) · `occurred_at` default `now()`. **Append-only by convention, not by trigger** — unlike `ledger_events`.
+
+### `idempotency_keys`
+
+| Column | Type | Null | Guard | Meaning |
+|---|---|---|---|---|
+| `key` | text | NO | `unique (tenant_id, key)` | ULID. **Tenant-scoped** — the cross-tenant hijack fixed in 4.3 |
+| `payload_hash` | text | NO | — | sha256 over the command's fields. **Convention changed in 10.2** (base units, not milli) — no pre-10.2 key replays |
+| `response_snapshot` | jsonb | NO | — | **Durable and re-served on replay. Never put secret material here** — story 3.2 did, and story 4-6b forbids it |
+
+---
+
 ## Public seam
 
 `TenancyModule` exports exactly two providers (`tenancy.module.ts:55`): `TenancyService` and `EnrollmentCommand`.

@@ -26,6 +26,39 @@ One module-exclusive table.
 
 ---
 
+---
+
+## Schema (field level)
+
+### `putaway_placements` — owned outright
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `grn_id` · `grn_line_id` | uuid | NO | — | — | The receipt this places |
+| `batch_id` | uuid | **YES** | — | — | |
+| `qty` | bigint `mode:'number'` | NO | — | `putaway_placements_qty_check` (`> 0`) | Milli-units |
+| `from_bin_id` | uuid | NO | — | — | Always the receiving bin |
+| `to_bin_id` | uuid | NO | — | — | **Where it actually went** |
+| `suggested_bin_id` | uuid | **YES** | — | — | What the system proposed. **Suggestion-vs-actual is the point of this table** — report both, never the suggestion alone |
+| `reason_code` | text | **YES** | — | `putaway_mismatch_reason_code` set | Required when actual ≠ suggested |
+| `placed_by` · `placed_at` · `device_id` | uuid / timestamptz | NO | — | — | `placed_at` is **device time** |
+
+### `bins` — SHARED BY COLUMN with tenancy
+
+The one table in the system with split ownership, and **the one with no architecture-test coverage** — `test/architecture.spec.ts` enumerates the stock/ledger, order/wave/pick and carrier sets only. Convention is the sole guard.
+
+| Column | Type | Null | Default | Guard | **Writer** | Meaning |
+|---|---|---|---|---|---|---|
+| `zone_id` | uuid | NO | — | — | tenancy | |
+| `code` | text | NO | — | `unique (tenant, warehouse, code)` | tenancy | **Unique per WAREHOUSE, not per zone** |
+| `capacity` | bigint `mode:'number'` | NO | — | `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`) | tenancy | **Whole units only** (10.2). Shared base-UoM space — a bin holds many SKUs measured differently |
+| `type` | text | NO | — | **no CHECK** | tenancy | Free text. The one vocabulary with no DB guard |
+| `blocked` | boolean | NO | `false` | — | **putaway** | `bin-state.command.ts` |
+| `system_owned` | boolean | NO | `false` | — | tenancy | RECEIVING / QC-HOLD bins. **Codes are not reserved** — an operator can still collide (epic-3 retro a2) |
+| `retired_at` / `retired_by` | timestamptz / uuid | **YES** | — | — | tenancy | **Terminal.** `mergeBin`/`retireBin` live in `tenancy/bin.command.ts:462,765` — NOT here |
+
+---
+
 ## Public seam
 
 `putaway.module.ts:31` exports **two** providers — the facade and, unusually, `BinStateCommand` (because the tenancy controller keeps the `PATCH .../bins/{binId}` URL and delegates into it).
