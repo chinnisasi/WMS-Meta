@@ -21,6 +21,29 @@ Commit every change in the repo whose history it belongs to:
 
 Never `git add -f` anything under `workspace/**` into this meta repo — a `hooks/pre-commit` guard blocks it. Child repos are independent git working trees with their own remotes.
 
+## Design docs — read before writing code
+
+`docs/design/` holds the durable design the whole system is built on. These are **not** per-story artifacts; they describe how this codebase works and are what make a story's spec short.
+
+| Doc | Holds |
+| --- | --- |
+| `docs/design/SYSTEM-DESIGN.md` | High level: the three repos, the ledger-as-truth idea, request lifecycle, module map, the inventory core, offline, outbox, background jobs |
+| `docs/design/IMPLEMENTATION-GUIDE.md` | Low level: the command skeleton and why its order is load-bearing, the four type boundaries, the migration checklist, vocabulary pattern, test conventions, error shape |
+| `docs/repos/<repo>/README.md` | The interface contract — what each repo exposes and consumes |
+
+**Every story spec MUST list the design docs in its `context:` frontmatter**, alongside the epic context:
+
+```yaml
+context:
+  - '_bmad-output/implementation-artifacts/epic-<N>-context.md'
+  - 'docs/design/SYSTEM-DESIGN.md'
+  - 'docs/design/IMPLEMENTATION-GUIDE.md'
+```
+
+The implementation agent is dispatched with the spec as its sole source of truth and loads exactly what `context:` names. Omitting these means it re-derives the command skeleton, the migration checklist and the type boundaries from scratch — which is slow, varies per story, and is where the recurring review findings come from.
+
+**Keep them current.** When a review finds a defect whose cause is a pattern nobody wrote down, the fix lands in `IMPLEMENTATION-GUIDE.md` as well as in the code.
+
 ## Cross-repo ordering rules
 
 - **Backend first.** For a story that spans both repos, land additive backend changes (new endpoints, fields) before the frontend changes that consume them.
