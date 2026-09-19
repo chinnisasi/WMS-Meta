@@ -203,7 +203,7 @@ graph BT
 | Concern | Convention |
 | --- | --- |
 | Naming | DB tables snake_case plural; entities PascalCase singular; ledger event types `<domain>.<verb-past>` (`grn.received`, `order.dispatched`); REST resources plural nouns; Nest modules one-per-domain-folder, kebab-case files |
-| Data & formats | IDs UUIDv7; timestamps ISO-8601 UTC; money integer paise; qty fractional as scaled integers (base-UoM x 10^3 milli-units, `bigint`; corrected 2026-09-19 — the table still said the pre-amendment 10^6), decimals only at API/UI edges (AD-9); GST basis points; API errors RFC 9457 problem-details envelope with machine-readable `code` + `trace_id`; pagination cursor-based; every ledger event distinguishes `occurred_at` (device/event time) from `recorded_at` (server ingest) |
+| Data & formats | IDs UUIDv7; timestamps ISO-8601 UTC; money integer paise; qty fractional as scaled integers in milli-units (base-UoM x 10^3, `bigint`, 3 dp cap), decimals only at API/UI edges (AD-9); GST basis points; API errors RFC 9457 problem-details envelope with machine-readable `code` + `trace_id`; pagination cursor-based; every ledger event distinguishes `occurred_at` (device/event time) from `recorded_at` (server ingest) |
 | State & cross-cutting | Mutation only via command services (AD-10); structured JSON logs with `tenant_id`/`warehouse_id`/`request_id` on every line; config via env only, per-tenant customization via metadata tables, never code (addendum §1.2); auth = short-lived JWT + refresh, roles Owner/Ops Manager/Operator/Accountant per FR-3; background jobs run through the same command layer via one scheduler |
 
 ## Stack
