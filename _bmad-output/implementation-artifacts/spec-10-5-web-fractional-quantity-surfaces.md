@@ -2,7 +2,7 @@
 title: 'Story 10.5: web fractional quantity surfaces — decimals render, inputs accept, precision comes from the SKU'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '68c18f83d77c71d17f824532392e664da4533526' # wms-fe main (post 10-2)
@@ -106,3 +106,30 @@ context:
 
 **Manual checks:**
 - With a local stack: create a kg SKU, order 2.5, verify order/wave/PO labels render `2.500 kg`; enter `2.5004` and see the server's precision refusal in the order form and the reorder form.
+
+## Review Triage Log
+
+**Review of 2026-09-19 (review_loop_iteration 0, no loopback).** Layers: blind-hunter (16), edge-case-hunter (3), verification-gap (2 verified defects + 4 other). Every finding verified at the cited location by the main agent before verdicts; the verification-gap layer's two headline findings arrive pre-verified.
+
+| # | Finding (layer) | Verdict | Evidence |
+|---|-----------------|---------|----------|
+| 1 | Order-line Quantity input keeps `min={1}` (blind 1, edge 1, vgap-2) | **medium** | Verified: `outbound-orders.tsx:208` carries `min={1}`, the form has no `noValidate`; native rangeUnderflow blocks `0.5` before `parseDraftLines` runs. The parser and the backend (`@Min(0.001)`) both accept it — the story's own sub-1 acceptance is unreachable from the real form. |
+| 2 | `step={quantityStep(...)}` makes too-fine values browser-refused, never server-refused (blind 3, edge 3, vgap-oth-1) | **medium** | Verified: with `step=0.001`, `2.5004` is a stepMismatch the browser blocks with its generic copy — the matrix row and AC ("too-fine surfaces the server's refusal") are unreachable through both forms. Root cause shared with #1: native constraint validation contradicts the "server is the authority" contract. |
+| 3 | Stale `minimum: 1` schema metadata on fractional-capable response DTOs (blind 2, vgap-oth-3, step-03 note) | **low** | Verified: `PutawayPlacementDto.qty`, `OverReceiptDto.excessQty`, `GrnLineDto.qty` all carry `ApiProperty minimum: 1` in the published OpenAPI while their new descriptions declare fractional quantities; GRN line qty floor is `@Min(0.001)` so sub-1 responses are real. Docs-only (response DTOs, no runtime gate) but the published contract contradicts itself. |
+| 4 | sku-table rejection copy is the input hint, not a refusal; identical for both fields (blind 7, vgap-oth-2) | **medium** | Verified: `sku-table.tsx:189-196` calls `onRejected(quantityInputLabel(...))` — a negative entry on a kg SKU renders "Decimals to 3 places.", which states no failure, and both fields show the same sentence. Operators meet this on any malformed entry. |
+| 5 | Per-value label closure re-implemented inline at ~6 call sites; `parseDraftLines` keeps a second copy of the decimal grammar `parseQuantityInput` documents as its source (blind 4, blind 6) | **low** | Verified by reading the call sites. Developer-only duplication of the formatting fallback decision and of the grammar — the drift class story 10-1/10-2's review flagged. Harm: the next grammar/copy change lands in one copy. |
+| 6 | Fallback copy inconsistent: per-row labels degrade to the bare raw number, `waveTotalsLabel`/`createOutcome` degrade to "N units" (blind 5) | **low** | Verified. Two renderings of the same degraded state; "units" is the unit-agnostic vocabulary the story is retiring. Met only when a SKU is unresolvable. |
+| 7 | `parseDraftLines` refusal copy names "the SKU's unit precision" a shape-only parser never checks (blind 15) | **low** | Verified: the copy overclaims what was enforced. Same copy family as #6 — unify. |
+| 8 | `formatQuantity` silently rounds a (value, precision) mismatch (blind 8) | **low** | Verified the behavior; verified every caller derives precision from the same SKU payload whose value it formats — a mismatched pair is not reachable from the surfaces this story shipped. The docstring's "nothing here rounds an input" overclaims; comment fix. |
+| 9 | Clamp docstring says "bails past 100", clamp is 20 (blind 14) | **low** | Verified at `format-quantity.ts:29,33`. Comment/code disagreement. |
+| 10 | WaveDetailPanel's new resolved-SKU wiring is only ever tested through its fallback arm (vgap-1, pre-verified; blind 10) | **low** | Pre-verified by the layer: the only component test renders the panel with a 404'd SKU read and pins the raw fallback copy (`'4 to pick'`), so the headline behavior (`2.500 kg to pick`) can regress with the suite green. |
+| 11 | Missing trailing newline on the two new test files (blind 11) | **low** | Verified: both end `3b` (no `0a`). Lint is green so not currently enforced, but it is format-drift bait. |
+| 12 | Input step/title transiently wrong while the SKU map loads (blind 9) | low | Real but a transient during load; the honest alternative renders nothing until ready — added branches for a sub-second hint. Unlikely met everyday, fix more than a direct correction — rejected. |
+| 13 | Totals paint unit-agnostic then reformat once SKUs resolve (blind 13) | low | Same transient class as #12; the raw fallback is the deliberate design (format only what is known) and the fallback copy is pinned by test. Rejected on the same grounds. |
+| 14 | Order-form step/inputMode/title wiring has no component tests (blind 10 remainder) | low | The attrs that matter are being fixed in the patch round (#1/#2); the wave panel's resolved arm (#10) is the one place a resolved-arm test is load-bearing. Rejected as a separate row — covered by the patch round's tests where it matters. |
+| 15 | Generated types carry 10-3's contract fields into a 10-5 diff (blind 12) | **false** | Regeneration against merged wms-be main is the spec's own stated mechanism ("picks up 10-4's actual_weight"); generated files are one artifact and cannot carry 10-5's field alone. Nothing to fix. |
+| 16 | `parseQuantityInput` admits a huge digit run that `Number()` coerces to Infinity, JSON-serialized as null (edge 2) | **false** | Disproven at the claimed consequence: the backend's `@IsOptional()` skips null, then `fields.reorderPoint === undefined` is false, so `assertRecordableQuantity(null, …)` hits `!Number.isFinite(null)` → the `ceiling` arm → a 400 naming the field and `got null` (`quantity.ts:337`). Nothing is silently written; the absurd input meets a clear refusal. |
+
+**Grouping:** {1, 2} one root cause (native constraint validation vs the server-authority contract). {5, 6, 7} one root cause (per-surface duplication of the formatting/grammar logic instead of one extracted statement). {8, 9} one root cause (helper docstrings drifted from code). {3, 4, 10, 11} standalone. {12–15} rejected above.
+
+**Routing:** no intent_gap, no bad_spec — no loopback; `review_loop_iteration` stays 0. Patch entries: {1,2} native validation attrs; {3} stale schema minimums; {4} sku-table rejection copy; {5,6,7} extract one label statement + one grammar use; {8,9} docstrings; {10} wave-detail resolved-arm test; {11} trailing newlines. Deferred: none.
