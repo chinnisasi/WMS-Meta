@@ -106,7 +106,7 @@ Items 4–6 need checking before they are either fixed or dismissed; they are re
 
 | Item | Blocked on |
 |---|---|
-| **Story 4-6d — rate shopping** | There is **no address model anywhere**: `orders` carries no destination, `warehouses` only `code` + `name`. Indian carrier rating is origin-pincode → destination-pincode. This is 4.1/tenancy work, not carrier work |
+| **Story 4-6d — rate shopping** | ~~There is no address model anywhere~~ **resolved by story 11-1** (`0030_shipment_addresses.sql`): `orders` carries the `destination_*` columns, `warehouses` the `origin_*` columns — both required at create, pincode TEXT. The remaining work is the carrier surface itself (rating, labels, manifest) |
 | **Retryable inline label error** (Outbound surface) | Labels live in 4-6c, which is backlog |
 | **Subscription billing** | No epic covers it, and PRD open question 4 on the pricing axis is unresolved. **The product cannot charge anyone for itself** |
 | **Production operations** | The architecture spine defers IaC, CI/CD shape, dashboards and on-call. Not a feature gap — a can't-run-a-SaaS gap |

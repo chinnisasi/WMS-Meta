@@ -39,9 +39,10 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 | `integration_id` | uuid | **YES** | — | — | Null on a manual order. **Unvalidated** — no integrations table until Epic 7 |
 | `external_event_id` | text | **YES** | — | partial unique | Channel dedup (AD-5) |
 | `source_payload_hash` | text | **YES** | — | — | Ingested payload fingerprint. **Convention changed in 10.2** — base units now, so no pre-10.2 payload matches |
+| `destination_contact_name` … `destination_pincode` | text ×7 | **YES** | — | — | The shipment destination (story 11-1, migration `0030`): `contact_name`, `phone`, `line1`, `line2`, `city`, `state`, `pincode`. **Point-in-time** — copied at create, never re-resolved. `pincode` is TEXT, `/^\d{6}$/` — leading zeros significant, never an integer. Required at create (command-side, `assertAddress`); pre-11.1 rows read back `destination: null`. **The destination joined both payload hashes in 11.1** with a fixed key position — pre-11.1 keys answer `422`, the accepted break pinned in `test/shipment-addresses.spec.ts` |
 
 **`orders_source_event_unique`** is PARTIAL on `(tenant, integration_id, external_event_id) WHERE integration_id IS NOT NULL AND external_event_id IS NOT NULL` — manual orders never participate.
-**No address columns.** This is why story 4-6d (rate shopping) is blocked, not merely queued.
+**The address model exists as of story 11-1** (see `destination_*` above) — the gap that blocked story 4-6d (rate shopping) is closed on the data side; the carrier surface itself is still 4-6d's.
 
 ### `order_lines`
 
