@@ -46,7 +46,7 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 | `invite_expires_at` | timestamptz | **YES** | — | — | 7-day TTL |
 
 ### `warehouses` / `zones`
-`warehouses`: `code` (unique per tenant), `name`. **No address columns** — the gap blocking story 4-6d.
+`warehouses`: `code` (unique per tenant), `name`, plus the origin address columns (story 11-1, migration `0030`): `origin_contact_name`, `origin_phone`, `origin_line1`, `origin_line2`, `origin_city`, `origin_state`, `origin_pincode` — text ×7, all nullable, pre-11.1 rows read back `origin: null`. **Set at create only** (`origin` is required on `POST /warehouses`); there is no update endpoint — story 4-6d owns that decision. `pincode` is TEXT, `/^\d{6}$/`.
 `zones`: `warehouse_id`, `code` (unique per warehouse), `name`.
 
 ### `devices`

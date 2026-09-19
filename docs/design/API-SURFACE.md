@@ -19,7 +19,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 |---|---|---|---|
 | POST | `/tenants` | — | Register tenant + owner. Global email uniqueness → `409 duplicate-email` |
 | POST | `/tenants/sign-in` | — | 15-min HS256 JWT. Unknown email and wrong password are indistinguishable → `401` |
-| POST | `/tenants/{t}/warehouses` | `warehouse.create` | Duplicate code → `409 duplicate-warehouse-code` |
+| POST | `/tenants/{t}/warehouses` | `warehouse.create` | Body carries the required `origin` address (story 11-1); duplicate code → `409 duplicate-warehouse-code` |
 | GET | `/tenants/{t}/warehouses` | — | Keyset |
 | POST | `/tenants/{t}/warehouses/{w}/zones` | `zone.create` | Foreign warehouse → `404` |
 | GET | `/tenants/{t}/warehouses/{w}/zones` | — | Keyset |
@@ -96,11 +96,11 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 | Method | Path | Capability | Notes |
 |---|---|---|---|
-| POST | `/tenants/{t}/outbound/orders` | `orders.manage` | Over-ATP is **accepted and backordered**, never refused |
+| POST | `/tenants/{t}/outbound/orders` | `orders.manage` | Body carries the required `destination` address (story 11-1); over-ATP is **accepted and backordered**, never refused |
 | POST | `.../orders/{orderId}/cancel` | `orders.manage` | Releases holds atomically. Only from `accepted` |
 | POST | `.../orders/{orderId}/pack` | `pack.execute` | Scan mismatch → `422 pack-mismatch` naming **both** quantities |
 | POST | `.../orders/{orderId}/dispatch` | `dispatch.execute` | **Terminal.** Retires committed holds — the transition that corrects ATP |
-| GET | `.../orders/{orderId}` | — | |
+| GET | `.../orders/{orderId}` | — | Echoes the `destination` (story 11-1); null on pre-11.1 rows |
 | GET | `/tenants/{t}/warehouses/{w}/outbound/orders` | — | Keyset; `cursor`+`limit` only, so status filtering is page-scoped |
 | POST | `/tenants/{t}/outbound/wave-policies` | `waves.manage` | A policy **is** the wave rule |
 | GET | `/tenants/{t}/warehouses/{w}/outbound/wave-policies` | — | Keyset |
