@@ -181,7 +181,7 @@ development_status:
   10-2-uom-vocabulary-and-precision: done
   10-3-catch-weight-handling-units: done
   10-4-measured-stock-reconciliation: done
-  10-5-web-fractional-quantity-surfaces: backlog
+  10-5-web-fractional-quantity-surfaces: done
   10-6-mobile-decimal-and-catch-weight-capture: backlog
   epic-10-retrospective: optional
 
