@@ -2,7 +2,7 @@
 title: 'Story 10.5: web fractional quantity surfaces — decimals render, inputs accept, precision comes from the SKU'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '68c18f83d77c71d17f824532392e664da4533526' # wms-fe main (post 10-2)
@@ -67,15 +67,15 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be src/modules/catalog/catalog.dto.ts` + `sku.command.ts` -- add `uomPrecision` to `SkuResponse` and derive it in `toSnapshot` -- the web's precision source, per the guide's preferred option
-- [ ] `wms-be` test -- pin the field on list/get/patch payloads -- the contract is tested, not asserted
-- [ ] `wms-fe` -- merge wms-be main, `bun run api:generate`, commit regenerated client -- generated types are the only source
-- [ ] `wms-fe src/lib/format-quantity.ts` (NEW) + unit test -- one formatting statement, not per-surface copies
-- [ ] `wms-fe src/lib/outbound-orders.ts` + `src/components/outbound/outbound-orders.tsx` -- decimal labels + decimal line input with per-SKU step; widen `parseDraftLines` in place
-- [ ] `wms-fe src/lib/outbound-waves.ts` + `outbound-waves.tsx` -- labels through the helper
-- [ ] `wms-fe src/lib/over-receipt.ts` + `inbound-cards.tsx` + `over-receipt-queue.tsx` -- PO/GRN/QC/over-receipt labels through the helper
-- [ ] `wms-fe src/components/settings/sku-table.tsx` -- reorder inputs accept decimals, step per precision, server-refusal branch
-- [ ] `wms-fe import-catalog.tsx` verification + unit tests for the widened `parseDraftLines` arms
+- [x] `wms-be src/modules/catalog/catalog.dto.ts` + `sku.command.ts` -- add `uomPrecision` to `SkuResponse` and derive it in `toSnapshot` -- the web's precision source, per the guide's preferred option
+- [x] `wms-be` test -- pin the field on list/get/patch payloads -- the contract is tested, not asserted
+- [x] `wms-fe` -- after the wms-be leg: `bun run openapi:export` in wms-be (updates its checked-in `openapi/openapi.json`), then in wms-fe `bun run api:generate` and commit the regenerated client + the BE export commit precedes it -- generated types are the only source; the export lives in the wms-be branch so CI's diff guard passes before the FE PR opens
+- [x] `wms-fe src/lib/format-quantity.ts` (NEW) + unit test -- one formatting statement, not per-surface copies
+- [x] `wms-fe src/lib/outbound-orders.ts` + `src/components/outbound/outbound-orders.tsx` -- decimal labels + decimal line input with per-SKU step; widen `parseDraftLines` in place
+- [x] `wms-fe src/lib/outbound-waves.ts` + `outbound-waves.tsx` -- labels through the helper
+- [x] `wms-fe src/lib/over-receipt.ts` + `inbound-cards.tsx` + `over-receipt-queue.tsx` -- PO/GRN/QC/over-receipt labels through the helper
+- [x] `wms-fe src/components/settings/sku-table.tsx` -- reorder inputs accept decimals, step per precision, server-refusal branch
+- [x] `wms-fe import-catalog.tsx` verification + unit tests for the widened `parseDraftLines` arms
 
 **Acceptance Criteria:**
 - Given a kg SKU ordered at `2.5`, when the order is created from the web, then the line, wave and order summaries render `2.500 kg` — and a too-fine edit (`2.5004`) surfaces the server's refusal naming the unit and precision.
@@ -90,6 +90,12 @@ context:
 - **No client-side precision vocabulary.** The client validates *shape* (a decimal literal, within the magnitude cap) and defers precision refusals to the server — its refusal text already names unit and precision byte-identically across HTTP and CSV (story 10-4).
 - **Format at render only.** Display arithmetic (GRN pending units, wave shortfall totals) runs on raw numbers; `toFixed(precision)` at render absorbs float dust because every value is already at-declared-precision server-side — this is why the helper takes precision, not storage units.
 - **Integer-clean display sites stay untouched:** waves priority/cap, bin capacity inputs, KPI tiles (placeholders) — counts are counts (the guide's whole-unit cases).
+
+**Progress (2026-09-19, implementation session):** both legs implemented and committed locally (no push, no PRs). wms-be `556cdae` (SkuResponse.uomPrecision, derived in `toSnapshot`, pinned on list/patch payloads + the OpenAPI schema) and `22ce4f2` (the stale "positive integer" quantity descriptions in the putaway and over-receipt DTOs left the source — the regeneration claim in the Intent held only after this; descriptions only, validators untouched). wms-fe `20d37b8` (regenerated client; `format-quantity.ts`; orders/waves/inbound/conflicts/settings surfaces; widened `parseDraftLines` with the ≥1 magnitude floor kept). Verification: wms-be test 585/585, typecheck/lint green, `db:generate` emits nothing; wms-fe test 259/259, typecheck/lint/build green, `api:generate` idempotent, capability mirror matches. Two deltas from the Code Map worth knowing: the GRN **Units** column stays a raw cross-line aggregate — `GoodsReceiptEntryDto` carries no per-row unit to name — and the wave/order totals sentences format at a shared unit only when every line resolves to the same (uom, precision), keeping the raw unit-agnostic fallback otherwise; mixed-unit totals were already a raw unit-agnostic sum. Manual stack checks (order 2.5 → `2.500 kg`, `2.5004` refusal copy on screen) were not run — no local stack exercised in this session.
+
+**Fix round (2026-09-19, after diff review):** wms-fe `b4d1a63`, two items. (a) The `parseDraftLines` magnitude floor above was wrong — the backend order-line floor is `@Min(0.001)` (`outbound.dto.ts:63`), not 1, so 0.5 kg is accepted server-side and the parser's `< 1` floor refused a valid body, deciding more than shape. The floor now refuses only `<= 0` (zero is backend-refused too, so "nothing is sent that the backend would only 400" still holds); copy reads "Every quantity is a decimal greater than zero, at the SKU's unit precision."; tests re-pinned (0.5 accepted, 0 refused, 0.0004/2.5004 pass through). (b) The import report's per-row error table gains a covering component test: `ImportResult` is exported and pinned to render `error.detail` VERBATIM (string equality, not containment) for a row carrying the backend's `precisionRefusalDetail` text, alongside rowNumber, code and the null-skuCode placeholder. Post-fix verification: wms-fe 263/263 tests, typecheck, lint and build all green. The GRN **Units** deviation recorded above stands as deliberate, not an oversight: `GoodsReceiptEntryDto` carries no per-row unit, so a per-row named unit there would be fabricated.
+
+**Step-03 verification (2026-09-19, main agent):** both diffs read in full against Tasks & Acceptance — every task above is genuinely done in the commits, not just reported. The fix-round delta (`b4d1a63`) was re-read after commit: the floor now refuses only `<= 0` with the `@Min(0.001)` backend floor cited in the comment, and `import-catalog.test.tsx` pins `error.detail` by string equality. Matrix test audit: all six rows are covered — 3-dp display (`formatQuantity` + label tests), 0-dp display (`3000/0 → '3,000'`), decimal order line (2.5 and 0.5 accepted pins), too-fine pass-through (0.0004/2.5004 + unchanged `ApiProblem` branch), reorder inputs (`parseQuantityInput` tests + per-precision step), import report (verbatim-detail component test). One correction to the implementation agent's report: it described a "pre-existing minimum: 1 on placed quantity" as still refusing sub-1 placements — the request validator is `@Min(0.001)` (`putaway.dto.ts:53`); the `minimum: 1` it saw is `ApiProperty` schema metadata on the *response* DTO (`PutawayPlacementDto.qty`), which is stale documentation, not a gate. Tracked as a review finding.
 
 ## Verification
 
