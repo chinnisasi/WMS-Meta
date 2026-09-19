@@ -2,7 +2,7 @@
 title: 'Shipment address model'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 80c7515 / wms-fe 9719c12'
@@ -86,8 +86,6 @@ context:
 - Given a warehouse created with an origin, then the warehouse list response echoes it.
 - Given the openapi export and the FE generated client, then both regenerate with zero drift-guard failures in CI.
 
-## Implementation Notes
-
 ## Implementation Notes (2026-09-19, implementation session)
 
 - **`AddressDto` lives in `tenancy.dto.ts`, not `outbound.dto.ts`** (the Code Map's "outbound.dto + controller annotations" was loose about placement): tenancy is the spine outbound already imports, so a shared wire DTO there avoids a tenancy→outbound import inversion. The shared address field set itself lives once in `src/shared/primitives/address.ts` (`AddressInput`/`AddressSnapshot`, `assertAddress`, `addressFingerprint`, `normalizeAddressInput`); both commands import from shared primitives, never from each other.
@@ -104,6 +102,38 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+*28 findings (17 blind-hunter, 8 edge-case-hunter, 3 verification-gap), all verified at their cited locations on 2026-09-19. 19 route to patch in 5 root-cause groups; 9 rejected (4 false, 5 low-out-of-scope). No intent gaps, no spec changes — `review_loop_iteration` stays 0.*
+
+| # | Layer | Finding (verified) | Verdict | Disposition |
+|---|-------|--------------------|---------|-------------|
+| 1 | edge | `assertAddress` never enforces `line2`'s 200-char ceiling — the ceiling loop iterates `REQUIRED_ADDRESS_FIELDS` only (`address.ts:155`); command path accepts unbounded line2 | medium | **patch G2** |
+| 2 | edge | non-string `line2` is silently coerced to absent by `normalizeAddressInput` (the `typeof value === 'string' ? … : undefined` trim), losing data instead of refusing it | medium | **patch G2** |
+| 3 | edge/blind | `destination: null` (not `undefined`) from a non-HTTP caller throws TypeError in `normalizeAddressInput` (`input === undefined` guard only) → 500 instead of 400 `validation-failed` | low (adapter path unbuilt, but this primitive exists for it) | **patch G2** |
+| 4 | blind | non-string required fields coerce to `''` and are then reported as *missing* rather than badly typed | low | **patch G2** |
+| 5 | blind | the missing-field filter's `(address[field] as string \| undefined) === undefined` arm is dead — normalized required fields are always strings | low | **patch G2** (simplify while typing the fields) |
+| 6 | blind | comment `address.ts:12` claims HTTP callers are "refused by both, in the same words" — DTO (class-validator defaults) and command (custom messages) do not share wording | low | **patch G2** (reword the comment) |
+| 7 | blind | no length-ceiling tests anywhere in `shipment-addresses.spec.ts` | low | **patch G2** (add ceiling tests) |
+| 8 | blind/ver-gap | `warehouse.command.ts:77` hashes the RAW origin (`addressFingerprint(command.origin)`) — no `normalizeAddressInput` — while the comment above says "Normalized before hashing"; `origin: {line2: ''}` and absent `line2` hash differently, so equivalent retries answer 422 | medium | **patch G1** |
+| 9 | ver-gap | origin's contribution to the warehouse payload hash is unpinned — the divergent-body test changes `name` too, so removing `origin` from the hash breaks nothing | medium | **patch G1** (test) |
+| 10 | blind | no warehouse replay-break pin — the pre-11.1-key `422` matrix row is pinned for orders only; the warehouse hash grew `origin` too | medium | **patch G1** (test) |
+| 11 | blind/edge | `warehouse-create-form.tsx:73` `setPending(true)` runs BEFORE the `parseDestinationFields` early return — a failed shape check leaves `pending` stuck true and the submit button permanently disabled until reload (the order form parses first, then sets pending) | medium | **patch G3** |
+| 12 | blind | an origin rejection renders "The destination needs…" — the parser's copy is hardcoded to destination | low | **patch G4** (label parameter) |
+| 13 | blind | "a address line 1" — the `a ${label}` builder doesn't handle the vowel | low | **patch G4** |
+| 14 | blind | 4 files missing EOF newlines (`address.ts`, `0030_…sql`, `shipment-addresses.spec.ts`, `support/shipment-address.ts`) | low | **patch** |
+| 15 | blind/edge | `addressFromColumns` echoes a partially-populated row (only `contactName` non-null) as a fabricated address with `''` fields | low — no writer can produce a partial row; the command writes all-or-nothing, and 4-6d will own its own write discipline | reject |
+| 16 | edge | ingested redelivery with an invalid destination answers 400 before the dedup pre-check could resolve it to the prior order | false — `assertAddress` slots beside `assertLines` (`order.command.ts:309/315`), which already precedes the dedup pre-check (`:354`); a redelivery with malformed lines has always answered 400 the same way. Changing the order would be a new design, not a defect fix | reject |
+| 17 | blind/edge | openapi `AddressDto.pincode` lacks `pattern`/`minLength` | low — repo convention: no `@Matches` regex is exported anywhere (the warehouse `code` dto carries only length bounds) | reject |
+| 18 | blind | FE never displays the full address; origin has no read surface | false — the spec's task scoped display to "city/pincode on the order row"; full display and warehouse read surfaces are not in the intent | reject |
+| 19 | blind | duplicated destination/origin fieldsets; FE hard-codes `maxLength` literals instead of sharing constants | low — extracting a shared component exceeds a direct correction; the lengths are already pinned by `outbound-orders.test.ts`, and BE/FE constants cannot be shared across repos | reject |
+| 20 | blind | no DB CHECK constraints or index on the address columns | false — enforcement is deliberately command-side (the frozen Always bullet); no query filters on address columns yet | reject |
+
+*Root-cause groups routed to patch:*
+- **G1 — warehouse origin hash (findings 8-10):** normalize the origin with `normalizeAddressInput` before fingerprinting (fixing the comment), and pin both untested hash arms: same-key different-origin → 422, and a pre-11.1 origin-less key → 422 (mirror the orders tests at `shipment-addresses.spec.ts:286-311,454`).
+- **G2 — `assertAddress`/`normalizeAddressInput` contract gaps (findings 1-7):** make the command validator match its stated contract — refuse non-string fields as type errors (never silently coerce or drop), treat `null` like absent, enforce the `line2` ceiling, drop the dead undefined arm, reword the "same words" comment — plus ceiling tests.
+- **G3 — warehouse form stuck pending (finding 11):** parse before `setPending(true)`, matching the order form's order.
+- **G4 — FE parser copy (findings 12-13):** label parameter (`destination`/`origin`) and article-safe wording; update callers and tests.
+- **(no group) — EOF newlines (finding 14).**
 
 ## Design Notes
 
