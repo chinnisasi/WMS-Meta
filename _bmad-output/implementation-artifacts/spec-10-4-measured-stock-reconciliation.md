@@ -2,7 +2,7 @@
 title: 'Story 10.4: measured stock reconciles — fractional balances proven, the oracle never wedged'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'd6b3009f1017568e3a27232003b1790178961892' # wms-be main (post 10-3)
