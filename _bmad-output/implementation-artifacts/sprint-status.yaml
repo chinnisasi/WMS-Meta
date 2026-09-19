@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: '2026-09-19'
+last_updated: 2026-09-19
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -182,7 +182,12 @@ development_status:
   10-3-catch-weight-handling-units: done
   10-4-measured-stock-reconciliation: done
   10-5-web-fractional-quantity-surfaces: done
-  10-6-mobile-decimal-and-catch-weight-capture: backlog
+  10-6-mobile-decimal-and-catch-weight-capture: review
+  # Deferred from 10-6 (decision 2026-09-19): the mobile pack bench is a whole
+  # new task type end-to-end (screen + op type + inbox), too large to ride the
+  # capture story. 10-3's backend pack endpoint exists; nothing schedules the
+  # device surface without this entry.
+  10-7-mobile-pack-bench: backlog
   epic-10-retrospective: optional
 
   # TIER 1 — foundations every domain needs.

@@ -303,3 +303,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-10-3-catch-weight-handling-units.md`
   summary: No read-back path exists for a handling unit's captured weight — no GET route, and the GRN response returns handling-unit ids without their weights.
   evidence: Code-review finding 40 (loop 3). Story 10-3 captures per-unit weights and stores them correctly, but nothing outside the database can read one: the e2e suite has to query `handling_units` with raw SQL to see a weight at all. Deferred rather than patched because the consumers do not exist yet — 10-5 owns the web surfaces and epic 8 owns invoicing, and the spec's Never list explicitly excludes both. Whichever lands first should expose the read; `handlingUnitsOfGrnLinesInTx` was written for exactly that and currently has no caller.
+
+- source_spec: `spec-10-6-mobile-decimal-and-catch-weight-capture.md`
+  summary: The replay single-flight wiring in `device-store.ts` (`enqueueOp` awaiting `settled()`, `replay()` routing through the gate) has no store-level test and can regress green.
+  evidence: Verified by the review's mutation run — deleting the `settled()` await leaves all 203 tests passing. The module imports `expo-secure-store` and cannot be imported by the test suite; making it injectable (or mocking the secure store) is its own change before the wiring can be pinned. The extracted gate's contract is pinned in `replay-gate.test.ts`.
+- source_spec: `spec-10-6-mobile-decimal-and-catch-weight-capture.md`
+  summary: The byte-mirrored server literals (`precisionRefusalDetail` copy, `MAX_HANDLING_UNIT_WEIGHT_GRAMS`) are enforced by hand only — no mechanism observes both repos, so server-side drift fails no test anywhere.
+  evidence: Verified by search — mobile CI runs `bun test` + `tsc` only; `src/api.ts` is hand-written with no openapi guard; no BE↔mobile drift-guard tooling exists in the meta repo. A wording change in `wms-be/src/shared/primitives/quantity.ts` would leave wms-mobile green while the device speaks a second refusal wording. Needs a cross-repo drift guard (the same class the wms-fe drift guard already covers for generated clients).
