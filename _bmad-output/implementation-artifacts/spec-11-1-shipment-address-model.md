@@ -2,9 +2,10 @@
 title: 'Shipment address model'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'wms-be 80c7515 / wms-fe 9719c12'
 context:
   - '_bmad-output/implementation-artifacts/epic-11-context.md'
   - 'docs/design/SYSTEM-DESIGN.md'
@@ -68,16 +69,16 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/src/shared/db/schema.ts` -- add 7 `destination_*` text columns to `orders` and 7 `origin_*` to `warehouses` (all nullable), then `bun run db:generate` for `0030_shipment_addresses.sql` -- the model's spine
-- [ ] `wms-be/src/modules/outbound/order.command.ts` -- `destination` on the command, command-side validation (atomic + pincode regex + length ceilings → `validationFailed`), both hash inputs, `OrderSnapshot.destination` -- the boundary that keeps bad addresses out of columns
-- [ ] `wms-be/src/modules/outbound/outbound.dto.ts` + controller annotations -- `AddressDto`, `destination` on order DTOs -- the wire contract
-- [ ] `wms-be/src/modules/tenancy/*` -- required `origin` through create DTO/command/response -- warehouse origin seam
-- [ ] `wms-be/test/shipment-addresses.spec.ts` (new) + `orders.spec.ts` additions -- I/O matrix edge cases incl. the replay-break pin
-- [ ] `wms-be` -- re-export `openapi.json` -- drift guard
-- [ ] `wms-fe/src/lib/api/generated/` -- `bun run api:generate` -- consume the contract
-- [ ] `wms-fe/src/components/outbound/outbound-orders.tsx` -- destination fieldset in the create form + city/pincode on the order row -- the user enters the address
-- [ ] `wms-fe/src/components/settings/warehouse-create-form.tsx` -- origin fieldset -- the origin seam
-- [ ] meta `docs/` -- API-SURFACE.md rows, `docs/repos/wms-be/README.md` + `docs/repos/wms-fe/README.md` contract notes, PENDING.md:109 resolved -- keep the docs true
+- [x] `wms-be/src/shared/db/schema.ts` -- add 7 `destination_*` text columns to `orders` and 7 `origin_*` to `warehouses` (all nullable), then `bun run db:generate` for `0030_shipment_addresses.sql` -- the model's spine
+- [x] `wms-be/src/modules/outbound/order.command.ts` -- `destination` on the command, command-side validation (atomic + pincode regex + length ceilings → `validationFailed`), both hash inputs, `OrderSnapshot.destination` -- the boundary that keeps bad addresses out of columns
+- [x] `wms-be/src/modules/outbound/outbound.dto.ts` + controller annotations -- `AddressDto`, `destination` on order DTOs -- the wire contract
+- [x] `wms-be/src/modules/tenancy/*` -- required `origin` through create DTO/command/response -- warehouse origin seam
+- [x] `wms-be/test/shipment-addresses.spec.ts` (new) + `orders.spec.ts` additions -- I/O matrix edge cases incl. the replay-break pin
+- [x] `wms-be` -- re-export `openapi.json` -- drift guard
+- [x] `wms-fe/src/lib/api/generated/` -- `bun run api:generate` -- consume the contract
+- [x] `wms-fe/src/components/outbound/outbound-orders.tsx` -- destination fieldset in the create form + city/pincode on the order row -- the user enters the address
+- [x] `wms-fe/src/components/settings/warehouse-create-form.tsx` -- origin fieldset -- the origin seam
+- [x] meta `docs/` -- API-SURFACE.md rows, `docs/repos/wms-be/README.md` + `docs/repos/wms-fe/README.md` contract notes, PENDING.md:109 resolved -- keep the docs true
 
 **Acceptance Criteria:**
 - Given a signed-in role with `orders.manage`, when an order is created with a full destination, then the order detail and list responses echo it field-for-field.
@@ -86,6 +87,19 @@ context:
 - Given the openapi export and the FE generated client, then both regenerate with zero drift-guard failures in CI.
 
 ## Implementation Notes
+
+## Implementation Notes (2026-09-19, implementation session)
+
+- **`AddressDto` lives in `tenancy.dto.ts`, not `outbound.dto.ts`** (the Code Map's "outbound.dto + controller annotations" was loose about placement): tenancy is the spine outbound already imports, so a shared wire DTO there avoids a tenancy→outbound import inversion. The shared address field set itself lives once in `src/shared/primitives/address.ts` (`AddressInput`/`AddressSnapshot`, `assertAddress`, `addressFingerprint`, `normalizeAddressInput`); both commands import from shared primitives, never from each other.
+- **The hash keeps the `destination` key always present (`fingerprint ?? null`):** JSON.stringify drops `undefined` values, so an address that was simply OMITTED from the hash object would hash identically to a pre-11.1 payload (which lacked the key entirely) and a pre-11.1 key would still replay. With `?? null` the key is always present and every pre-11.1 hash mismatches — the deliberate break. Pinned twice in `test/shipment-addresses.spec.ts` (legacy `idempotency_keys` row → 422 `idempotency-key-reuse`; legacy `source_payload_hash` on a real ingested order → 422 `order-source-conflict`).
+- **DTO required, command authoritative:** `destination`/`origin` are REQUIRED on the create DTOs (an honest OpenAPI contract for HTTP callers) while the command re-validates everything behind its replay lookup (`assertAddress` in the preflight) — the Epic 7 adapter path bypasses DTO validation. Absent address therefore passes the DTO (class-validator skips `undefined` on `@ValidateNested`) and is refused by the command with a message naming it — verified by test.
+- **Snapshot→wire mapping:** the stored `line2` null (absent at create) serializes as an ABSENT optional field, not `null`, via `toAddressDto` in `tenancy.dto.ts` — the same input that omits line2 reads back omitting it. `assertAddress` returns the NORMALIZED address; callers write what it returns, never raw input.
+- **The hash-break ripple is wider than the spec's test task names:** `origin` now being required at create meant **23 suites'** warehouse seeds needed an origin, and 8 order-create helpers needed a destination. The shared fixture `test/support/shipment-address.ts` (`testAddress(overrides)`) was added; suites were patched mechanically and verified by the full green run.
+- **The spec's "orders.spec.ts additions" landed in `test/shipment-addresses.spec.ts` instead** — the hash/dedup/pincode arms are address concerns, and orders.spec already had its arms scattered through a 1000-line file. orders.spec only gained the seed updates. The I/O matrix (16 tests) lives in one place.
+- **Migration naming:** drizzle-kit emitted a random slug; renamed to `0030_shipment_addresses.sql`, the `_journal.json` tag fixed to match, and `drizzle/meta/0030_snapshot.json` git-added (the checklist). `db:generate` after migrate reports "No schema changes".
+- **Suite slug:** `useSuiteDatabase` requires `[a-z0-9_]+` — the new suite's DB is `shipment_addresses` (underscore, not hyphen).
+- **FE:** `destinationSummary` / `parseDestinationFields` / `emptyDestinationFields` live in `src/lib/outbound-orders.ts` (copy lives in src/lib per convention), pinned in `outbound-orders.test.ts`; `client.test.ts` pins the destination body + origin body per wrapper. The pincode input is `type="text"` with `pattern="\d{6}"` — never a number field, so leading zeros survive. Address edits mint a fresh per-draft Idempotency-Key like any line edit.
+- **No new capabilities**; mobile untouched; no new error codes — 400 `validation-failed` arms only.
 
 ## Spec Change Log
 
