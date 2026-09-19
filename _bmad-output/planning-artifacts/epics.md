@@ -318,6 +318,9 @@ FR63-66: Epic 18 — Licence gating, controlled registers, two-person custody, b
 FR67-70: Epic 19 — WIP states, JIT sequencing, MRO issue, production kits
 FR71-74: Epic 20 — Bulk locations, tank/silo level reconciliation, temperature-compensated volume, weighbridge capture
 
+**3PL — added by correct-course 2026-09-19 (Epic 21)**
+FR75-82: Epic 21 — Client entity + system-owned `self` default, client-scoped stock isolation (second RLS variable), versioned rate cards, ledger-derived billing + storage snapshots, immutable client invoicing, ASN against PO-or-ASN, client portal, per-client service reporting
+
 ## Epic List
 
 ### Epic 1: Foundation — Tenant Onboarding & Team
@@ -411,18 +414,25 @@ Tanks, silos and yards hold measured stock with capacity in the stock's own UoM.
 **Surfaces:** web — bulk location admin and measured-stock variance review; mobile — weighbridge and meter capture as a scan-equivalent input, tank/silo level reading.
 **FRs covered:** FR-71, FR-72, FR-73, FR-74
 
-**Dependency flow (all backward):** Epic 2 ← 1; Epic 3 ← 1+2; Epic 4 ← 2+3; Epic 6 ← 2; Epic 8 ← 4; Epic 9 ← 2+4. Multi-domain expansion: Epic 10 ← 1+2 (migration); Epic 11 ← 1+2; Epic 12 ← 2+3+11; Epic 13 ← 2+3+4; Epic 14 ← 2+10; Epic 15 ← 2+12; Epics 16/17/18 ← 2+4+12; Epic 19 ← 2+10+11; Epic 20 ← 10+12. Re-sequenced by the expansion: **Epic 5 ← 2+3+10+12** and **Epic 7 ← 2+4+11**. No epic requires a future epic to function.
+### Epic 21: 3PL — Clients, Billing & Client Portal `[CORRECT-COURSE 2026-09-19 — migration pair in Phase 0]`
+Clients are a scoping dimension inside the tenant (AD-23): one system-owned `self` client per tenant — D2C is its one-client case, no command branches on 3PL-ness. Client isolation is a second RLS session variable, `app.client_id` (AD-24): operator sessions see the whole tenant, portal sessions see only their client — enforced by the database, not the application. Billing is a projection over the ledger (AD-25): handling charges meter from events that already exist, storage bills from a rebuildable daily snapshot, invoices are materialised snapshots immutable once issued. **The migration pair (21-1, 21-2) is Phase 0**; rate cards, metering/invoicing, ASN, portal and per-client reporting are additive in Phase 2 by demand.
+**Surfaces:** web — client admin, rate cards, invoice review, ASN documents, per-client dashboards; mobile — none new (floor work is deliberately client-agnostic; cross-client waves untouched).
+**FRs covered:** FR-75, FR-76, FR-77, FR-78, FR-79, FR-80, FR-81, FR-82
 
-**Execution order — MVP-first with the foundations front-loaded (human decision, 2026-09-17):**
+**Dependency flow (all backward):** Epic 2 ← 1; Epic 3 ← 1+2; Epic 4 ← 2+3; Epic 6 ← 2; Epic 8 ← 4; Epic 9 ← 2+4. Multi-domain expansion: Epic 10 ← 1+2 (migration); Epic 11 ← 1+2; Epic 12 ← 2+3+11; Epic 13 ← 2+3+4; Epic 14 ← 2+10; Epic 15 ← 2+12; Epics 16/17/18 ← 2+4+12; Epic 19 ← 2+10+11; Epic 20 ← 10+12. Re-sequenced by the expansion: **Epic 5 ← 2+3+10+12** and **Epic 7 ← 2+4+11**. 3PL correct-course (2026-09-19): **Epic 21 ← 1+2** (migration pair 21-1/21-2 in Phase 0) and **Epic 21-3…21-8 ← 21-1+21-2** (additive, Phase 2). No epic requires a future epic to function.
+
+**Execution order — MVP-first with the foundations front-loaded (human decision, 2026-09-17; amended 2026-09-19 by the 3PL correct-course):**
 
 ```
-PHASE 0  Epic 10 → Epic 11                       foundations (13 stories)
+PHASE 0  Epic 10 → Epic 11 ∥ Epic 21-1,21-2      foundations (15 stories; 21 = client dimension migration)
 PHASE 1  4-2d → 4-6c → 4-6d → Epics 5,6,7,8,9    MVP        (17 stories)  ← ~30 to market
-PHASE 2  billing · production ops · data onboarding           (no epic covers these; run parallel to Phase 1)
+PHASE 2  Epic 21-3…21-8 (3PL billing, ASN, portal, reporting) · production ops · data onboarding   (run parallel to Phase 1)
 PHASE 3+ Epics 12,13,14,15 → 16,17,18 → 19,20    domains    (52 stories, reorderable by demand)
 ```
 
-**Why only two epics precede MVP.** Epic 10 is the *only migration* in the programme — 18 quantity columns and every command — and epic 5 would widen it, so it is cheapest now even though D2C does not need fractional quantities. Epic 11 is needed by the MVP regardless: addresses for labels and rating, weight and dimensions for carriers, and variants because a Shopify product maps to variants (epic 7). Everything after that is additive by construction — AD-19 keeps the SKU as the ledger's unit, AD-20 registers reverse movements as grammar arms, AD-21 gives customs/excise/controlled one shared mechanism — so **Phase 3 epics can be reordered freely by market demand without rework**.
+**Why only two epics precede MVP.** Epic 10 is the *only migration* in the programme — 18 quantity columns and every command — and epic 5 would widen it, so it is cheapest now even though D2C does not need fractional quantities. Epic 11 is needed by the MVP regardless: addresses for labels and rating, weight and dimensions for carriers, and variants because a Shopify product maps to variants (epic 7). Everything after that is additive by construction — AD-19 keeps the SKU as the ledger's unit, AD-20 registers reverse movements as grammar arms, AD-21 gives customs/excise/controlled one shared mechanism — so **Phase 3 epics can be reordered freely by market demand without rework**. *(Amended 2026-09-19: Epic 21-1/21-2 join Phase 0 because the client dimension is migration-shaped like Epic 10's — every ledger-writing epic built before it would need its tables and writers revisited. Epic 10 lands first; 21-1 builds on its migration machinery and the same review checklist.)*
+
+**Hard gates (the only ones):** Epic 10 before Epics 5, 14, 19, 20 · Epic 11 before 4-6d and Epic 7 · Epic 12 before Epics 16, 17, 18 · Epic 21-1/21-2 before 21-3…21-8. *Epic 12 before Epic 5 is a rework-avoidance preference, not a gate* — counting bins works without storage classes; you revisit it when yards and tanks arrive in Epic 20.
 
 **Hard gates (the only ones):** Epic 10 before Epics 5, 14, 19, 20 · Epic 11 before 4-6d and Epic 7 · Epic 12 before Epics 16, 17, 18. *Epic 12 before Epic 5 is a rework-avoidance preference, not a gate* — counting bins works without storage classes; you revisit it when yards and tanks arrive in Epic 20.
 

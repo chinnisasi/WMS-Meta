@@ -132,16 +132,19 @@ development_status:
   # epic reference across _bmad-output/implementation-artifacts (context
   # files, retro files, spec frontmatter, the keys in this file).
   # EXECUTION ORDER — MVP-FIRST, FOUNDATIONS FRONT-LOADED (human, 2026-09-17):
-  #   PHASE 0  epic-10 -> epic-11                    foundations, 13 stories
+  #   PHASE 0  epic-10 -> epic-11 ∥ epic-21-1,21-2   foundations, 15 stories
+  #            (amended 2026-09-19: the 3PL client dimension is migration-
+  #            shaped like epic-10 and lands in Phase 0 beside it)
   #   PHASE 1  4-2d -> 4-6c -> 4-6d -> epics 5,6,7,8,9   MVP, 17 stories
-  #   PHASE 2  billing | production ops | data onboarding
-  #            (NO EPIC COVERS THESE - run parallel to Phase 1)
+  #   PHASE 2  epic-21-3..21-8 (3PL billing | ASN | portal | reporting)
+  #            | production ops | data onboarding   (run parallel to Phase 1)
   #   PHASE 3+ epics 12,13,14,15 -> 16,17,18 -> 19,20   domains, 52 stories
   # ~30 stories to a sellable D2C product. Only epic-10 is a migration;
   # everything in Phase 3 is additive (AD-19/20/21), so those epics can be
   # reordered freely by market demand without rework.
   # HARD GATES: 10 before 5/14/19/20 | 11 before 4-6d and 7 | 12 before
-  # 16/17/18. Epic 12 before epic 5 is a PREFERENCE, not a gate.
+  # 16/17/18 | 21-1/21-2 before 21-3..21-8. Epic 12 before epic 5 is a
+  # PREFERENCE, not a gate.
   # Story keys below are the FR blocks; detailed specs are generated per
   # tier at tier start, per the "create the next story after the previous
   # one is done" convention.
@@ -149,6 +152,23 @@ development_status:
   # own web/mobile surface stories, executed backend-first WITHIN the epic.
   # The alternative — separate surface epics — is what produced the 26
   # deferred surface items and stories 4-2b/4-2c/4-2d.
+  # ===================================================================
+
+  # ===================================================================
+  # 3PL CORRECT-COURSE (Sprint Change Proposal, 2026-09-19, approved)
+  # Epic 21 — clients, billing, client portal, ASN, per-client reporting.
+  # Ratified as AD-23 (client dimension, defaulted non-null, one system-
+  # owned `self` client per tenant — D2C is its one-client case), AD-24
+  # (second RLS variable app.client_id; operator sessions see the whole
+  # tenant, portal sessions see only their client), AD-25 (billing as a
+  # ledger projection; storage via a rebuildable daily snapshot; invoices
+  # immutable once issued). Source design: _bmad-output/specs/spec-3pl/
+  # (SPEC, schema, billing-model, architecture) — story specs must list
+  # all four files in their context: frontmatter. 21-1 is the programme's
+  # second migration-shaped change; it lands after epic-10's migration is
+  # merged and stable, and reuses its migration checklist + review
+  # machinery. Subscription billing (PRD OQ4) is NOT covered — distinct
+  # product, open question stays open.
   # ===================================================================
 
   # TIER 0 — the one foundational migration. BLOCKS epic-5: transfers,
@@ -178,6 +198,22 @@ development_status:
   11-6-web-variant-and-kit-surfaces: backlog
   11-7-mobile-variant-aware-picking: backlog
   epic-11-retrospective: optional
+
+  # EPIC 21 — 3PL (correct-course 2026-09-19). Migration pair 21-1/21-2 runs
+  # in PHASE 0 (parallel to epic-11, after epic-10 lands); 21-3..21-8 are
+  # PHASE 2, additive on top of the dimension, run parallel to Phase 1.
+  # Backend-first within the epic; there is deliberately NO mobile surface
+  # story (floor work stays client-agnostic — cross-client waves untouched).
+  epic-21: backlog
+  21-1-client-dimension-migration: backlog
+  21-2-client-isolation-rls: backlog
+  21-3-rate-cards: backlog
+  21-4-metering-and-storage-snapshots: backlog
+  21-5-client-invoices: backlog
+  21-6-advance-shipment-notices: backlog
+  21-7-client-portal: backlog
+  21-8-per-client-service-reporting: backlog
+  epic-21-retrospective: optional
 
   # Touches ALREADY-SHIPPED code: conformance is enforced inside the
   # existing putaway (3.5) and pick (4.3) commands.
