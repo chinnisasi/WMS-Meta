@@ -2,7 +2,7 @@
 title: 'Shipment address model'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 80c7515 / wms-fe 9719c12'
@@ -101,6 +101,8 @@ context:
 
 ## Spec Change Log
 
+**2026-09-19, review patch round (commit 27c137e wms-be / 2537fb5 wms-fe):** the origin is normalized before hashing in `warehouse.command.ts` (G1); `assertAddress` now types every field before shaping (non-string → 400 by name, never coerced or silently dropped for line2), treats `null` like absent (400, not a TypeError), and enforces line2's 200-char ceiling (G2); ceiling + divergent-origin + warehouse pre-11.1-replay tests added (G1/G2); the FE parser takes a role label and article-safe copy, and the warehouse form parses before `setPending(true)` (G3/G4); four files gained trailing newlines. No contract change — openapi and the generated FE client are untouched by the patch.
+
 ## Review Triage Log
 
 *28 findings (17 blind-hunter, 8 edge-case-hunter, 3 verification-gap), all verified at their cited locations on 2026-09-19. 19 route to patch in 5 root-cause groups; 9 rejected (4 false, 5 low-out-of-scope). No intent gaps, no spec changes — `review_loop_iteration` stays 0.*
@@ -145,7 +147,11 @@ context:
 
 ## Verification
 
-**Commands:**
+**Final run (2026-09-19, post-patch, both repos at 27c137e / 2537fb5):**
+- `wms-be`: jest 36 suites / **623 passed** (620 + the 3 patch tests), `tsc --noEmit` clean, `eslint` clean, `db:migrate && db:verify` round-trip OK, `openapi:export` → no diff
+- `wms-fe`: `bun test` **268 pass / 0 fail** (267 + the origin-refusal pin), `tsc --noEmit` clean, `eslint` clean, `next build` OK, `src/lib/api/generated` diff-clean
+
+**Commands (original run, pre-patch):**
 - `wms-be`: `bun run db:migrate && bun run db:verify` -- expected: migrations apply, round-trip proves schema↔migrations match
 - `wms-be`: `npx jest` -- expected: all suites green incl. the new address suite
 - `wms-be`: `npx tsc --noEmit && npx eslint .` -- expected: clean

@@ -195,7 +195,7 @@ development_status:
   # gates epic-7 (Shopify is product->variant; without variants the channel
   # mapping is lossy by construction).
   epic-11: in-progress
-  11-1-shipment-address-model: in-progress
+  11-1-shipment-address-model: review
   11-2-sku-physical-attributes-and-origin: backlog
   11-3-product-variants: backlog
   11-4-kits-and-bundles: backlog
