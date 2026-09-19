@@ -159,7 +159,7 @@ development_status:
   epic-10: in-progress
   10-1-fractional-quantity-migration: done
   10-2-uom-vocabulary-and-precision: done
-  10-3-catch-weight-handling-units: review
+  10-3-catch-weight-handling-units: done
   10-4-measured-stock-reconciliation: backlog
   10-5-web-fractional-quantity-surfaces: backlog
   10-6-mobile-decimal-and-catch-weight-capture: backlog
