@@ -2,7 +2,7 @@
 title: 'Product variants'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 126b592 / wms-fe 3dd9c96'
@@ -112,6 +112,40 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+**Review of the implemented diff (step-04, iteration 0) — three layers: blind-hunter (15), edge-case-hunter (5), verification-gap (4 headline + an artifact note). 24 findings, verdicts rendered after verification at cited locations.**
+
+| # | Finding | Verdict | Evidence / route |
+|---|---------|---------|------------------|
+| 1 | `countAttachedSkus`/`import.command.ts` have unbalanced parens (cannot compile) | false | `od` byte-dumps: line 576 ends `productId)));`, import line 291 ends `id))];` — both balanced. The rendered diff drops a paren in long lines (the verification-gap layer independently flagged the same transcription artifact). tsc 0, 651/651 tests green |
+| 2 | `drizzle/meta/0032_snapshot.json` missing from the diff | false | File committed (152,832 bytes); excluded from the review diff as generated. `db:verify` round-trip green proves schema↔migrations match |
+| 3 | `ProductCommand.edit`'s UPDATE has no unique-violation backstop — a concurrent rename losing `products_tenant_id_name_unique` is a raw 500, create maps it | low | Confirmed: edit's catch wraps only the key insert. → **patch** (wrap like create, map to `duplicateProductName`) |
+| 4 | SKU attach/re-value + import resolution plain-SELECT the product — concurrent axes edit can orphan coverage; concurrent identical attaches both pass the duplicate check | medium | Confirmed: `ProductCommand.edit` takes `for('update')` but the three other product reads take no lock; read-committed allows the interleaving. One `.for('update')` per site serializes every product-row writer (closes all three windows). → **patch** |
+| 5 | POST `/catalog/products` answers 201 but declares `@ApiOkResponse` — openapi + FE client carry only 200 | low | Confirmed: controller:227 `ApiOkResponse` with `@HttpCode(CREATED)`; the import route (:156) declares `status: CREATED` — mixed precedent, this route should follow it. → **patch** |
+| 6 | `GET …/catalog/skus?productId=` ships untested | low | Confirmed (verification-gap headline 1): no request in any suite carries the param; a filter regression leaves all list tests green. → **patch** (test) |
+| 7 | `catalog.sku_edited` payload unchanged on attach/detach | false | The frozen matrix pins `catalog.sku_edited` **as before**; the deferred consumers are recorded in PENDING.md. A payload change would contradict the spec |
+| 8 | 0032 header comment: "needs no fail-fast re-run guard: CREATE TABLE and ADD COLUMN cannot be applied twice" is wrong for the appended ADD CONSTRAINT/POLICY | low | Confirmed: those statements are not re-runnable; the journal is the actual guard (the 0028/0031 pattern). Comment reword. → **patch** (docs) |
+| 9 | `variant_values` cell grammar has no `;`/`=` escaping | low | Rejected: the `uom_conversions` cell grammar (`box:12;case:144`) carries the identical limitation, equally undocumented — consistent grammar; everyday variant values (`M`, `Red`) rarely contain separators; a fix adds escaping machinery |
+| 10 | Unknown-key error message reads inverted ("has no axis") | false | "variantValues has no axis \"fit\" on this product" states the correct fact — the product does not declare `fit` — and reads differently from the missing-key arm ("is missing the axis \"colour\"") |
+| 11 | `validateRow` comment: a product cell without values "fails the coverage check … naming the missing axis" | low | Confirmed wrong: the null branch throws "variantValues must be an object…", naming no axis; the test asserts only `variantValues`. → **patch** (comment) |
+| 12 | PENDING.md: channel-mapping tables "still 11-4's deliverable" | low | Confirmed wrong: epics.md — Epic 11 "Gates **Epic 7's** channel mapping"; 11-4 is kits/bundles. → **patch** (docs) |
+| 13 | README's documented import header omits the 11.2 columns | low | Pre-existing: the line is unchanged by this diff (stale since 11-2's columns). Not caused by this story. → **defer** |
+| 14 | `decodeCursorSafe`/axes-decorator duplication instead of reuse | false | 12 per-file `decodeCursorSafe` copies repo-wide — per-command self-containment is the established pattern; the shared-validator rule applied to `assertVariantValues` because two callers enforce ONE rule |
+| 15 | `ProductSnapshot.createdAt` Date/string duality; create route's 400 text names `empty-product-edit` | low | createdAt: false by precedent — `sku.command.ts:82/658` types it identically and populates from the row; wire JSON is identical. The 400-text half is real (only the PATCH can produce it). → **patch** (docs, folded with #8/#11) |
+| 16 | verification-gap: `productId` filter untested | low | Pre-verified by the layer's filed evidence. → **patch** (test) |
+| 17 | verification-gap: products keyset pagination never driven past page 1 | low | Pre-verified (also acknowledged in Implementation Notes). → **patch** (test) |
+| 18 | verification-gap: `ne(skus.id, …)` self-exclusion untested on both branches | low | Pre-verified: no test re-submits a SKU's own current values; dropping the clause would 409 legitimate retries with CI green. → **patch** (test) |
+| 19 | verification-gap: empty-patch message pin does not adopt `productId`/`variantValues` | low | Pre-verified: the `sku-attributes.spec.ts:293` loop asserts only the five 11-2 names. → **patch** (test) |
+| 20 | edge-case: edit unique-violation → 500 on rename race | low | Same defect as #3 — one root cause, grouped |
+| 21 | edge-case: attach commits after the axes edit's empty-attach check → values orphaned by construction | medium | Same defect as #4 — one root cause, grouped |
+| 22 | edge-case: two concurrent attaches with identical values both pass the command-side check — duplicate variants land | medium | Same root cause as #4: the `for('update')` lock serializes every product-row writer, so the second attach re-reads committed state and refuses. Grouped |
+| 23 | edge-case: contract/FE client carry no 201 shape for POST products | low | Same defect as #5 — grouped |
+| 24 | edge-case: malformed (non-uuid) `productId` path param → Postgres 22P02 → 500 instead of 404 | low | Confirmed: `ProductCommand.edit` runs `eq(products.id, …)` with no shape guard, while the attach path in this same diff added exactly that guard. → **patch** |
+
+
+**Patch round (iteration 0 → patch, no loopback):** all nine groups landed in wms-be e8140db + meta f2de0f2 (+ FE regen 23711ad, mine). **The new keyset test found a real defect beyond the review findings:** `ProductCommand.list` handed `buildPage` the pre-sliced `pageRows` instead of the full `limit+1` batch, so `nextCursor` was always null and every product list collapsed to one page — fixed to the `sku.list` shape (the full batch decides the cursor) and pinned by the walk-to-exhaustion test. Deferred #13 (README header staleness) remains recorded in deferred-work.md below this story's lifetime — pre-existing, untouched.
+
+**Routing:** no intent_gap, no bad_spec. Nine patch groups: product-row locking (#4/#21/#22 — the one `.for('update')` fix, medium); edit unique-violation backstop (#3/#20); openapi 201 declaration (#5/#23, FE regen with it); malformed-productId guard (#24); test gaps (#6/#16 filter, #17 keyset, #18 self-exclusion, #19 empty-patch message); docs+comments (#8, #11, #12, #15's 400-text). One defer: #13 (README header staleness, pre-existing). Rejected: #1, #2, #7, #9, #10, #14, and #15's createdAt half.
 
 ## Design Notes
 
