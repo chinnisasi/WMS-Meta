@@ -196,7 +196,7 @@ development_status:
   # mapping is lossy by construction).
   epic-11: in-progress
   11-1-shipment-address-model: done
-  11-2-sku-physical-attributes-and-origin: backlog
+  11-2-sku-physical-attributes-and-origin: review
   11-3-product-variants: backlog
   11-4-kits-and-bundles: backlog
   11-5-dimensional-capacity: backlog

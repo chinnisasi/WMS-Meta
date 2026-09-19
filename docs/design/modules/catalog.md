@@ -12,7 +12,7 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `skus` (`src/shared/db/schema.ts:272`) | Sellable units: code, name, base `uom`, GST bps, HSN, tracking flags, reorder defaults, barcode | `skus_tenant_id_code_unique` **and** `skus_tenant_id_barcode_unique`. `uom` is CHECK-constrained to the closed vocabulary (`skus_uom_check`, `drizzle/0027_uom_vocabulary.sql:351`). `reorder_point`/`reorder_qty` are `bigint` **milli-units**. `barcode` is NOT NULL — generated server-side as a uuidv7 when the file omits one. **`code` is immutable**; no create endpoint exists — SKUs enter through import only |
+| `skus` (`src/shared/db/schema.ts:272`) | Sellable units: code, name, base `uom`, GST bps, HSN, tracking flags, **static physical attributes (11.2)**, reorder defaults, barcode | `skus_tenant_id_code_unique` **and** `skus_tenant_id_barcode_unique`. `uom` is CHECK-constrained to the closed vocabulary (`skus_uom_check`, `drizzle/0027_uom_vocabulary.sql:351`). `reorder_point`/`reorder_qty` are `bigint` **milli-units**. `barcode` is NOT NULL — generated server-side as a uuidv7 when the file omits one. **`code` is immutable**; no create endpoint exists — SKUs enter through import only |
 | `uom_conversions` (`schema.ts:310`) | `factor` base units per alternate `uom`, per SKU | `uom_conversions_sku_id_uom_unique`; `factor` is a positive `integer`; target `uom` CHECK-constrained to the same vocabulary |
 | `batches` (`schema.ts:344`) | Batch **identity** for batch-tracked SKUs: code, mfg/expiry dates, status | `batches_tenant_sku_code_unique`; `batches_status_check` ∈ {`active`,`blocked`} (`drizzle/0010_sharp_hardball.sql:71`). **No location or quantity column, by design** — those live in inventory's `batch_on_hand` |
 | `serials` (`schema.ts:378`) | Serial **identity**: serial number, status | `serials_tenant_sku_serial_unique`; `serials_status_check`. **No location column** — a serial's location is derived from its latest `ledger_events` row |
@@ -35,6 +35,8 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 | `uom` | text | NO | — | `skus_uom_check` | One of 35 canonical units (10.2). **Also immutable** — no `uom` on the PATCH DTO, which is what makes the serial rule's `current.uom` read sound |
 | `gst_rate_bps` | integer | NO | — | — | **Basis points, not a quantity** (18% = 1800) |
 | `hsn` | text | **YES** | — | — | Goods classification. A 3PL would need SAC instead |
+| `weight_grams` / `length_mm` / `width_mm` / `height_mm` | integer | **YES** | — | `skus_weight_grams_bounded`, `skus_{length,width,height}_mm_bounded` (all `0031`) | **Static physical attributes (11.2), WYSIWYG integers** — grams and millimetres, what carriers rate from. All `> 0`; `weight_grams` ≤ 1,000,000 (1 tonne), each dimension ≤ 10,000. **NOT the per-unit catch weight** — that lives on `handling_units.weightGrams` (10.3); the two answer different questions (what the SKU weighs vs what one physical unit weighed) and no backfill ever copies one to the other |
+| `country_of_origin` | text | **YES** | — | `skus_country_of_origin_iso_alpha2` (`0031`) | ISO 3166-1 alpha-2 uppercase (`^[A-Z]{2}$`) |
 | `batch_tracked` / `serial_tracked` | boolean | NO | `false` | — | **Both true is refused at pick** until story 14-1 |
 | `reorder_point` / `reorder_qty` | bigint `mode:'number'` | NO | `0` | — | **Milli-units** — UoM-denominated, so 10.1 scaled them. Policy thresholds, not stock |
 | `barcode` | text | NO | — | `unique (tenant, barcode)` | Collision → `409 duplicate-barcode` naming the conflicting SKU |
@@ -98,7 +100,7 @@ sequenceDiagram
 
   Ops->>Ctl: POST /catalog/imports (multipart)
   Ctl->>Cmd: run(file)
-  Cmd->>Cmd: PARSE the file  (import.command.ts:152-155)
+  Cmd->>Cmd: PARSE the file  (import.command.ts:166-169)
   Cmd->>Cmd: assertPermission('catalog.import')  (:170)
   Note over Cmd: ⚠ INVERTED — parse precedes authority.<br/>An unauthorised caller drives a 5 MB parse<br/>and learns parse outcomes. Verified; tracked.
   loop each row
@@ -147,7 +149,7 @@ Guards, in the order they actually run:
 3. Payload hash over `{sha256(file bytes), mode}` `:159` — never the parsed rows.
 4. `assertPermission(…, 'catalog.import')` `:170`.
 5. Replay lookup `:175`.
-6. Fix-set resolution (fix mode only) `:199-218`.
+6. Fix-set resolution (fix mode only) `:212-231`.
 7. Per-row validation, then duplicate detection.
 8. Bulk insert of valid rows, chunked at 2,000.
 
@@ -155,17 +157,19 @@ Writes: `skus`, `uom_conversions`, `catalog_imports`, `catalog_import_errors`, `
 
 Response = idempotency snapshot = `{importId, mode, committedRows, failedRows, skippedRows, errors[]}`.
 
-### `SkuCommand.edit` (`sku.command.ts:141`)
+### `SkuCommand.edit` (`sku.command.ts:181`)
 
 PATCH-only; `code` and `uom` are not editable.
 
-Guards: empty-body check `:152` → hash over the **base-unit** field values `:170` → `sku.edit` capability `:182` → replay `:187` → SKU exists in tenant (404) `:207` → serial-tracking × fractional-UoM refusal `:227` → quantity precision conversion `:241-249` → barcode uniqueness pre-check (409 `duplicate-barcode` naming the conflicting SKU) `:254-263` → UPDATE.
+Guards: empty-body check `:202` → hash over the **base-unit** field values `:226` → `sku.edit` capability `:238` → replay `:247` → SKU exists in tenant (404) `:270` → **attribute bounds (`assertSkuAttributes`, 11.2 — behind the replay lookup, the 10.2 rule)** `:279` → serial-tracking × fractional-UoM refusal `:297` → quantity precision conversion `:354-366` → barcode uniqueness pre-check (409 `duplicate-barcode` naming the conflicting SKU) `:378` → UPDATE.
+
+The five physical attributes (`weightGrams`/`lengthMm`/`widthMm`/`heightMm`/`countryOfOrigin`) are **optional PATCH fields**: absent = unchanged, `null` = cleared (the `hsn` template). Because the payload hash is a spread over the fields, an omitted key drops out of the JSON — **pre-11.2 idempotency keys still replay 200** (no hash break, unlike 11.1's fixed-key-position addresses).
 
 Emits `catalog.sku_edited` `{skuId, code}`.
 
-### `SkuCommand.list` (`sku.command.ts:86`)
+### `SkuCommand.list` (`sku.command.ts:116`)
 
-A read, open to any tenant member. Page + conversions in **one** tenant transaction (`:95-124`); conversions are fetched for the page's SKUs only and stitched in memory.
+A read, open to any tenant member. Page + conversions in **one** tenant transaction (`:133-158`); conversions are fetched for the page's SKUs only and stitched in memory.
 
 ### `CatalogFacade.ensureBatches` / `ensureSerials`
 
@@ -181,23 +185,23 @@ Not idempotency-keyed commands — identity creation. Both: fail-closed tracked-
 
 The import's whole point: valid rows land, bad rows are reported, and there is no all-or-nothing rollback. Mechanically:
 
-- Every row is validated into either `valid` or `errors` (`:230-233`). No exception escapes a row — `validateRow` returns a tagged result.
-- Duplicate detection then filters `valid` into `insertable`, pushing one error per rejected row (`:242-259`).
+- Every row is validated into either `valid` or `errors` (`:242-253`). No exception escapes a row — `validateRow` returns a tagged result.
+- Duplicate detection then filters `valid` into `insertable`, pushing one error per rejected row (`:255-277`).
 - `committedRows = insertable.length`, `failedRows = errors.length`, and **both the SKU inserts and the error rows commit in the same transaction** as the `catalog_imports` run row and the idempotency record.
 
 So a failure list is durable evidence, not a transient response body — which is what makes fix mode possible.
 
-The only things that abort the whole run are file-level: too large, unparseable, unsupported type, no data rows, or a unique-violation race against a concurrent import (`:290-297`).
+The only things that abort the whole run are file-level: too large, unparseable, unsupported type, no data rows, or a unique-violation race against a concurrent import (`:302-318`).
 
-### Row validation order (`validateRow`, `import.command.ts:714`)
+### Row validation order (`validateRow`, `import.command.ts:746`)
 
-Shape first, one error per row, **first failure wins**: `sku_code` present/≤64 → `name` present/≤200 → `uom` present/≤32 → **`uom` resolves in the vocabulary** → `gst_rate` integer 0–10000 → `hsn` ≤32 → `batch_tracked` → `serial_tracked` → **serial × fractional-UoM refusal** → `reorder_point` → `reorder_qty` → `barcode` ≤64 → `uom_conversions` parsing.
+Shape first, one error per row, **first failure wins**: `sku_code` present/≤64 → `name` present/≤200 → `uom` present/≤32 → **`uom` resolves in the vocabulary** → `gst_rate` integer 0–10000 → `hsn` ≤32 → `batch_tracked` → `serial_tracked` → **serial × fractional-UoM refusal** → `catch_weight_tracked` → **catch weight × serial refusal** → `reorder_point` → `reorder_qty` → `barcode` ≤64 → **the physical attributes (11.2)**: `weight_grams`/`length_mm`/`width_mm`/`height_mm` parse via `parseAttributeNumber` (`:966` — blank → null, the `^\d+(\.\d+)?$` grammar which ADMITS the decimal shape; only a minus sign or a non-numeric spelling is a row error naming the CSV column) and `country_of_origin`, then the ONE shared validator `assertSkuAttributes` rules on every present value — so a fraction or an over-cap number is refused THERE, naming the API field (`weightGrams`, not `weight_grams`) → `uom_conversions` parsing.
 
-Duplicate checks run afterwards because they need the whole file plus the tenant: file-internal code (naming the earlier row number), tenant code, then barcode (naming the conflicting SKU). Errors are sorted by `rowNumber` before persisting (`:264`) so the report is in document order regardless of which pass produced each one.
+Duplicate checks run afterwards because they need the whole file plus the tenant: file-internal code (naming the earlier row number), tenant code, then barcode (naming the conflicting SKU). Errors are sorted by `rowNumber` before persisting (`:278`) so the report is in document order regardless of which pass produced each one.
 
 Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`.
 
-### Fix mode (`import.command.ts:195-226`)
+### Fix mode (`import.command.ts:212-231`)
 
 Set membership, not diffing, and deliberately has **no import picker**:
 
@@ -211,18 +215,18 @@ A fix upload is a full file, not a delta — the operator re-submits the correct
 
 ### Row error reporting
 
-`rowNumber` is the **1-based data-row index with the header excluded**, and it is renumbered in `finalizeRows` (`:619-632`) after blank rows are dropped — so it is gap-free and identical between CSV and XLSX, even though CSV's `skip_empty_lines` already compresses blanks while XLSX rows carry sheet-row gaps.
+`rowNumber` is the **1-based data-row index with the header excluded**, and it is renumbered in `finalizeRows` (`:639-653`) after blank rows are dropped — so it is gap-free and identical between CSV and XLSX, even though CSV's `skip_empty_lines` already compresses blanks while XLSX rows carry sheet-row gaps.
 
-`skuCode` is null when the row failed before a code could be read. Note the pattern at `:763-780`: helpers that validate a field return an error with `skuCode: null`, and the caller re-stamps it (`{...result.error, skuCode: code}`) once a code is known.
+`skuCode` is null when the row failed before a code could be read. Note the pattern at `:676-990`: helpers that validate a field return an error with `skuCode: null`, and the caller re-stamps it (`{...result.error, skuCode: code}`) once a code is known.
 
 ### Header contract and parsing
 
-Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `reorder_point`, `reorder_qty`, `barcode` (`:86-96`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable`.
+Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `reorder_point`, `reorder_qty`, `barcode` (`:88-102`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2 through the parser**: a CSV carrying the new columns against a pre-11.2 binary would be rejected wholesale, so the header contract and the row parser grew together.
 
 Three parser traps handled explicitly:
 
-- **CSV**: `relax_column_count` keeps parsing a row with extra fields but parks them in `__parsed_extra` — silent data loss, so it is rejected (`:546-548`). The header check runs inside csv-parse's `columns` callback but **captures** the problem rather than throwing, so the code never depends on how csv-parse propagates callback errors (`:500-541`).
-- **XLSX**: a workbook with more than one worksheet is rejected — only the first would silently win (`:574-576`). `cellText` (`:635`) unwraps formulas (`{result}`), rich text, dates and booleans.
+- **CSV**: `relax_column_count` keeps parsing a row with extra fields but parks them in `__parsed_extra` — silent data loss, so it is rejected (`:553-566`). The header check runs inside csv-parse's `columns` callback but **captures** the problem rather than throwing, so the code never depends on how csv-parse propagates callback errors (`:527-551`).
+- **XLSX**: a workbook with more than one worksheet is rejected — only the first would silently win (`:594-596`). `cellText` (`:655`) unwraps formulas (`{result}`), rich text, dates and booleans.
 - **Duplicate header column**: rejected in both formats because the last occurrence would silently win.
 
 Bulk inserts are chunked at 2,000 rows (`INSERT_CHUNK_ROWS`, `:405`): Postgres binds at most 65,535 parameters per statement, and 10,000 rows × 12 columns would exceed it and 500 a file that passed the row cap.
@@ -256,8 +260,8 @@ A serial-tracked SKU moves exactly one whole unit per serial; four call sites co
 
 Two refusal sites, one message (`serialTrackedFractionalUomDetail`, `uom.ts:395`):
 
-- Import, when a row sets `serial_tracked` on a fractional unit (`import.command.ts:771-776`) — a row error, so the rest of the file commits.
-- `SkuCommand.edit`, when `serialTracked` is turned **on** for a SKU whose stored `uom` is fractional (`sku.command.ts:227-234`) — a 400.
+- Import, when a row sets `serial_tracked` on a fractional unit (`import.command.ts:806`) — a row error, so the rest of the file commits.
+- `SkuCommand.edit`, when `serialTracked` is turned **on** for a SKU whose stored `uom` is fractional (`sku.command.ts:297-315`) — a 400.
 
 The rule is a **precision lookup**, not a hand-maintained list of "discrete" spellings — which is the point: a legitimate whole-unit unit nobody remembered to enumerate no longer gets a false refusal (`test/uom-precision.spec.ts:863`).
 
@@ -265,10 +269,10 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 
 `reorder_point` / `reorder_qty` are stored in milli-units. Both write paths convert **behind the replay lookup**:
 
-- Import: `parseQuantityMilli` (`:677`) — empty cell means zero; a non-numeric or over-ceiling value is a row error; **a value finer than the row's own unit is a row error, not a rounding** (`:699-704`).
-- Edit: `assertRecordableQuantity` (`sku.command.ts:241-249`), called after the SKU row — and therefore its unit — is in hand.
+- Import: `parseQuantityMilli` (`:708`) — empty cell means zero; a non-numeric or over-ceiling value is a row error; **a value finer than the row's own unit is a row error, not a rounding** (`:731-735`).
+- Edit: `assertRecordableQuantity` (`sku.command.ts:362-366`), called after the SKU row — and therefore its unit — is in hand.
 
-`catalog.controller.ts:220-227` records why the controller must not scale: converting at the edge would put the precision refusal in front of the replay, answering 400 to an op that already committed. `toSnapshot` (`sku.command.ts:332`) is the module's only SKU read shape — base units leave there, milli-units stay in the column.
+`catalog.controller.ts:230-236` records why the controller must not scale: converting at the edge would put the precision refusal in front of the replay, answering 400 to an op that already committed. `toSnapshot` (`sku.command.ts:458`) is the module's only SKU read shape — base units leave there, milli-units stay in the column.
 
 ---
 
@@ -278,7 +282,7 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 |---|---|
 | SKU codes and barcodes are unique per tenant | `skus_tenant_id_code_unique`, `skus_tenant_id_barcode_unique`, plus the import's file-internal + tenant pre-checks |
 | A duplicate is rejected, never merged | Row-level `duplicate-sku-code` naming the code; the message says so verbatim |
-| Every SKU has a barcode | NOT NULL + `barcode: row.barcode ?? uuidv7()` (`import.command.ts:284`) |
+| Every SKU has a barcode | NOT NULL + `barcode: row.barcode ?? uuidv7()` (`import.command.ts:304`) |
 | SKU code and base UoM are immutable | No create endpoint; `PatchSkuDto` (`catalog.dto.ts:127`) carries neither |
 | Every stored `uom` is canonical | `resolveUom` at the only creation path + `skus_uom_check` / `uom_conversions_uom_check` |
 | A serial-tracked SKU is measured in whole units | The two refusal sites above |
@@ -286,7 +290,7 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | Batch and serial rows carry no location or quantity | No such column exists; inventory owns `batch_on_hand`, the ledger owns serial location |
 | Identity creation is idempotent and never rewrites | `onConflictDoNothing` + re-select in both ensures |
 | Batch/serial arms open only for tracked SKUs | `assertSkuTracked` (`catalog.facade.ts:409`) |
-| One conversion per (sku, uom), factor a positive integer | `uom_conversions_sku_id_uom_unique`; per-row repeat check (`:830-835`); `INT_MAX` bound |
+| One conversion per (sku, uom), factor a positive integer | `uom_conversions_sku_id_uom_unique`; per-row repeat check (`:921-930`); `INT_MAX` bound |
 | A conversion target is never the SKU's own base unit | `:824-829` |
 | Catalog tables are catalog-exclusive | `test/architecture.spec.ts` bans writes outside the module; siblings use `CatalogFacade` |
 
@@ -307,9 +311,9 @@ Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the 
 
 ## Gotchas
 
-**The file is parsed before the capability is checked.** `import.command.ts:152-155` runs the size cap and the full CSV/XLSX parse *before* the transaction opens at `:164` and therefore before `assertPermission` at `:170`. A caller without `catalog.import` can drive a 5 MB parse and learn `file-unreadable` / `unsupported-file-type` / `import-too-large` outcomes. This inverts the guide's "authority before validation" rule, which exists precisely so an unauthorized caller learns nothing from error messages. Moving the parse inside the transaction is the fix; it is not recorded in `../PENDING.md`.
+**The file is parsed before the capability is checked.** `import.command.ts:166-169` runs the size cap and the full CSV/XLSX parse *before* the transaction opens at `:178` and therefore before `assertPermission` at `:184`. A caller without `catalog.import` can drive a 5 MB parse and learn `file-unreadable` / `unsupported-file-type` / `import-too-large` outcomes. This inverts the guide's "authority before validation" rule, which exists precisely so an unauthorized caller learns nothing from error messages. Moving the parse inside the transaction is the fix; it is not recorded in `../PENDING.md`.
 
-**A concurrent-import unique violation names the wrong SKU.** `:294` throws `duplicateSkuCode(insertable[0]!.code)` — the *first* insertable row's code, not the one that actually collided. `sku.command.ts:321` has the same shape, throwing `duplicateBarcode(fields.barcode ?? '', '')` with an empty conflicting code. Both are rare races (pinned by `test/catalog.spec.ts:832,863`), but the message misleads whoever hits one.
+**A concurrent-import unique violation names the wrong SKU.** `:314` throws `duplicateSkuCode(insertable[0]!.code)` — the *first* insertable row's code, not the one that actually collided. `sku.command.ts:447` has the same shape, throwing `duplicateBarcode(fields.barcode ?? '', '')` with an empty conflicting code. Both are rare races (pinned by `test/catalog.spec.ts:832,863`), but the message misleads whoever hits one.
 
 **`conversionRows` is index-aligned, not id-joined.** `:298-306` maps `insertable.flatMap((row, i) => … skuRows[i]!.id)`. It is correct only because `skuRows` is built from `insertable` in order at `:271`. Any filtering, sorting or partial retry between those two points silently attaches conversions to the wrong SKU.
 
