@@ -2,8 +2,9 @@
 title: '10-3 Catch weight and handling units'
 type: 'feature'
 created: '2026-09-18'
-status: 'draft'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '07259090f912abe5704cf083ada8c2894ec93aa5'
 review_loop_iteration: 1
 context:
   - '_bmad-output/implementation-artifacts/epic-10-context.md'
@@ -119,21 +120,21 @@ Statuses: `active` · `pending_approval` · `rejected` · `packed`. No FK constr
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `drizzle/0028_catch_weight_handling_units.sql` -- create `handling_units`; add `skus.catch_weight_tracked` default `false`; RLS policy + status CHECK **here, never in `schema.ts`** -- repo convention. **No `ledger_events` change.**
-- [ ] `drizzle/meta/_journal.json` + `drizzle/meta/0028_snapshot.json` -- journal entry with matching tag; snapshot **tracked in git** -- an untracked snapshot makes the next `db:generate` emit a duplicate
-- [ ] `src/shared/db/schema.ts` -- declare `handlingUnits` and the `skus` flag -- structure only
-- [ ] `src/modules/catalog/handling-unit.ts` -- `HANDLING_UNIT_STATUSES` as an `as const` tuple, `MAX_HANDLING_UNIT_WEIGHT_GRAMS`, `assertCatchWeightGrams` -- one resolution point; the status tuple follows the controlled-vocabulary pattern (tuple + DB CHECK + e2e pin)
-- [ ] `src/modules/catalog/catalog.facade.ts` -- `createHandlingUnits`, `settleHandlingUnitIntake` (`pending_approval → active | rejected`), `markHandlingUnitsPacked`, `markHandlingUnitsAdjusted`, all on the caller's transaction -- **the single write seam** covering all four transitions; siblings never touch the table (AD-6)
-- [ ] `src/modules/inbound/receiving.command.ts` + `receiving.dto.ts` -- per-unit `weightsGrams` on the GRN line; count check above the transaction; unit rows created **through the catalog facade** inside it, `active` for applied and `pending_approval` for excess
-- [ ] `src/modules/inbound/receiving.command.ts` (`decideOverReceipt`) -- flip `pending_approval → active` on approve, `→ rejected` on reject -- the path the first draft missed
-- [ ] `src/modules/inventory/inventory.command.ts` + `inventory.dto.ts` -- `handlingUnitIds` on the adjustment, count-checked against `|quantityDelta|` above the transaction, status moved **via the facade** -- without a way to NAME the units, the write-off is untargetable and pack fails open
-- [ ] `src/modules/inbound/qc.command.ts` -- refuse a catch-weight SKU by name, beside the existing serial-tracked refusal at `:188-190` -- the same reasoning; deferred rather than silently wrong
-- [ ] `src/modules/catalog/sku.command.ts` + `import.command.ts` -- persist `catch_weight_tracked`; refuse `catch_weight && serial_tracked` by name
-- [ ] `src/modules/outbound/pack.command.ts` + `outbound.dto.ts` -- **per-SKU** handling-unit ids; sorted before hashing; server-side assignment to lines from the `picks.orderLineId` split; the full refusal set; conditional `status = 'active'` write; ids into each line's existing `pack.packed` reference doc
-- [ ] `src/modules/inventory/ledger-registry.ts` -- add `handlingUnitIds?` to the `'pack'` arm only -- arms append; no event type is reshaped and no hashed field list changes
-- [ ] `src/modules/inbound/receiving.facade.ts` + `receiving.dto.ts` -- `catchWeightTracked` in the catalog snapshot, on the caller's transaction
-- [ ] `test/catch-weight.spec.ts` -- every I/O matrix row over real HTTP, including a **fractional-quantity** catch-weight SKU and the full over-receipt approve/reject cycle
-- [ ] `test/architecture.spec.ts` -- a `catalog` block asserting `handling_units` (and `serials`, `batches`, `skus`) are written only by `catalog` -- catalog has NO block today, so this closes a standing gap while the table is new and the guard is free
+- [x] `drizzle/0028_catch_weight_handling_units.sql` -- create `handling_units`; add `skus.catch_weight_tracked` default `false`; RLS policy + status CHECK **here, never in `schema.ts`** -- repo convention. **No `ledger_events` change.**
+- [x] `drizzle/meta/_journal.json` + `drizzle/meta/0028_snapshot.json` -- journal entry with matching tag; snapshot **tracked in git** -- an untracked snapshot makes the next `db:generate` emit a duplicate
+- [x] `src/shared/db/schema.ts` -- declare `handlingUnits` and the `skus` flag -- structure only
+- [x] `src/modules/catalog/handling-unit.ts` -- `HANDLING_UNIT_STATUSES` as an `as const` tuple, `MAX_HANDLING_UNIT_WEIGHT_GRAMS`, `assertCatchWeightGrams` -- one resolution point; the status tuple follows the controlled-vocabulary pattern (tuple + DB CHECK + e2e pin)
+- [x] `src/modules/catalog/catalog.facade.ts` -- `createHandlingUnits`, `settleHandlingUnitIntake` (`pending_approval → active | rejected`), `markHandlingUnitsPacked`, `markHandlingUnitsAdjusted`, all on the caller's transaction -- **the single write seam** covering all four transitions; siblings never touch the table (AD-6)
+- [x] `src/modules/inbound/receiving.command.ts` + `receiving.dto.ts` -- per-unit `weightsGrams` on the GRN line; count check above the transaction; unit rows created **through the catalog facade** inside it, `active` for applied and `pending_approval` for excess
+- [x] `src/modules/inbound/receiving.command.ts` (`decideOverReceipt`) -- flip `pending_approval → active` on approve, `→ rejected` on reject -- the path the first draft missed
+- [x] `src/modules/inventory/inventory.command.ts` + `inventory.dto.ts` -- `handlingUnitIds` on the adjustment, count-checked against `|quantityDelta|` above the transaction, status moved **via the facade** -- without a way to NAME the units, the write-off is untargetable and pack fails open
+- [x] `src/modules/inbound/qc.command.ts` -- refuse a catch-weight SKU by name, beside the existing serial-tracked refusal at `:188-190` -- the same reasoning; deferred rather than silently wrong
+- [x] `src/modules/catalog/sku.command.ts` + `import.command.ts` -- persist `catch_weight_tracked`; refuse `catch_weight && serial_tracked` by name
+- [x] `src/modules/outbound/pack.command.ts` + `outbound.dto.ts` -- **per-SKU** handling-unit ids; sorted before hashing; server-side assignment to lines from the `picks.orderLineId` split; the full refusal set; conditional `status = 'active'` write; ids into each line's existing `pack.packed` reference doc
+- [x] `src/modules/inventory/ledger-registry.ts` -- add `handlingUnitIds?` to the `'pack'` arm only -- arms append; no event type is reshaped and no hashed field list changes
+- [x] `src/modules/inbound/receiving.facade.ts` + `receiving.dto.ts` -- `catchWeightTracked` in the catalog snapshot, on the caller's transaction
+- [x] `test/catch-weight.spec.ts` -- every I/O matrix row over real HTTP, including a **fractional-quantity** catch-weight SKU and the full over-receipt approve/reject cycle
+- [x] `test/architecture.spec.ts` -- a `catalog` block asserting `handling_units` (and `serials`, `batches`, `skus`) are written only by `catalog` -- catalog has NO block today, so this closes a standing gap while the table is new and the guard is free
 
 **Acceptance Criteria:**
 - Given six cases received at six weights, when the GRN is submitted, then six `handling_units` rows exist with those exact gram values and the ledger records quantity `6`, not `110400`.
@@ -146,6 +147,16 @@ Statuses: `active` · `pending_approval` · `rejected` · `packed`. No FK constr
 - Given `bun run db:migrate && bun run db:generate` on a fresh database, then **no new migration is emitted**.
 
 ## Implementation Notes
+
+**Deviations taken during implementation, with reasons.**
+
+- **The facade is a thin delegate over file-level in-tx functions** (`handling-unit.store.ts`), not the sole implementation. Putting the writes only on `CatalogFacade` forced `InventoryModule → CatalogModule`, a module-evaluation cycle (catalog → tenancy → putaway → inventory) that `forwardRef` cannot unwind; it broke 25 suites at import time. The repo's existing escape is the file-level in-tx helper (`ensureReceivingBinInTx`, `openQcHoldsForBinsInTx`). AD-6 still holds: every write executes inside `modules/catalog`, and `architecture.spec.ts` pins that.
+- **The read-side status guard was removed** in pack and adjustment so the conditional `.where(status = 'active')` write is the sole authority; the 409 re-reads the still-locked rows to name each real status. With both present, the spec's own mutation check did not bite.
+- **`MAX_HANDLING_UNIT_WEIGHT_GRAMS = 1_000_000`** (1,000 kg). The spec named the constant, not its value.
+- **The fractional-quantity refusal moved to the SHELF, not the bench.** Review found a catch-weight order could be picked and then never packed. The guard now sits in `pick.command.ts`, where the operator can still act, rather than at pack with the hold already committed.
+
+**A latent flake fixed in passing:** `blindReceipt` called `nowUtc()` per invocation, so the replay test hashed two different payloads across a second boundary. It now takes the instant as a parameter.
+
 
 ## Spec Change Log
 
@@ -204,6 +215,42 @@ first revision admitted. Without a location, an **aggregate-scoped** operation c
 resolution is a rule rather than three patches: *a path that can consume a unit either names units explicitly, or it is
 refused for catch-weight SKUs.* Adjustment names them; QC hold is refused. Putaway, pick and bin merge consume nothing,
 so they stay aggregate and untouched.
+
+
+**Loop 3 — CODE review, three layers over the 161.5 kB diff. 25 findings. No `intent_gap`, no `bad_spec`, so no
+loopback: every entry is a local defect in the diff, not a hole in the intent. 8 high, 12 medium, 3 low, 2 rejected.
+Two of the highs were independently found by two layers each, and one was found in a test I added myself.**
+
+| # | Finding | Layer | Verdict | Evidence |
+|---|---------|-------|---------|----------|
+| 21 | **A fractional-UoM catch-weight order is picked, then can NEVER be packed.** Nothing refuses a fractional quantity at order entry, wave or pick — `pick.command.ts` and `order.command.ts` contain no `catchWeightTracked` reference at all. `packedUnitCount` throws 422 at the bench, with stock already committed and picks not undoable. Worse, `ids.slice(0, 1.5)` silently truncates, so a 1.5/1.5 two-line split stamps one case on one line and two on the other | blind + edge + v-gap | **high — patch** | Verified: grep for `catchWeightTracked` in both commands returns nothing. Found by all three layers independently. The spec already establishes "a case is a whole thing" at receipt; the code failed to apply it upstream of pack |
+| 22 | **Neither pack nor adjustment checks a unit's batch.** `batch_id` is justified in three doc comments as what makes `catch_weight × batch` usable, and `pack.command.ts` contains no `batchId` reference. A FEFO pick allocating LOT-A can be packed with a LOT-B case, and the recall trace the column exists for points at the wrong lot | blind + edge | **high — patch** | Verified: zero `batchId` occurrences in `pack.command.ts` |
+| 23 | **`catchWeightTracked` can be flipped on a SKU with live units.** `sku.command.ts:299-300` writes the flag unconditionally. Turning it off strands active units and ships them uncounted; turning it on wedges pack forever | edge | **high — patch** | Verified at the cited lines — no live-unit guard exists |
+| 24 | **A fractional PO open quantity desynchronises unit count from quantity.** `Math.floor(entry.applied / QUANTITY_SCALE)` on an `applied` that can be fractional leaves half a case of live on-hand backed by no `active` unit — un-packable forever | blind + edge | **high — patch** | Both layers, same line. The comment acknowledges the rounding; the case is neither refused nor tested |
+| 25 | **Pack's foreign-SKU 422 and not-catch-weight 400 arms never execute in any test — including the test I tightened.** The covering test scans `PLAIN-CASE` qty 1 against an order picked for `CW-CASE` qty 2, so `assertScanMatchesPicked` throws `pack-mismatch` 422 *before* `resolveHandlingUnits` runs. **My own loop-3 edit tightened the assertion to `toBe(422)` and wrote a comment claiming it pins the contract — it passes on the wrong arm.** Delete either guard and the suite stays green | v-gap + blind | **high — patch (MY ERROR)** | Pre-verified by the layer. I tightened a status assertion without checking *which* 422 it caught, then asserted in a comment that it pinned something it does not |
+| 26 | **The "pre-10.3 fingerprints are byte-identical" claim has no test on any of the three commands.** Both replay tests submit both attempts on the *same* build, so they hash identically whatever the shape is. The repo's own precedent (`picking.spec.ts:1876-1899`) hand-seeds a legacy fingerprint | v-gap | **high — patch** | Pre-verified. Changing `?? undefined` to nothing at `receiving.command.ts:292` makes every queued pre-10.3 GRN answer 422 instead of replaying, invisibly. This is the device-outbox path |
+| 27 | **A successful `PATCH catchWeightTracked` is never asserted to persist.** The one PATCH test targets a serial SKU and returns at the exclusivity refusal before the `updates` map is built. Delete `sku.command.ts:299-300` and the PATCH silently no-ops, green | v-gap | **high — patch** | Pre-verified. It is the ONLY path by which an existing SKU can become catch-weight |
+| 28 | **Unbounded work per request.** Up to 250k ids can reach pack (500 lines × 500 ids) with no command-tier cap, each issuing its own `UPDATE`; `createHandlingUnitsInTx` builds one INSERT that passes Postgres's 65,535-parameter limit at ~7,280 units, giving an untyped 500; `StockAdjustmentDto` caps at a bare `1000` in the decorator only | blind + edge | **medium — patch** | Verified against `MAX_SCAN_LINES` and the insert shape. Sibling surfaces use named constants enforced in the command tier too |
+| 29 | **`uom_conversions` is guarded against raw SQL but not against Drizzle.** `RAW_CATALOG_TABLES` lists it; `CATALOG_TABLES` does not, so `.insert(uomConversions)` outside catalog passes the new ownership guard | blind + edge | **medium — patch** | Verified at `architecture.spec.ts:381-382`. One-word fix |
+| 30 | **`receiving.controller.ts:124` alone does not collapse `[]` to absent**, breaking a convention the diff states three times. An `[]` on a non-catch-weight line then trips the length check first and answers the *catch-weight* message instead of "is not catch-weight tracked" | blind | **medium — patch** | Verified: `?? null` at the cited line vs the sibling controllers' normalisation |
+| 31 | **The adjustment fingerprint does not sort `handlingUnitIds`; pack does.** The same physical write-off retried with ids in another order fingerprints differently and answers 422 instead of replaying | edge | **medium — patch** | Verified inconsistency between `inventory.command.ts:208-209` and `pack.command.ts:239` |
+| 32 | **`stock.adjusted` records no `handlingUnitIds`.** Pack's consumption is hash-chained; the write-off — the one path that destroys value — is not, and the asymmetry is stated nowhere | blind | **medium — patch** | Verified. Additive optional key on the existing arm; the same hash-safe pattern already used for pack |
+| 33 | **`resolveHandlingUnits` uses an optional chain where a missing SKU should be an error**, silently skipping catch-weight accounting so units ship still `active` | edge | **medium — patch** | Verified at `pack.command.ts:383-388` |
+| 34 | **The weight CHECK can drift upward from `MAX_HANDLING_UNIT_WEIGHT_GRAMS` invisibly.** Statuses are pinned by asserting `pg_get_constraintdef` contains each member; the weight bound is only probed behaviourally with `0/-1/MAX+1`, which still passes if the TS constant is raised | blind | **medium — patch** | Verified. I flagged this one-directional pin myself earlier and did not act on it |
+| 35 | **`handlingUnitsOfGrnLinesInTx` + its facade face have no caller and no test.** Documented as "the unlocked read for surfaces"; no surface reads it, and the architecture test's seam loop omits it | blind + v-gap | **medium — patch** | Verified by grep. Exactly the `openCredentialForAdapterUse` shape already in `PENDING.md` — delete it or pin it |
+| 36 | **`weight_grams` is documented immutable and nothing enforces it.** No trigger, no test; the range CHECK happily admits a *different* in-range weight, and the suite itself freely UPDATEs the column | blind | **medium — patch** | Verified. Smallest honest fix is a source-scan assertion that no path updates it |
+| 37 | **The tamper-evidence rationale overstates what shipped.** Only the *ids* ride `pack.packed`'s reference doc; `grn.received` gains nothing, so an `UPDATE weight_grams` after receipt leaves `verifyChain` green. The migration header claims the design protects the invoice-deciding field | blind | **medium — patch (doc)** | Verified. A confidently-wrong load-bearing comment is the exact class this project keeps getting burned by; correct the wording |
+| 38 | Naming slips: `lockHandlingUnitsInTx` is the only facade method keeping the `InTx` suffix; `packedIds` names the written-off set in `moveHandlingUnitsOutOfActive` | blind | **low — patch** | Verified. Direct renames, no complexity added |
+| 39 | The test comment at `catch-weight.spec.ts:1181-1188` asserts it pins the different-SKU contract; it does not | v-gap | **low — patch** | Same root cause as 25; fixed with it |
+| 40 | No read-back path exists for a weight — no GET route, and the GRN response returns ids only | blind | **medium — defer** | Real, but its consumers are 10-5 (web surfaces) and epic 8 (invoicing), neither of which exists. The spec's Never explicitly excludes surfaces. Deferred with the consumer named |
+| 41 | The facade seam is bypassable — siblings import the store's in-tx functions directly rather than going through `CatalogFacade` | edge (claim) | **low — rejected** | True but harmless: the writes still execute inside `modules/catalog`, so AD-6 holds and the architecture guard is honest. This is the repo's documented escape for a module-evaluation cycle (`ensureReceivingBinInTx`). No facade-level invariant exists to bypass |
+| 42 | Snapshot/OpenAPI could not be reviewed — excluded from the supplied diff | blind | **false (my staging call, separately verified)** | My exclusion, and a fair complaint. Both were verified by other means: `db:generate` reports "No schema changes", the OpenAPI drift check is clean, and the edge-case layer independently confirmed `0028_snapshot.json` is present and staged |
+
+**Why no loopback.** The rule prefers `bad_spec` when in doubt, and I am not in doubt here. Every high finding is the code
+failing to apply a principle the spec already states — "a case is a whole thing" was established at receipt and not carried
+to pick; `batch_id` was specified and not checked; the fingerprint convention was specified and applied inconsistently.
+None requires re-deriving intent, and reverting ~3,000 lines of independently-verified-green code to add guards would
+destroy verified work to fix defects whose smallest fixes are local.
 
 
 ## Design Notes
