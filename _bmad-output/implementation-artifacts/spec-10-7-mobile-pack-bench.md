@@ -2,9 +2,9 @@
 title: 'Story 10-7: Mobile pack bench'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: '944f718 (wms-mobile) / 18a0c0b (wms-be)'
 context:
   - '_bmad-output/implementation-artifacts/epic-10-context.md'
@@ -29,7 +29,7 @@ context:
 
 **Always:**
 - The device pre-verifies offline what it has data for, before anything queues: scanned qty per SKU must equal the snapshot's picked qty exactly; a catch-weight line's scanned unit ids must be distinct, count == picked units, and every id must exist as an `active` unit of that SKU in the snapshot. The server stays authority — its 404/409/422 arms are unchanged and classify on replay as today.
-- Quantities and refusals mirror the server byte-for-byte where the server words them (`pack-mismatch` category, catch-weight count copy), same convention as 10-6's precision mirror. Pack quantities are whole physical units at the bench (a picked count is an integer); precision surfaces only through formatting (`formatQuantity`).
+- Quantities and refusals mirror the server byte-for-byte where the server words them (`pack-mismatch` category, catch-weight count copy), same convention as 10-6's precision mirror. **Pack quantities renegotiated (human decision 2026-09-19):** 0-dp SKUs are scan-counted (+1 per scan) exactly as before; catch-weight lines are label-counted exactly as before; a measured (precision > 0) non-catch-weight line is **typed** — precision-aware decimal entry capped at the SKU's `uomPrecision` (10-6's grammar), and the commit gate still demands the typed qty equal the snapshot's picked qty exactly. Scans refuse a measured non-CW line with copy saying it is counted by typed quantity (a +1 scan can never reach a fractional pick, e.g. 2.5 kg — the wedge this replaces). `formatQuantity` renders every quantity.
 - `handlingUnitIds` rides only catch-weight scan lines and `weightGrams` only when captured — key-absent, never null, on the wire (10-6's null-vs-absent rule; the server's non-CW pack hash must stay byte-identical to its pre-10.3 shape).
 - Snapshot parsing is additive: a pre-10-7 seal parses with `packTasks: []` / `handlingUnits: []` — the inbox simply shows no pack work, nothing crashes.
 - Backend first: the device route and snapshot fields land before any mobile consumption; CI drift guards will fail on FE-style ordering only if reversed.
@@ -41,8 +41,11 @@ context:
 
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 |----------|--------------|---------------------------|----------------|
-| Full scan match | Every SKU scanned to its picked qty (CW SKUs: N distinct unit labels) | Commit enabled; op queued as `pack.execute`; banner queued state | N/A |
-| Over-scan | A SKU reaches its picked qty and is scanned again | Inline refusal naming the SKU and both quantities; nothing queued | Announced same as state |
+| Full scan match | Every 0-dp SKU scanned to its picked qty (CW SKUs: N distinct unit labels; measured SKUs: typed qty equal to picked qty) | Commit enabled; op queued as `pack.execute`; banner queued state | N/A |
+| Measured typed qty | Typed qty on a measured (precision > 0) non-CW SKU, equal to its picked qty (e.g. "2.5" against picked 2.5) | Accepted; commit gate satisfied for that line | N/A |
+| Measured typed qty, wrong value | Typed qty ≠ picked qty, or finer than the SKU's `uomPrecision` | Inline refusal mirroring the server's precision copy (finer) / commit blocker (mismatch) | Announced |
+| Scan on a measured line | A barcode scanned against a measured non-CW SKU | Inline refusal: this SKU is counted by typed quantity | Announced |
+| Over-scan | A 0-dp SKU reaches its picked qty and is scanned again | Inline refusal naming the SKU and both quantities; nothing queued | Announced same as state |
 | Under-scan commit | Commit pressed with a SKU short of its picked qty | Commit blocked; blocker copy names the gap per SKU | Announced |
 | CW typed quantity | Typed qty on a catch-weight SKU | Inline refusal: units are counted by scanning their labels | Same announcement rule |
 | Unknown unit id | A scanned/typed id absent from the snapshot's active units | Inline refusal before queueing (offline); server 404 arm unchanged as backstop | Announced |
@@ -50,6 +53,7 @@ context:
 | Unit ids on non-CW SKU | A label scanned against a non-catch-weight SKU | Inline refusal: the SKU has no handling units (mirrors server) | Announced |
 | Parcel weight over cap | Typed parcel weight > 1,000,000 g | Inline refusal mirroring the server bound (10-6's `parseWeightEntry` helpers) | Announced |
 | Stale snapshot | Order packed/cancelled, or unit already packed since the seal | Op replays: server 409/422 → classified into the existing replay outcome buckets, named in the sync summary | Nothing re-packs (idempotency key) |
+| Settled pack reaches the summary | A `pack.execute` op settles on replay | The summary entry names the packed order's receipt — lines (sku × qty), total units, optional parcel weight — from the pack response (not a bare settled count) | N/A |
 | Pre-10-7 snapshot | Seal lacks `packTasks`/`handlingUnits` | Parses with empty defaults; Pack tab shows the no-cache/no-tasks copy | N/A |
 
 </frozen-after-approval>
@@ -68,33 +72,72 @@ context:
 - `src/api.ts` -- `CatalogPackTask`, `CatalogHandlingUnit`, snapshot fields; `PackPayload`; `fetchApiPackOrder` (device token + Idempotency-Key).
 - `src/state/catalog-snapshot.ts` -- additive parse defaults for the two new arrays.
 - `src/offline/types.ts` + `src/state/op-dispatch.ts` + `src/state/device-store.ts` -- `OpType` gains `'pack.execute'`; the exhaustive sender mapping forces the wiring.
-- `src/packing/draft.ts` (new) -- the pack draft: scanned accumulations per SKU, unit ids per CW SKU, parcel weight, exact-match blocker, `confirmPayload` (spread-conditional keys).
+- `src/packing/draft.ts` (new) -- the pack draft: scan-counted accumulations for 0-dp SKUs, unit ids per CW SKU, **typed precision-aware qty for measured non-CW lines** (10-6's `quantity-input.ts` grammar; scans refuse a measured line), parcel weight, exact-match blocker, `confirmPayload` (spread-conditional keys).
 - `app/pack.tsx` (new) -- the bench screen; `app/inbox.tsx` -- Pack tab + task list + CTA (the placeholder arm at `:111` says "task types arrive with later epics" — Pack graduates from it).
-- `src/lib/quantity-input.ts` -- reuse `parseWeightEntry`, `formatQuantity`, `uomDisplayName`; no new precision grammar (pack counts are integers).
+- `src/lib/quantity-input.ts` -- reuse `parseWeightEntry`, `formatQuantity`, `uomDisplayName`; the measured-line typed entry rides 10-6's existing decimal grammar (no new grammar — the pack gate only demands exact equality with `pickedQty`).
+- `src/state/replay-classification.ts` -- `settledNote` gains a `pack.execute` arm rendering the pack receipt (sku × qty lines, total units, optional weight) from the pack response; `src/offline/engine.ts` untouched (it already surfaces any settled op that carries a note).
 - Tests co-located; `docs/repos/wms-mobile/README.md` -- contract: pack op + new snapshot fields.
 
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` `outbound.facade.ts` + `receiving.dto.ts` + `receiving.controller.ts` -- derive and expose `packTasks` (packable orders: `accepted`, at least one pick, zero outstanding picklist lines, sum picked > 0; per-SKU `pickedQty` from the same grouped-`picks` query the command verifies against) and `handlingUnits` (`active` only, `id` + `skuId`) additively -- the device can only pre-verify against data in the snapshot
-- [ ] `wms-be` `outbound.controller.ts` + `outbound.dto.ts` -- add the device-guarded pack route (badge-in session, `Idempotency-Key`, `PackOrderDto` + `orderId` in body) delegating to the same command with the same error arms -- the device cannot call the tenant route
-- [ ] `wms-mobile` `src/api.ts` + `src/state/catalog-snapshot.ts` -- new types + additive parse -- a pre-10-7 seal degrades to today's behavior
-- [ ] `wms-mobile` `src/packing/draft.ts` (new) -- the draft model with exact-match pre-verification and the null-vs-absent payload rule -- one statement, unit-tested
-- [ ] `wms-mobile` `src/offline/types.ts` + `op-dispatch.ts` + `device-store.ts` -- the `pack.execute` op type and its sender -- offline replay with the op ULID as key
-- [ ] `wms-mobile` `app/inbox.tsx` + `app/pack.tsx` (new) -- Pack tab, task cards, the bench screen (scan-driven, CW unit labels, optional parcel weight in kg → whole grams) -- the story's namesake
-- [ ] Tests -- unit-test the matrix rows (match, over/under, CW arms, dup/unknown ids, weight cap, snapshot defaults) and the replay classification of the pack error arms
-- [ ] `docs/repos/wms-mobile/README.md` -- contract: `pack.execute` op; snapshot carries `packTasks`/`handlingUnits`
+- [x] `wms-be` `outbound.facade.ts` + `receiving.dto.ts` + `receiving.controller.ts` -- derive and expose `packTasks` (packable orders: `accepted`, at least one pick, zero outstanding picklist lines, sum picked > 0; per-SKU `pickedQty` from the same grouped-`picks` query the command verifies against) and `handlingUnits` (`active` only, `id` + `skuId`) additively -- the device can only pre-verify against data in the snapshot
+- [x] `wms-be` `outbound.controller.ts` + `outbound.dto.ts` -- add the device-guarded pack route (badge-in session, `Idempotency-Key`, `PackOrderDto` + `orderId` in body) delegating to the same command with the same error arms -- the device cannot call the tenant route
+- [x] `wms-mobile` `src/api.ts` + `src/state/catalog-snapshot.ts` -- new types + additive parse -- a pre-10-7 seal degrades to today's behavior
+- [x] `wms-mobile` `src/packing/draft.ts` (new) -- the draft model with exact-match pre-verification and the null-vs-absent payload rule -- one statement, unit-tested
+- [x] `wms-mobile` `src/offline/types.ts` + `op-dispatch.ts` + `device-store.ts` -- the `pack.execute` op type and its sender -- offline replay with the op ULID as key
+- [x] `wms-mobile` `app/inbox.tsx` + `app/pack.tsx` (new) -- Pack tab, task cards, the bench screen (scan-driven, CW unit labels, optional parcel weight in kg → whole grams) -- the story's namesake
+- [ ] `wms-mobile` `src/packing/draft.ts` + `app/pack.tsx` -- measured (precision > 0) non-CW lines carry a typed precision-aware qty (10-6's grammar; scans refuse a measured line with copy saying it is typed); commit gate unchanged (exact equality with `pickedQty`) -- the renegotiated wedge fix (review W1)
+- [ ] `wms-mobile` `src/state/replay-classification.ts` -- `settledNote` gains a `pack.execute` arm rendering the pack receipt from the response (sku × qty, total units, optional weight) so a settled pack appears in the sync summary -- review W2 (bad_spec: AC-1's receipt was never wired)
+- [ ] `wms-mobile` `app/pack.tsx` -- scan handling reads the draft from a functional update so two scans in one render frame cannot lose a count -- review W4
+- [ ] `wms-be` `outbound.controller.ts` + `outbound.dto.ts` -- normalize `handlingUnitIds` with `!= null` (explicit `null` currently throws a 500) and strip `dimensionsMm` from `DevicePackDto` (inherited field is silently dropped today) -- reviews W5, W6
+- [ ] `wms-mobile` `app/pack.tsx` -- `autoCapitalize="none"` on the manual-entry and HID inputs (typed lowercase labels/barcodes must resolve); weight-entry refusals announce (complete invalid entries are silent today) -- reviews W7, W13
+- [ ] `wms-be` `outbound.facade.ts` + `test/pick-truncation.spec.ts` pattern -- extract the pack truncation into a named function parameterized by group key and unit-test it (at-ceiling unchanged, straddling dropped whole, exact-ceiling kept, single-giant truncated-not-empty), and fix the "returned as it is" comment -- reviews W8, W9
+- [ ] `wms-mobile` `app/inbox.tsx` -- the Pack tab applies the same consumed filter the bench screen uses (a queued order must not stay tappable) -- review W10
+- [ ] `wms-be` `test/pack-bench.spec.ts` -- pin the device route's authority arms (missing/malformed Idempotency-Key 400, foreign-tenant 403, `weightGrams: null` normalization) and reword the contradictory "still bench work" comment -- reviews W11, W14
+- [ ] `wms-mobile` `src/packing/draft.ts` -- define the parcel-weight constant against the server's `MAX_WEIGHT_GRAMS` (pack.command.ts:70), not the handling-unit bound -- review W12
+- [ ] EOF newlines -- `test/pack-bench.spec.ts` + `receiving.dto.ts` (wms-be), `draft.ts` + `draft.test.ts` + `pack.tsx` (wms-mobile) -- review W15
+- [ ] Tests -- unit-test the matrix rows (match, over/under, CW arms, measured typed qty, dup/unknown ids, weight cap, snapshot defaults) and the replay classification of the pack error arms, plus the settledNote receipt arm
+- [x] `docs/repos/wms-mobile/README.md` -- contract: `pack.execute` op; snapshot carries `packTasks`/`handlingUnits`
 
 **Acceptance Criteria:**
-- Given a fully-picked order in the snapshot, when the operator scans every SKU to its picked qty (CW SKUs by unit label), the queued `pack.execute` carries `scanned` with per-SKU quantities, `handlingUnitIds` only on CW lines, and settles to `ready_to_dispatch` with the pack receipt in the sync summary
+- Given a fully-picked order in the snapshot, when the operator counts every SKU to its picked qty (0-dp SKUs by scan, CW SKUs by unit label, measured SKUs by typed qty), the queued `pack.execute` carries `scanned` with per-SKU quantities, `handlingUnitIds` only on CW lines, and settles to `ready_to_dispatch` with the pack receipt named in the sync summary
 - Given an offline start with a pre-10-7 snapshot, the app opens with no Pack work shown and no crash; refreshing while online fills the Pack tab
 - Given a second op for the same order (or a replay), the idempotency key re-serves the stored pack — nothing re-packs, and the summary names the outcome
+
+## Review Triage Log
+
+Verdicts rendered after all three layers (blind-hunter 15, edge-case-hunter 6, verification-gap 1 pre-verified + 2 observations) reported; every claim verified at its cited location. Carried duplicates noted.
+
+- W1 blind-hunter B2 + B3 + verification-gap fractional + held from step-03: a fractional picked total wedges the bench — **high**. Verified: `outbound.facade.ts:567` rolls `pickedQty` up as `fromMilli(sum(picks.qty))` — base units, fractional for a measured SKU; `order.command.ts:312` accepts fractional line quantities and `pick.command.ts:768` allows a fractional pick on a non-CW measured SKU (CW SKUs are refused fractional picks, so only non-CW measured lines wedge); the bench counts by +1 scans (`draft.ts:188`) and `canCommit`'s exact match (`draft.ts:342-347`) can never hold against 2.5 — the order is permanently unpumpable from the device (the web pack DTO accepts fractional qty, so the wedge is device-only). The frozen block's assertion "a picked count is an integer" is factually wrong for measured SKUs. → **intent_gap** (root cause inside the frozen block; human renegotiates).
+- W2 edge-case-hunter E6: the pack receipt never reaches the sync summary — **medium**. Verified: `settledNote` (`replay-classification.ts:56-57`) returns undefined for every op.type but `pick.record`; `engine.ts:99-110` pushes a settled summary entry only when the note is defined ("a clean settle says nothing beyond the count"); `PackRecordResponse` is consumed nowhere (`api.ts:500` is the only reference). AC-1's "settles to ready_to_dispatch with the pack receipt in the sync summary" is unmet — a packed order appears only as +1 in a settled count. Spec never specified the receipt's wiring. → **bad_spec**.
+- W3 blind-hunter B7: pack cards carry no human-readable order identifier — **medium**. Verified: `CatalogPackTaskDto` carries only the orderId UUID, and the `orders` table itself has no code/number column (`schema.ts:1518`) — every surface shows UUIDs. Real everyday harm (two packable orders indistinguishable), but the gap is pre-existing table design, not this story's change; a code column is a schema addition this story does not own. → **defer**.
+- W4 edge-case-hunter E5: two scans in one render frame compute from the same stale draft — **medium**. Verified: `onScanEvent` (`pack.tsx:114-156`) reads `draft` from the closure and `setDraft(decision.draft)` from that snapshot; a second scan before re-render overwrites the first — a lost count, caught only later by the commit blocker. → **patch**.
+- W5 edge-case-hunter E1: explicit `null` `handlingUnitIds` → unhandled 500 — **medium**. Verified: `@IsOptional()` skips validation for null; the controller normalization (`outbound.controller.ts:646-648`) tests `!== undefined` then reads `.length` — `null.length` throws. → **patch** (`!= null`).
+- W6 blind-hunter B1 (carries edge-case-hunter E2, whose quoted "controller throws packValidation(...)" does not exist in the handler — the silent-drop version is the true one): `DevicePackDto` inherits `dimensionsMm`, the OpenAPI advertises it, the controller silently drops it — **medium**. Verified: no refusal exists in `packOrderFromDevice`; a client sending dimensions gets a successful pack with the measurement discarded. → **patch** (strip the field from the device DTO).
+- W7 blind-hunter B13: `autoCapitalize="characters"` on the manual-entry (and HID) inputs uppercases typed lowercase labels/barcodes so they can never resolve — **medium**. Verified at `pack.tsx:334,352`; manual entry is the fallback for a failed scan and fails 100% on lowercase ids (the seed data's own shape). → **patch** (`autoCapitalize="none"`; resolution stays exact).
+- W8 verification-gap (pre-verified; carries blind-hunter B11): the pack-arm truncation ships with no test — **medium**. Filed with traced evidence: `MAX_SNAPSHOT_PACK_TASKS` referenced by no test, the boundary unreachable from every e2e suite, the pick sibling got a dedicated unit test for exactly this reason (`pick-truncation.spec.ts:5-10`), and a regression delivers a half-order the exact-match gate can never satisfy. → **patch** (extract, parameterize, unit-test the straddle/exact-ceiling/single-giant cases).
+- W9 edge-case-hunter E4: "a single giant order is returned as it is" is false — **low**. Verified: `whole.length === 0 ? kept : whole` returns the first 500 rows — truncated, exactly the tested pick precedent ("truncated rather than empty", `pick-truncation.spec.ts:48`). The behavior is precedented; the comment misstates it. → **patch** (reword; fold into W8's extraction).
+- W10 blind-hunter B6: the inbox Pack tab renders `catalog.packTasks` with no consumed filter — **low**. Verified (`inbox.tsx:495`): an order this device already queued stays tappable and dead-ends into the bench's no-work placeholder. → **patch** (apply the same consumed filter the pack screen uses).
+- W11 blind-hunter B10: the device pack route's authority arms (malformed/missing Idempotency-Key 400, foreign-tenant 403, role-denied 403, `weightGrams: null` normalization) are exercised by no test — **low**. Verified by the verification-gap layer's tracing; the sibling pick route pins exactly these arms. → **patch** (add the arm tests).
+- W12 blind-hunter B12: the parcel-weight cap mirrors `MAX_HANDLING_UNIT_WEIGHT_GRAMS` while the server's device-payload bound is the distinct `MAX_WEIGHT_GRAMS` (`pack.command.ts:70`) — **low**. Verified: two constants, equal value today, different meaning. → **patch** (device-side constant naming the server's parcel bound).
+- W13 blind-hunter B14: weight-entry refusals give no feedback — **low**. Verified (`pack.tsx:181`): `if (parsed.kind === 'rejected') return;` — half-entries stay put by design, but a complete invalid entry ("0", over-cap) is silent, breaking the screen's announce-everything contract. → **patch** (announce complete-entry refusals).
+- W14 blind-hunter B9: contradictory test comment/assertion — **low**. Verified (`pack-bench.spec.ts:578-580`): "still bench work" directly above `toHaveLength(0)`. → **patch** (reword).
+- W15 blind-hunter B15: missing EOF newlines — **low**. Verified: `test/pack-bench.spec.ts`, `receiving.dto.ts` (wms-be), `draft.ts`, `draft.test.ts`, `pack.tsx` (wms-mobile) all end without a newline. → **patch**.
+- R1 blind-hunter B4: "ONE tenant transaction" doc claim contradicts the shell's three sequential reads — **false**. The sentence sits on `getPackTasksInTx` (`outbound.facade.ts:501`) and scopes to that facade's own two reads; the controller comment documents the sequential composition explicitly, and pick tasks have composed this way since 4.3.
+- R2 blind-hunter B5: `handlingUnits` uncapped — **low, rejected**. The uncapped choice is explicit, recorded with its rationale (a cap would refuse a real case label offline as unknown), and active-only self-prunes; a cap is the known-worse alternative the design already considered.
+- R3 blind-hunter B8: `tenantId ?? ''` enqueues an op against `/tenants//…` — **false**. Confirm renders only when snapshot and draft both exist, both derive from the same cached snapshot, and `device-store` has no clear path (the cache is only ever replaced) — the fallback is unreachable.
+- R4 edge-case-hunter E3: an order ending exactly on the ceiling is dropped — **false**. The straddle check compares row `MAX` against row `MAX-1`; a different order at `MAX` returns `kept` intact, which is exactly what happens.
 
 ## Design Notes
 
 - **Why two additive snapshot arrays:** pack verification compares scans to *picked* quantities — the one dataset no device surface has today. Reusing the snapshot seal (AD-4) keeps the bench offline-capable like receive/putaway/pick, and `handlingUnits` (active-only, id + skuId) closes the 404/422 queue-and-die holes the same way `bins` closed the wrong-bin-scan hole. Active-only self-prunes: units flip to `packed` at pack, so the array is bounded by received-not-yet-packed stock.
 - **The device route mirrors `picks`, not the tenant route:** `POST :tenantId/outbound/packs` with `DeviceSessionGuard`, orderId in the body — the tenant route keeps serving 4-2d's web surface later; both delegate to `PackCommandService.packOrder`, whose contract does not move.
-- **The bench counts, it does not choose:** the operator scans until each SKU's count equals the snapshot's picked qty; the commit gate is exact-match. Partial packs are impossible server-side (the command is all-or-nothing), so the device must never queue a partial scan.
+- **The bench counts, it does not choose** — with the renegotiated exception (human decision 2026-09-19): 0-dp SKUs are scan-counted, CW SKUs label-counted, and measured non-CW lines carry a typed precision-aware qty. The typed arm is not "choosing" — the gate still demands exact equality with the snapshot's picked qty; only the input mode changes, because a +1 scan can never reach a fractional pick (the W1 wedge). The commit gate is exact-match everywhere. Partial packs are impossible server-side (the command is all-or-nothing), so the device must never queue a partial count.
+
+## Spec Change Log
+
+- **Loopback 1 (review W1, intent_gap; human decision 2026-09-19):** the frozen block's "a picked count is an integer" was false for measured SKUs (a 3-dp kg SKU picked 2.5 made the bench's exact-match gate unreachable — permanently unpumpable order). The human chose **typed entry for measured lines**: the frozen Always bullet and I/O Matrix now carry the typed-entry rule for measured non-CW SKUs (0-dp scan-counting and CW label-counting unchanged); the wedge row and measured-typed rows were added to the matrix; the measured-entry task was added. KEEP from round 1 (archive branches `archive/10-7-round1` in both repos — wms-be 13a6ada, wms-mobile b102e8f): the device route shape (badge-in, key, body-orderId, normalization spellings), the two additive snapshot arrays and their predicate/roll-up, the pack.execute op type and sender, the bench screen structure, the draft/payload null-vs-absent rule, and the round-1 test suite — all re-derived on top of these. Known-bad state avoided: shipping a bench whose commit gate is unreachable for any order containing a measured SKU. The bad_spec item (W2, receipt-in-summary) and the eleven verified patch findings are folded into the task list above so the re-derivation lands them.
 
 ## Verification
 
