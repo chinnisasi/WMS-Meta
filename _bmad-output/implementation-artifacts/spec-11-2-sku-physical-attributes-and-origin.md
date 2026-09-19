@@ -2,7 +2,7 @@
 title: 'SKU physical attributes and origin'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 478df1f / wms-fe 9bd46eb'

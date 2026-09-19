@@ -48,7 +48,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 |---|---|---|---|
 | POST | `/tenants/{t}/catalog/imports` | `catalog.import` | **multipart.** A `201` can carry per-row failures — partial commit is the design. Row codes: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`. `mode=fix` reprocesses only the prior run's failures |
 | GET | `/tenants/{t}/catalog/skus` | — | Keyset |
-| PATCH | `/tenants/{t}/catalog/skus/{skuId}` | `sku.edit` | `code` and `uom` are **immutable**. Barcode collision → `409 duplicate-barcode` |
+| PATCH | `/tenants/{t}/catalog/skus/{skuId}` | `sku.edit` | `code` and `uom` are **immutable**. Barcode collision → `409 duplicate-barcode`. The five physical attributes (11.2: `weightGrams` ≤ 1,000,000 g, `lengthMm`/`widthMm`/`heightMm` ≤ 10,000 mm, `countryOfOrigin` ISO alpha-2) are optional — absent = unchanged, `null` = cleared; badly-shaped values → `400 validation-failed` naming the field |
 
 **The only creator of SKUs is the CSV import.** There is no `POST /skus`.
 
