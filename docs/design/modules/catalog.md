@@ -1,6 +1,6 @@
 # Catalog module
 
-> What a tenant sells and how it is counted: SKUs, the spreadsheet import that creates them, batch and serial identity, and the closed unit-of-measure vocabulary every quantity in the system is denominated in.
+> What a tenant sells and how it is counted: SKUs, the products that group them into variant ranges (11.3), the spreadsheet import that creates the SKUs, batch and serial identity, and the closed unit-of-measure vocabulary every quantity in the system is denominated in.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton, the quantity/milli-unit boundary and the controlled-vocabulary pattern are assumed.
 
@@ -12,7 +12,8 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `skus` (`src/shared/db/schema.ts:272`) | Sellable units: code, name, base `uom`, GST bps, HSN, tracking flags, **static physical attributes (11.2)**, reorder defaults, barcode | `skus_tenant_id_code_unique` **and** `skus_tenant_id_barcode_unique`. `uom` is CHECK-constrained to the closed vocabulary (`skus_uom_check`, `drizzle/0027_uom_vocabulary.sql:351`). `reorder_point`/`reorder_qty` are `bigint` **milli-units**. `barcode` is NOT NULL — generated server-side as a uuidv7 when the file omits one. **`code` is immutable**; no create endpoint exists — SKUs enter through import only |
+| `products` (`src/shared/db/schema.ts`, `drizzle/0032_product_variants.sql`) | **Grouping identity only (AD-19, 11.3)**: `name` + declared `axes` (a jsonb array of 1–3 short names). No UoM, no tracking flags, no stock concept — a SKU remains every ledger event's unit | `products_tenant_id_name_unique` (the `skus.code` precedent). **No delete command**; **`axes` are immutable while any SKU is attached** (409 `product-has-variants`). `product_id` on `skus` is a bare uuid, **no FK** — the repo convention, validated in the command transaction |
+| `skus` (`src/shared/db/schema.ts:272`) | Sellable units: code, name, base `uom`, GST bps, HSN, tracking flags, **static physical attributes (11.2)**, **variant identity (`product_id` + `variant_values`, 11.3)**, reorder defaults, barcode | `skus_tenant_id_code_unique` **and** `skus_tenant_id_barcode_unique`. `uom` is CHECK-constrained to the closed vocabulary (`skus_uom_check`, `drizzle/0027_uom_vocabulary.sql:351`). `reorder_point`/`reorder_qty` are `bigint` **milli-units**. `barcode` is NOT NULL — generated server-side as a uuidv7 when the file omits one. **`code` is immutable**; no create endpoint exists — SKUs enter through import only. `variant_values` pairs with `product_id` (both null or both set, the values a jsonb object) by the `skus_variant_values_pairing` CHECK (`0032`) |
 | `uom_conversions` (`schema.ts:310`) | `factor` base units per alternate `uom`, per SKU | `uom_conversions_sku_id_uom_unique`; `factor` is a positive `integer`; target `uom` CHECK-constrained to the same vocabulary |
 | `batches` (`schema.ts:344`) | Batch **identity** for batch-tracked SKUs: code, mfg/expiry dates, status | `batches_tenant_sku_code_unique`; `batches_status_check` ∈ {`active`,`blocked`} (`drizzle/0010_sharp_hardball.sql:71`). **No location or quantity column, by design** — those live in inventory's `batch_on_hand` |
 | `serials` (`schema.ts:378`) | Serial **identity**: serial number, status | `serials_tenant_sku_serial_unique`; `serials_status_check`. **No location column** — a serial's location is derived from its latest `ledger_events` row |
@@ -27,7 +28,23 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 
 ## Schema (field level)
 
-### `skus`
+### `products` (11.3)
+
+| Column | Type | Null | Guard | Meaning |
+|---|---|---|---|---|
+| `name` | text | NO | `unique (tenant, name)` | The honest handle import and the UI use to reference the product; duplicate → 409 `duplicate-product-name` |
+| `axes` | jsonb | NO | — | Array of 1–3 short axis names (`["size","colour"]`). **Presentation, not a normalised table** — the 11-6 matrix, 11-7 announcement and Epic 7 mapping all read the whole array. Element-wise immutable while attached |
+
+There is **no delete command** (the append-only philosophy) and no per-axis value table.
+
+### `skus` — the 11.3 variant columns
+
+| Column | Type | Null | Guard | Meaning |
+|---|---|---|---|---|
+| `product_id` | uuid | **YES** | **No FK** — validated in the command transaction; `skus_product_id_idx` | The product this SKU is a variant of, or null when unattached (every pre-11.3 row) |
+| `variant_values` | jsonb | **YES** | `skus_variant_values_pairing` CHECK (`0032`, migration-SQL-only — drizzle-orm 0.45 cannot model a CHECK) | Object keyed by the product's axes, `{"size":"M","colour":"Red"}`. Must cover the axes **exactly** — the command-side rule (`assertVariantValues`), the CHECK is the pairing backstop. Attach/detach happens **only** through the SKU edit PATCH (`hsn` template: absent = unchanged, `productId: null` = detach and clear values) |
+
+### `skus` (the pre-11.3 columns)
 
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
@@ -118,6 +135,31 @@ sequenceDiagram
 
 There is no `POST /skus`. `code` and `uom` are immutable once written — a SKU's UoM is baked into every milli-unit quantity already stored against it, so changing it would silently reinterpret history.
 
+### Products and variants (11.3)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant Ctl as catalog.controller
+  participant PCmd as ProductCommand
+  participant SCmd as SkuCommand
+  participant PG as Postgres
+  Ops->>Ctl: POST /catalog/products {name, axes}
+  Ctl->>PCmd: create
+  Note over PCmd: shape checks → hash → sku.edit<br/>→ replay → duplicate-name pre-check<br/>→ insert → outbox in-tx → key LAST
+  PCmd-->>Ops: 201 product {axes, skuCount: 0}
+  Ops->>Ctl: PATCH /catalog/skus/:id {productId, variantValues}
+  Ctl->>SCmd: edit
+  Note over SCmd: attach runs BEHIND the replay lookup:<br/>product 404 → exact axis coverage 400<br/>→ duplicate-variant 409 → UPDATE
+  SCmd-->>Ops: 200 — echoes productId + variantValues
+  Ops->>Ctl: PATCH /catalog/products/:id {axes}
+  Ctl->>PCmd: edit
+  PCmd-->>Ops: 409 product-has-variants (skuCount > 0)
+```
+
+The variant identity has exactly **one** write path per side: products are created/edited by `ProductCommand` (create + edit keyed by idempotency, the `createOrder` replay convention), and SKUs attach/detach/re-value through the **existing SKU edit PATCH** — no second write path. Import gains optional `product` / `variant_values` columns that **reference** an existing product by name (import never creates products — auto-declaring axes from the first CSV row's keys would make product identity an implicit side effect); a missing name is a row error, the uom-vocabulary refusal shape. Duplicate variants (two SKUs of one product carrying identical values) are refused in both paths via the sorted-keys `variantValuesFingerprint` — key-order independent, which is why it matches Postgres's semantic jsonb equality.
+
 ### The UoM vocabulary and its precision
 
 ```mermaid
@@ -137,6 +179,14 @@ flowchart TD
 ---
 
 ## Commands
+
+### `ProductCommand.create / edit / list` (`product.command.ts`, 11.3)
+
+Create and edit run the `createOrder` replay convention exactly: shape checks → `hashCommandPayload` → `assertPermission('sku.edit')` (deliberately no new capability — the story ships no FE surface beyond the regenerated client, so a new capability would fail the FE capability-mirror guard) → replay lookup → duplicate-name pre-check + unique-index backstop (409 `duplicate-product-name`) → insert/update → `catalog.product_created` / `catalog.product_edited` in-transaction → idempotency key LAST. An empty product PATCH is its own code, 400 `empty-product-edit`.
+
+`edit` loads the product `for('update')` and refuses an axes change while any SKU is attached (409 `product-has-variants`, element-wise comparison — a reordered array is a different declaration, not the same one). `name` is always editable.
+
+`list` is a read (open to any tenant member — reads are never gated), keyset-paged on `(created_at, id)`; each item's `skuCount` is stitched from ONE grouped count query over the page's product ids, never an N+1.
 
 ### `ImportCommand.execute` (`import.command.ts:151`)
 
@@ -161,9 +211,11 @@ Response = idempotency snapshot = `{importId, mode, committedRows, failedRows, s
 
 PATCH-only; `code` and `uom` are not editable.
 
-Guards: empty-body check `:202` → hash over the **base-unit** field values `:226` → `sku.edit` capability `:238` → replay `:247` → SKU exists in tenant (404) `:270` → **attribute bounds (`assertSkuAttributes`, 11.2 — behind the replay lookup, the 10.2 rule)** `:279` → serial-tracking × fractional-UoM refusal `:297` → quantity precision conversion `:354-366` → barcode uniqueness pre-check (409 `duplicate-barcode` naming the conflicting SKU) `:378` → UPDATE.
+Guards: empty-body check `:202` → hash over the **base-unit** field values `:226` → `sku.edit` capability `:238` → replay `:247` → SKU exists in tenant (404) `:270` → **attribute bounds (`assertSkuAttributes`, 11.2 — behind the replay lookup, the 10.2 rule)** `:279` → **the 11.3 attach/detach/re-value block (also behind the replay lookup)** → serial-tracking × fractional-UoM refusal `:297` → quantity precision conversion `:354-366` → barcode uniqueness pre-check (409 `duplicate-barcode` naming the conflicting SKU) `:378` → UPDATE.
 
-The five physical attributes (`weightGrams`/`lengthMm`/`widthMm`/`heightMm`/`countryOfOrigin`) are **optional PATCH fields**: absent = unchanged, `null` = cleared (the `hsn` template). Because the payload hash is a spread over the fields, an omitted key drops out of the JSON — **pre-11.2 idempotency keys still replay 200** (no hash break, unlike 11.1's fixed-key-position addresses).
+The five physical attributes (`weightGrams`/`lengthMm`/`widthMm`/`heightMm`/`countryOfOrigin`) and the two variant fields (`productId`/`variantValues`, 11.3) are **optional PATCH fields**: absent = unchanged, `null` = cleared (the `hsn` template). Because the payload hash is a spread over the fields, an omitted key drops out of the JSON — **pre-11.2 and pre-11.3 idempotency keys still replay 200** (no hash break, unlike 11.1's fixed-key-position addresses).
+
+The 11.3 block, behind the replay lookup with the SKU row in hand: `productId: null` detaches and clears the values (a `variantValues` key riding a detach is refused — a mistake, not a silent drop) → attach resolves the product (404 `not-found`) and requires the values → `assertVariantValues` (the ONE shared validator, also called by the import parser: exact axis coverage, non-empty ≤ 64-char string values — a missing key, unknown key, blank or non-string value is 400 naming `variantValues` and the axis) → the duplicate-variant check in-transaction (409 `duplicate-variant-values`). A values-only patch re-values against the SKU's **current** attachment.
 
 Emits `catalog.sku_edited` `{skuId, code}`.
 
@@ -195,11 +247,11 @@ The only things that abort the whole run are file-level: too large, unparseable,
 
 ### Row validation order (`validateRow`, `import.command.ts:746`)
 
-Shape first, one error per row, **first failure wins**: `sku_code` present/≤64 → `name` present/≤200 → `uom` present/≤32 → **`uom` resolves in the vocabulary** → `gst_rate` integer 0–10000 → `hsn` ≤32 → `batch_tracked` → `serial_tracked` → **serial × fractional-UoM refusal** → `catch_weight_tracked` → **catch weight × serial refusal** → `reorder_point` → `reorder_qty` → `barcode` ≤64 → **the physical attributes (11.2)**: `weight_grams`/`length_mm`/`width_mm`/`height_mm` parse via `parseAttributeNumber` (`:966` — blank → null, the `^\d+(\.\d+)?$` grammar which ADMITS the decimal shape; only a minus sign or a non-numeric spelling is a row error naming the CSV column) and `country_of_origin`, then the ONE shared validator `assertSkuAttributes` rules on every present value — so a fraction or an over-cap number is refused THERE, naming the API field (`weightGrams`, not `weight_grams`) → `uom_conversions` parsing.
+Shape first, one error per row, **first failure wins**: `sku_code` present/≤64 → `name` present/≤200 → `uom` present/≤32 → **`uom` resolves in the vocabulary** → `gst_rate` integer 0–10000 → `hsn` ≤32 → `batch_tracked` → `serial_tracked` → **serial × fractional-UoM refusal** → `catch_weight_tracked` → **catch weight × serial refusal** → `reorder_point` → `reorder_qty` → `barcode` ≤64 → **the physical attributes (11.2)**: `weight_grams`/`length_mm`/`width_mm`/`height_mm` parse via `parseAttributeNumber` (`:966` — blank → null, the `^\d+(\.\d+)?$` grammar which ADMITS the decimal shape; only a minus sign or a non-numeric spelling is a row error naming the CSV column) and `country_of_origin`, then the ONE shared validator `assertSkuAttributes` rules on every present value — so a fraction or an over-cap number is refused THERE, naming the API field (`weightGrams`, not `weight_grams`) → `uom_conversions` parsing → **the variant columns (11.3)**: `product` ≤ 200, and a `variant_values` cell without a `product` cell is refused HERE (values ride the product); the cell parses with the `uom_conversions` cell-grammar precedent (`box:12` → `size=M; colour=Red` — split `;`, split the FIRST `=`, both sides trimmed).
 
-Duplicate checks run afterwards because they need the whole file plus the tenant: file-internal code (naming the earlier row number), tenant code, then barcode (naming the conflicting SKU). Errors are sorted by `rowNumber` before persisting (`:278`) so the report is in document order regardless of which pass produced each one.
+Duplicate checks run afterwards because they need the whole file plus the tenant: file-internal code (naming the earlier row number), tenant code, then barcode (naming the conflicting SKU). Between those, the **variant resolution pass** (11.3) fetches the referenced products by name (a missing one is a row error — "import references products, it never creates them"), runs `assertVariantValues` against each product's axes (a mismatch is a row error naming the axis), and the duplicate loop adds `duplicate-variant-values` arms: within the file (naming the earlier row) and against the tenant's existing attached SKUs (naming that SKU's code). Errors are sorted by `rowNumber` before persisting (`:278`) so the report is in document order regardless of which pass produced each one.
 
-Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`.
+Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`, `duplicate-variant-values` (11.3).
 
 ### Fix mode (`import.command.ts:212-231`)
 
@@ -221,7 +273,7 @@ A fix upload is a full file, not a delta — the operator re-submits the correct
 
 ### Header contract and parsing
 
-Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `reorder_point`, `reorder_qty`, `barcode` (`:88-102`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2 through the parser**: a CSV carrying the new columns against a pre-11.2 binary would be rejected wholesale, so the header contract and the row parser grew together.
+Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `reorder_point`, `reorder_qty`, `barcode`, `product`, `variant_values` (11.3) (`:88-102`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2 and 11.3 through the parser**: a CSV carrying the new columns against a pre-story binary would be rejected wholesale, so the header contract and the row parser grew together.
 
 Three parser traps handled explicitly:
 
@@ -292,6 +344,11 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | Batch/serial arms open only for tracked SKUs | `assertSkuTracked` (`catalog.facade.ts:409`) |
 | One conversion per (sku, uom), factor a positive integer | `uom_conversions_sku_id_uom_unique`; per-row repeat check (`:921-930`); `INT_MAX` bound |
 | A conversion target is never the SKU's own base unit | `:824-829` |
+| `variant_values` pairs with `product_id` (both null, or both set with the values a jsonb object) | `skus_variant_values_pairing` CHECK (`0032`) — the command enforces the stronger coverage + duplicate rules in-transaction |
+| A product's axes cannot change while variants are attached | `ProductCommand.edit`'s attach check — 409 `product-has-variants` |
+| Two SKUs of one product never carry identical values | The duplicate-variant check in both write paths (edit 409; import row error), keyed by the sorted-keys fingerprint |
+| Import references products, never creates them | The resolution pass row-errors an unknown product name |
+| Product names are unique per tenant | `products_tenant_id_name_unique` + the command pre-check |
 | Catalog tables are catalog-exclusive | `test/architecture.spec.ts` bans writes outside the module; siblings use `CatalogFacade` |
 
 ---
@@ -301,7 +358,9 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | Type | Emitted by | Payload |
 |---|---|---|
 | `catalog.imported` | `ImportCommand.execute` | `{importId, mode, committedRows, failedRows, skippedRows}` — counts only, never rows or errors |
-| `catalog.sku_edited` | `SkuCommand.edit` | `{skuId, code}` |
+| `catalog.sku_edited` | `SkuCommand.edit` | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
+| `catalog.product_created` | `ProductCommand.create` (11.3) | `{productId, name, axes}` |
+| `catalog.product_edited` | `ProductCommand.edit` (11.3) | `{productId, name, axes}` |
 
 Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the append, so it emits nothing.
 

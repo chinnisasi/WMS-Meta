@@ -46,9 +46,12 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 | Method | Path | Capability | Notes |
 |---|---|---|---|
-| POST | `/tenants/{t}/catalog/imports` | `catalog.import` | **multipart.** A `201` can carry per-row failures — partial commit is the design. Row codes: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`. `mode=fix` reprocesses only the prior run's failures |
-| GET | `/tenants/{t}/catalog/skus` | — | Keyset |
-| PATCH | `/tenants/{t}/catalog/skus/{skuId}` | `sku.edit` | `code` and `uom` are **immutable**. Barcode collision → `409 duplicate-barcode`. The five physical attributes (11.2: `weightGrams` ≤ 1,000,000 g, `lengthMm`/`widthMm`/`heightMm` ≤ 10,000 mm, `countryOfOrigin` ISO alpha-2) are optional — absent = unchanged, `null` = cleared; badly-shaped values → `400 validation-failed` naming the field |
+| POST | `/tenants/{t}/catalog/imports` | `catalog.import` | **multipart.** A `201` can carry per-row failures — partial commit is the design. Row codes: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`, `duplicate-variant-values` (11.3). `mode=fix` reprocesses only the prior run's failures. Optional `product` (an existing product's **name**) and `variant_values` cells (`size=M; colour=Red`) attach a row as a variant; an unknown product or a values/axes mismatch is a row error |
+| GET | `/tenants/{t}/catalog/skus` | — | Keyset. Optional `productId` filter — the variants of ONE product (11.3) |
+| PATCH | `/tenants/{t}/catalog/skus/{skuId}` | `sku.edit` | `code` and `uom` are **immutable**. Barcode collision → `409 duplicate-barcode`. The five physical attributes (11.2: `weightGrams` ≤ 1,000,000 g, `lengthMm`/`widthMm`/`heightMm` ≤ 10,000 mm, `countryOfOrigin` ISO alpha-2) are optional — absent = unchanged, `null` = cleared; badly-shaped values → `400 validation-failed` naming the field. The variant fields (11.3: `productId` + `variantValues`) follow the same template — attach requires values that cover the product's axes exactly (`400 validation-failed` naming `variantValues` + the axis), `productId: null` detaches and clears, a duplicate variant → `409 duplicate-variant-values`, an unknown product → `404` |
+| POST | `/tenants/{t}/catalog/products` | `sku.edit` | **11.3.** Identity only: `name` + `axes` (1–3). Duplicate name → `409 duplicate-product-name` |
+| GET | `/tenants/{t}/catalog/products` | — | **11.3.** Keyset; items carry the derived `skuCount` |
+| PATCH | `/tenants/{t}/catalog/products/{productId}` | `sku.edit` | **11.3.** Name always editable; `axes` immutable while variants are attached → `409 product-has-variants`. Empty body → `400 empty-product-edit` |
 
 **The only creator of SKUs is the CSV import.** There is no `POST /skus`.
 
