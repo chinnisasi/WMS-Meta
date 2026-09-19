@@ -75,7 +75,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | PATCH | `.../purchase-orders/{poId}` | `po.manage` | Amend |
 | POST | `.../purchase-orders/{poId}/close` | `po.manage` | Carries open quantity to a successor |
 | POST | `/tenants/{t}/receiving/goods-receipts` | **device** | Partial, blind and over-receipt in one flow. Budget: ≤ 4 scans + 1 confirm for a single-SKU single-lot GRN |
-| GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision), bins, putawayTasks, pickTasks, open POs. Composed at the api shell across modules |
+| GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision), bins, putawayTasks, pickTasks, packTasks (+ handlingUnits, 10.7), open POs. Composed at the api shell across modules |
 | GET | `/tenants/{t}/receiving/goods-receipts` | — | Keyset |
 | GET | `/tenants/{t}/receiving/over-receipts` | — | The review queue |
 | POST | `.../over-receipts/{id}/approve` | `review.decide` | Bumps the PO line ceiling |
@@ -108,6 +108,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `.../waves/{waveId}/release` | `waves.manage` | Cutoff passed → `409 cutoff-passed`, **wave stays planned** |
 | POST | `.../waves/{waveId}/cancel` | `waves.manage` | Frees orders to be re-waved |
 | POST | `/tenants/{t}/outbound/picks` | `picks.execute` | **device.** The conflict taxonomy lives here: `pick-bin-short` 409 = re-plannable, `pick-unresolvable` 409 = terminal/quarantine, `insufficient-on-hand` 422 = retryable |
+| POST | `/tenants/{t}/outbound/packs` | `pack.execute` | **device** (10.7). Same `packOrder` command as the tenant pack route (which re-authorizes the device in-tx via `deviceId`), orderId in the body; no `dimensionsMm` on the device payload (`forbidNonWhitelisted` → 400). Scan mismatch → `422 pack-mismatch` naming **both** quantities; a revoked device → `403 device-revoked` |
 | GET | `.../waves/{waveId}` | — | With picklists in walk order |
 | GET | `/tenants/{t}/warehouses/{w}/outbound/waves` | — | Keyset |
 
@@ -156,6 +157,7 @@ Twenty-two, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` a
 | `POST .../receiving/goods-receipts` | device session |
 | `POST .../putaway/placements` | device session |
 | `POST .../outbound/picks` | device session |
+| `POST .../outbound/packs` | device session (10.7) |
 
 The four device-session routes re-authorise on replay against **the badge-in session that created the op** — shared devices never launder authority across badge-ins.
 

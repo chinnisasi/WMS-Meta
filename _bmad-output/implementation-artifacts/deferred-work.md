@@ -310,3 +310,9 @@
 - source_spec: `spec-10-6-mobile-decimal-and-catch-weight-capture.md`
   summary: The byte-mirrored server literals (`precisionRefusalDetail` copy, `MAX_HANDLING_UNIT_WEIGHT_GRAMS`) are enforced by hand only — no mechanism observes both repos, so server-side drift fails no test anywhere.
   evidence: Verified by search — mobile CI runs `bun test` + `tsc` only; `src/api.ts` is hand-written with no openapi guard; no BE↔mobile drift-guard tooling exists in the meta repo. A wording change in `wms-be/src/shared/primitives/quantity.ts` would leave wms-mobile green while the device speaks a second refusal wording. Needs a cross-repo drift guard (the same class the wms-fe drift guard already covers for generated clients).
+- source_spec: `_bmad-output/implementation-artifacts/spec-10-7-mobile-pack-bench.md`
+  summary: Pack cards carry no human-readable order identifier (orders table has no code column).
+  evidence: Review round 1 W3 (blind-hunter B7) — two packable orders are indistinguishable on the bench; the gap is pre-existing orders-table design, a schema addition outside story 10-7's scope.
+- source_spec: `_bmad-output/implementation-artifacts/spec-10-7-mobile-pack-bench.md`
+  summary: The device's parcel-weight bound (`MAX_PARCEL_WEIGHT_GRAMS`) is pinned to nothing — no check compares it to the server's advertised `weightGrams` maximum.
+  evidence: Review round 2 R2-27 (verification-gap, pre-verified): the server can lower `MAX_WEIGHT_GRAMS` while both suites stay green; a divergence drops completed counts at replay as a visible rejection. Same root cause as the cross-repo mirror drift guard deferred from story 10-6 (V3).
