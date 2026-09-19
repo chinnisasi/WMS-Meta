@@ -2,7 +2,7 @@
 title: 'Product variants'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 126b592 / wms-fe 3dd9c96'
@@ -81,15 +81,15 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/src/shared/db/schema.ts` + `drizzle/0032_product_variants.sql` -- products table + skus.productId/variantValues + row-local CHECK, `db:generate` + rename + snapshot -- the model's spine
-- [ ] `wms-be/src/modules/catalog/product.command.ts` (NEW) -- create/edit/list with replay machinery -- the product write boundary
-- [ ] `wms-be/src/modules/catalog/sku.command.ts` -- attach/detach + values validation behind replay -- the variant write boundary
-- [ ] `wms-be/src/modules/catalog/catalog.dto.ts` + `catalog.controller.ts` -- DTOs, three new routes, SKU list filter -- the wire contract
-- [ ] `wms-be/src/modules/catalog/import.command.ts` -- 2 new optional columns + parsers -- the closed-header contract grows again
-- [ ] `wms-be/test/products.spec.ts` (NEW) + `catalog.spec.ts` check -- I/O matrix incl. replay pin -- the proof
-- [ ] `wms-be` -- re-export `openapi.json` -- drift guard
-- [ ] `wms-fe/src/lib/api/generated/` -- `bun run api:generate` -- FE drift guard passes
-- [ ] meta `docs/` -- module doc, API surface, PENDING, repo contract -- keep the docs true
+- [x] `wms-be/src/shared/db/schema.ts` + `drizzle/0032_product_variants.sql` -- products table + skus.productId/variantValues + row-local CHECK, `db:generate` + rename + snapshot -- the model's spine
+- [x] `wms-be/src/modules/catalog/product.command.ts` (NEW) -- create/edit/list with replay machinery -- the product write boundary
+- [x] `wms-be/src/modules/catalog/sku.command.ts` -- attach/detach + values validation behind replay -- the variant write boundary
+- [x] `wms-be/src/modules/catalog/catalog.dto.ts` + `catalog.controller.ts` -- DTOs, three new routes, SKU list filter -- the wire contract
+- [x] `wms-be/src/modules/catalog/import.command.ts` -- 2 new optional columns + parsers -- the closed-header contract grows again
+- [x] `wms-be/test/products.spec.ts` (NEW) + `catalog.spec.ts` check -- I/O matrix incl. replay pin -- the proof
+- [x] `wms-be` -- re-export `openapi.json` -- drift guard
+- [x] `wms-fe/src/lib/api/generated/` -- `bun run api:generate` -- FE drift guard passes
+- [x] meta `docs/` -- module doc, API surface, PENDING, repo contract -- keep the docs true
 
 **Acceptance Criteria:**
 - Given a product created with axes and two SKUs attached with distinct values, then the product list shows skuCount 2 and both SKU responses echo the attachment; a third SKU reusing values is refused 409.
@@ -98,6 +98,16 @@ context:
 - Given the openapi export and the FE generated client, then both regenerate with zero drift-guard failures.
 
 ## Implementation Notes
+
+**2026-09-19, implementation session** — wms-be b48e83d, wms-fe bdeeaa5, meta e0dda4f (diff verified line-by-line against this spec; my own full verification ran green).
+
+- **All nine tasks landed as specced.** The one Code-Map addition: the migration also carries **RLS `products_tenant_isolation`** (hand-appended, the every-tenant-scoped-table convention — `products` is a new tenant-scoped table, so the fail-closed single-dimension policy is not optional) and the SKU list's optional `productId` filter was already in the Code Map. Both agent additions are pinned by tests (RLS probe, CHECK probes).
+- **Gating rides `sku.edit` — the deliberate call, verified faithful:** `ProductCommand.create/edit` call `assertPermission(..., 'sku.edit')` inside the transaction (re-read from the DB each time), the controller OpenAPI docs say so, and no new capability exists in `permissions.ts`. Correct: the story ships no FE surface beyond the regenerated client, so a new capability would fail the FE capability-mirror guard; the frozen matrix never names a product capability.
+- **The `postgres.js` discovery (real, pinned in-test):** a bare string parameter double-encodes into a jsonb STRING, so the raw-SQL CHECK probe uses `sql.json({size: 'M'})` — recorded as a comment at the probe site and worth remembering for any future raw jsonb write.
+- **Value normalization is shared:** `assertVariantValues` + `normalizeVariantValues` (one validator, the `sku-attributes.ts` pattern) mean a stored `variantValues` is always the trimmed object; the edit path's SQL jsonb equality and the import path's sorted-keys fingerprint therefore agree (Postgres jsonb equality is key-order independent too).
+- **Import enforcement detail:** the resolution pass runs BEFORE the duplicate loop; a row refused for a missing product frees its `sku_code` (a later row may claim it — correct first-commit semantics); duplicate variants are enforced both file-internally (naming the earlier row) and against the tenant's existing attached SKUs (naming the SKU's code), one query for the whole file.
+- **Edge semantics beyond the matrix, deliberate:** a PATCH re-declaring the product's axes IDENTICALLY while attached is a 200 no-op (the element-wise comparison 409s only a changed declaration — reordered/respelled arrays are refused; a reordered array is pinned by test) — the 409 exists to prevent orphaning, and identical axes orphan nothing; a values-only PATCH re-values against the CURRENT attachment; `variantValues` riding a detach is refused 400, not silently dropped.
+- **Verification gap to carry into review:** the products list test asserts page-1 shape and `skuCount` but does not drive keyset pagination past one page (the `nextCursor` mechanics are exercised only by code reuse of the sku.list pattern).
 
 ## Spec Change Log
 
