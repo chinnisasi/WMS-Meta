@@ -63,6 +63,7 @@ Two sources, both authoritative:
 
 - **`uom_conversions.factor` is an integer nothing applies** — stored at import, echoed back, never used in arithmetic. Fractional conversions (kg↔lb) wait for the story that first applies one *(story 10.2)*
 - **Imperial units are deliberately absent** from the vocabulary — useful only alongside conversions, so they land together *(story 10.2)*
+- **Products/variants have no consumers yet** *(story 11-3)* — the `products` table, the SKU attach PATCH and the import's `product`/`variant_values` columns all exist, but no surface reads the grouping: **the 11-6 matrix (FE) and the 11-7 mobile announcement own the first UIs**. Epic 7's Shopify mapping note: the mapping is no longer lossy **by construction** — a Shopify product maps to a `products` row and its options/variants map to `axes`/`variantValues`; the channel-mapping tables themselves are Epic 7's own deliverable — Epic 11 only gates them (11-4 is kits)
 
 ## carriers
 
