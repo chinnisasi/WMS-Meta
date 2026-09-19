@@ -176,6 +176,28 @@ graph BT
 - **Prevents:** catch weight modelled as quantity; container fleets tracked in spreadsheets
 - **Rule:** a handling unit (pallet, case, cylinder, keg) may carry its own identity, its **actual weight** (catch weight), and its own location. **Returnable containers are assets tracked distinctly from the stock they carry** — a cylinder's location, custody and deposit survive the gas inside being consumed.
 
+### AD-23 — Client is a scoping dimension inside the tenant, defaulted and never nullable `[PROPOSED]` *(correct-course 2026-09-19, from SPEC-3pl)*
+
+- **Binds:** all repos; CAP-1, CAP-2, CAP-3; FR-75, FR-76
+- **Prevents:** cross-client leakage; a per-tenant "3PL mode" branch through every command
+- **Rule:** every tenant has exactly one **system-owned `self` client**, created with the tenant. `client_id` is `NOT NULL` wherever it appears. **D2C is the one-client case of the 3PL model, not a separate mode** — no command, query or surface branches on whether the tenant is a 3PL.
+- **Why not nullable:** a nullable scoping column makes every read carry `OR client_id IS NULL`, and isolation fails at the one query that forgets. A defaulted non-null column has one code path.
+- **Where it lives:** the SKU is the source of truth; most tables inherit the client by reference. Explicit columns exist only where a query filters or aggregates *without* joining through the SKU — `skus`, `orders`, `purchase_orders`, `ledger_events`; `bins.dedicated_client_id` and `users.client_id` nullable by design (a bin may be dedicated to a client; an operator is never).
+
+### AD-24 — Client isolation is enforced by a second RLS session variable `[PROPOSED]` *(correct-course 2026-09-19, from SPEC-3pl)*
+
+- **Binds:** wms-be; CAP-2, CAP-8; FR-76, FR-81
+- **Prevents:** a portal query, report, export or background job returning another client's rows
+- **Rule:** RLS policies gain a client clause keyed on `app.client_id`: an **operator session** leaves `app.client_id` unset and sees the whole tenant (cross-client waves and floor work are untouched); a **client-portal session** sets it, and the database — not the application — is what makes another client's rows unreachable. Same fail-closed `NULLIF(current_setting(...), '')` idiom AD-3 already relies on.
+- **Scoping extends where AD-3's does:** background jobs, projection rebuilds, export workers and reporting all take explicit client context or deliberately none.
+
+### AD-25 — Billing is a projection over the ledger `[PROPOSED]` *(correct-course 2026-09-19, from SPEC-3pl)*
+
+- **Binds:** wms-be; CAP-5, CAP-6, CAP-7; FR-77, FR-78, FR-79
+- **Prevents:** a billing book that drifts from the movements it bills for
+- **Rule:** charges derive from ledger events plus the rate card in force. **Handling charges are already ledger events** — `grn.received`, `pick.picked`, `order.dispatched` — so metering is aggregation, not new instrumentation. **Storage needs duration**, which the ledger does not hold directly, so a **daily snapshot job** records billable units per client per day; that snapshot is a **rebuildable projection, a cache and not a book**, and replaying the ledger must reproduce it. An **invoice is a materialised snapshot** recording its inputs, immutable once issued, so it can be recomputed, explained and disputed.
+- **Precedent:** the same rule AD-21 gives customs, excise and controlled-substance registers — *registers are projections over ledger events, never a separately maintained book*. Reusing it means one mechanism, not two.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -273,6 +295,7 @@ wms-mobile/ `[ASSUMPTION: its own repo — register in docs/repo-catalog.yaml + 
 | Customs, excise, controlled goods (FR-55…66) | compliance module | AD-21, AD-16, AD-10 |
 | Manufacturing flows (FR-67…70) | new manufacturing module | AD-1, AD-9, AD-10 |
 | Bulk & tank storage (FR-71…74) | inventory + putaway modules | AD-9, AD-18, AD-1 |
+| Clients, billing, client portal, ASN, per-client reporting (FR-75…82) *(correct-course 2026-09-19, Epic 21)* | new clients + billing modules; inbound gains the ASN document beside the PO | AD-23 (client dimension), AD-24 (client RLS), AD-25 (billing as ledger projection), AD-6 (billing reads the ledger through the inventory facade, writes no stock) |
 
 ## Deferred
 
@@ -283,7 +306,7 @@ wms-mobile/ `[ASSUMPTION: its own repo — register in docs/repo-catalog.yaml + 
 - **Marketplace API approvals** (PRD OQ2): launch fallback is Shopify + manual (addendum §5); adapter architecture unchanged.
 - **True `numeric` quantities, and scales finer than milli** — considered at the AD-9 amendment (2026-09-17). `numeric` rejected because decimals cannot cross the Valkey/Lua reservation path safely; finer scales rejected because the 2^53 double ceiling is a fixed budget split between range and precision, and 3 dp buys ~9.0 x 10^12 base units of range. Revisit only for a UoM that genuinely needs more than 3 dp.
 - **Defence, classified and strategic-reserve depots** — personnel-clearance handling, classified segregation and a government procurement path. The foundations are reachable via AD-18 and AD-21; deliberately not planned (PRD §2.2) as a different product and sales motion.
-- **Multi-region, per-tenant DBs, CRDTs, 2PC, RFID edge, Kafka** — rejected for v1 (addendum §1.4); the rejection is safe because the capture edge produces a normalized, device-agnostic scan-event shape (RFID-tolerance preserved); 3PL multi-client billing (v2) stays reachable through AD-3 tenancy — no single-client assumptions anywhere.
+- **Multi-region, per-tenant DBs, CRDTs, 2PC, RFID edge, Kafka** — rejected for v1 (addendum §1.4); the rejection is safe because the capture edge produces a normalized, device-agnostic scan-event shape (RFID-tolerance preserved). *(Corrected 2026-09-19: this line previously claimed 3PL stays reachable through AD-3 tenancy — AD-3 is `tenant_id` + `warehouse_id` only and clients are not tenants; client is a third scoping dimension, now planned as Epic 21 and governed by AD-23/24/25.)*
 - **Mobile scanning internals** — camera library vs ML Kit, symbology config: feature-level decision under FR-30; spine fixes only the on-device-decision + ≤1.5 s budget + capture-agnostic scan-event shape.
 - **Count/short-pick mechanics detail** (FR-15/20/21): count snapshots pin bin `state_epoch` at task start; variance routing details are feature-level.
 - **Operational envelope** — decided here: observability is a first-class surface (metrics + alerting pipeline is load-bearing for NFR-1; stack choice in the platform workstream); load testing at 15× median before every peak season is scheduled work (NFR-2), not a deferred intention; backups/DR are restore-verified RDS + S3 with the 7-year lifecycle per AD-16. Deferred: concrete tooling (IaC, CI/CD shape, dashboards, on-call).

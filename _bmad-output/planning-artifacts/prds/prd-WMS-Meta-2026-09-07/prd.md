@@ -34,7 +34,7 @@ The wedge is the minimum end-to-end process — receive, putaway, pick, pack, sh
 ### 2.2 Non-Users (v1)
 
 - Mid-market/enterprise warehouses needing labor management, engineered standards, or yard management — different product, different sales motion.
-- 3PLs running many client brands with per-client billing — a v2 wedge, not v1.
+- ~~3PLs running many client brands with per-client billing — a v2 wedge, not v1.~~ *(Amended 2026-09-19: 3PL is planned into the programme — Epic 21; the client dimension lands in Phase 0, billing/portal/reporting in Phase 2. See epics.md, ARCHITECTURE-SPINE AD-23/24/25 and `_bmad-output/specs/spec-3pl/`.)*
 - Businesses whose core need is accounting, not warehousing — we integrate with Tally/Zoho Books rather than replace them.
 - Retail POS-centric single-store shops.
 
@@ -440,7 +440,7 @@ The mobile client scans barcodes via device camera and paired HID scanners, supp
 - **No advanced picking strategies** (zone, cluster, cartonization) in v1 — single-order + batch only.
 - **No robotics/AMR orchestration, no RFID.** Barcode-era v1 by design; the scan-event abstraction keeps RFID-tolerance possible later.
 - **No native POS.** Retail counter flows are out.
-- **No 3PL multi-client billing** in v1 — tenancy is designed for it (Tenant partition everywhere), the billing/product surface is not.
+- **No 3PL multi-client billing** in v1 — tenancy is designed for it (Tenant partition everywhere), the billing/product surface is not. *(Amended 2026-09-19: tenancy does NOT cover it — clients are not tenants; the client dimension is a third scoping column landing in Phase 0 as Epic 21-1/21-2, with billing/portal in Phase 2. Epic 21; AD-23/24/25.)*
 - **No EDI (940/945/856) in v1** — API-based Channel feeds only; EDI is the enterprise wedge later.
 - **No custom report builder in v1** — fixed dashboards + export; a builder follows demand.
 - **No warehouse floor-plan visual editor** — grid-based bin management only in v1.
@@ -465,10 +465,10 @@ The mobile client scans barcodes via device camera and paired HID scanners, supp
 ### 6.2 Out of Scope for MVP
 
 - Tally/Zoho Books sync (v2 — accountant exports cover filing week) `[NOTE FOR PM: highest-demand integration question from every comparable; revisit if launch feedback contradicts.]`
-- EDI flows (v2+; enterprise/3PL wedge)
+- EDI flows (v2+; enterprise/3PL wedge) *(Amended 2026-09-19: the 3PL wedge is now Epic 21; EDI 940/945/856 itself stays out — the ASN lands API-native in Epic 21-6.)*
 - Labor management, yard management, advanced slotting/forecasting (v3 territory)
 - RFID, robotics orchestration (no v1 customer needs it; abstraction kept)
-- 3PL billing (v2 candidate; tenancy prepared)
+- 3PL billing (v2 candidate; tenancy prepared) *(Amended 2026-09-19: covered by Epic 21 — rate cards, ledger-derived metering, immutable invoices; billing as a ledger projection per AD-25. The migration pair lands Phase 0.)*
 - Regional carriers beyond the v1 India carrier set `[ASSUMPTION: v1 carrier set = Delhivery, Blue Dart, Ecom Express, Shiprocket (aggregator cover for others); final list pending commercial conversations.]`
 - Custom report builder, floor-plan editor (post-launch demand pull)
 
