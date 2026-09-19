@@ -2,7 +2,7 @@
 title: 'Story 10.5: web fractional quantity surfaces — decimals render, inputs accept, precision comes from the SKU'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '68c18f83d77c71d17f824532392e664da4533526' # wms-fe main (post 10-2)
