@@ -2,7 +2,7 @@
 title: 'Product variants'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 126b592 / wms-fe 3dd9c96'

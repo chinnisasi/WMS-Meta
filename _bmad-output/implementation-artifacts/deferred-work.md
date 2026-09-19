@@ -316,3 +316,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-10-7-mobile-pack-bench.md`
   summary: The device's parcel-weight bound (`MAX_PARCEL_WEIGHT_GRAMS`) is pinned to nothing — no check compares it to the server's advertised `weightGrams` maximum.
   evidence: Review round 2 R2-27 (verification-gap, pre-verified): the server can lower `MAX_WEIGHT_GRAMS` while both suites stay green; a divergence drops completed counts at replay as a visible rejection. Same root cause as the cross-repo mirror drift guard deferred from story 10-6 (V3).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-3-product-variants.md`
+  summary: `docs/repos/wms-be/README.md`'s documented import header line omits the 11.2 columns (catch_weight_tracked, weight_grams, length_mm, width_mm, height_mm, country_of_origin) even though OPTIONAL_COLUMNS carries them — stale since 11-2.
+  evidence: README surface bullet (the "Documented header:" line) predates 11-2 and was not touched by 11-3's diff; the code's OPTIONAL_COLUMNS is the authority. A docs-only correction, pre-existing debt.
