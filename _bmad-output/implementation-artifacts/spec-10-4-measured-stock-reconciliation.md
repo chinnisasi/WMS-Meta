@@ -2,9 +2,9 @@
 title: 'Story 10.4: measured stock reconciles — fractional balances proven, the oracle never wedged'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 baseline_commit: 'd6b3009f1017568e3a27232003b1790178961892' # wms-be main (post 10-3)
 context:
   - '_bmad-output/implementation-artifacts/epic-10-context.md'
@@ -182,3 +182,9 @@ findings → 19 after de-duplication). Every claim verified at its cited locatio
 | 30 | Tamper helpers run blind `UPDATE`s; multi-row scopes would multiply the delta | claims | **false** | `stock_on_hand_scope_unique` (`schema.ts:681`) makes a multi-row scope impossible — the DB enforces one row per (tenant, warehouse, sku, bin) |
 | 31 | The `.env.example` hunk includes story-2.2's `OUTBOX_RECONCILE_POLL_MS` block — unrelated content riding this diff | edge | **false** | Spec-mandated: the Code Map folds epic-2 retro a5 (the missing doc) into this story's `.env.example` task |
 | 32 | Design-doc sync debt: `docs/design/modules/inventory.md:23` and `:409` and the alert-payload contract describe pre-10.4 behavior | claims | **medium — patched (meta)** | Corrected in this story's meta docs PR (meta lands last); the checkpoint-table row, the failure-stamp sentence and the alert contract updated |
+
+**Loop 1 (re-review of the patch commit, same day):** every one of the ten fixes verified correct and complete against code and
+live test runs; no new defects found. The pick arm's SQL binding, fairness (every cycle outcome stamps `updated_at`) and its
+exact agreement with `detect`'s pass-kind decision were traced; the quiet-partition test's hermeticity and termination were
+verified; the constructor test's env restoration and cross-file pollution were checked in both suite orders. One non-blocking,
+pre-dating observation (`Logger.overrideLogger(false)` suite leak) recorded in deferred-work.md.
