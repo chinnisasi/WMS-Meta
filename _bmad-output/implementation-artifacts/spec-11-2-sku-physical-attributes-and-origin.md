@@ -2,7 +2,7 @@
 title: 'SKU physical attributes and origin'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 478df1f / wms-fe 9bd46eb'
@@ -75,16 +75,16 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/src/shared/db/schema.ts` + `drizzle/0031_sku_physical_attributes.sql` -- 5 additive columns, hand-appended CHECKs, `db:generate` + rename + snapshot commit -- the model's spine
-- [ ] `wms-be/src/modules/catalog/sku-attributes.ts` (NEW) -- caps, regex, `assertSkuAttributes` -- one validator, two callers
-- [ ] `wms-be/src/modules/catalog/sku.command.ts` -- edit command fields + behind-replay validation + snapshot echo -- the write boundary
-- [ ] `wms-be/src/modules/catalog/catalog.dto.ts` -- DTO mirrors + response fields -- the wire contract
-- [ ] `wms-be/src/modules/catalog/import.command.ts` -- 5 new optional columns + row parsing -- the closed-header contract forces this
-- [ ] `wms-be/test/sku-attributes.spec.ts` (NEW) + `catalog.spec.ts` seeds -- I/O matrix incl. no-break replay -- the proof
-- [ ] `wms-be` -- re-export `openapi.json` -- drift guard
-- [ ] `wms-fe/src/lib/api/generated/` -- `bun run api:generate` -- consume the contract
-- [ ] `wms-fe/src/components/settings/sku-table.tsx` -- edit-form fields + table column -- the user enters the attributes
-- [ ] meta `docs/` -- module doc `catalog.md`, API-SURFACE rows, `PENDING.md` (4-6d inputs note), repo READMEs -- keep the docs true
+- [x] `wms-be/src/shared/db/schema.ts` + `drizzle/0031_sku_physical_attributes.sql` -- 5 additive columns, hand-appended CHECKs, `db:generate` + rename + snapshot commit -- the model's spine
+- [x] `wms-be/src/modules/catalog/sku-attributes.ts` (NEW) -- caps, regex, `assertSkuAttributes` -- one validator, two callers
+- [x] `wms-be/src/modules/catalog/sku.command.ts` -- edit command fields + behind-replay validation + snapshot echo -- the write boundary
+- [x] `wms-be/src/modules/catalog/catalog.dto.ts` -- DTO mirrors + response fields -- the wire contract
+- [x] `wms-be/src/modules/catalog/import.command.ts` -- 5 new optional columns + row parsing -- the closed-header contract forces this
+- [x] `wms-be/test/sku-attributes.spec.ts` (NEW) + `catalog.spec.ts` seeds -- I/O matrix incl. no-break replay -- the proof
+- [x] `wms-be` -- re-export `openapi.json` -- drift guard
+- [x] `wms-fe/src/lib/api/generated/` -- `bun run api:generate` -- consume the contract
+- [x] `wms-fe/src/components/settings/sku-table.tsx` -- edit-form fields + table column -- the user enters the attributes
+- [x] meta `docs/` -- module doc `catalog.md`, API-SURFACE rows, `PENDING.md` (4-6d inputs note), repo READMEs -- keep the docs true
 
 **Acceptance Criteria:**
 - Given a SKU edited with valid attributes, then the edit response and the SKU list echo them field-for-field, and a pre-11.2 row reads `null`.
@@ -94,9 +94,41 @@ context:
 
 ## Implementation Notes
 
+## Implementation Notes (2026-09-19, implementation session)
+
+- **All five tasks in the Code Map landed as specced; one task needed less than written:** `catalog.spec.ts` needed NO seed updates — the new import columns are optional, so every existing import fixture parses exactly as before; the matrix lives entirely in the new `test/sku-attributes.spec.ts` (11 tests).
+- **The no-break replay claim is pinned, not just asserted:** `a pre-11.2 edit key … replays 200` mints a key with a body carrying zero attribute keys, replays it, and asserts the 200 re-serves the snapshot — a hash break would answer 422. The spread-hash reasoning (`JSON.stringify` drops `undefined` keys) is documented at the hash site in `sku.command.ts`.
+- **DB CHECKs are probed directly:** raw-SQL inserts prove a zero weight and a lowercase origin are unstorable by ANY path, and that NULL stays legal — the 0028-pattern backstop works.
+- **Controller edge convention:** `countryOfOrigin` follows `hsn` — `''` maps to `null` at the controller, and the DTO's pattern admits `''` so clearing from a web form works. The command re-checks the regex behind the replay.
+- **Import row errors name the API field, not the CSV column, for value/range failures** (they render through `assertSkuAttributes`); only spelling failures (minus sign, non-numeric) name the CSV column — both verified by the import test's three failed rows and the fix-mode re-submit.
+- **FE:** `attributeInput` keeps the form's established shape-vs-value split — blank clears (null), a malformed spelling refuses client-side naming the field and unit, a well-formed but out-of-bounds value is SENT so the server's named refusal renders (the same choice the reorder fields make; precision refusals stay the server's). `skuPhysicalLabel` never fabricates a `200×—×100` composite — partial axes render individually. New `sku-table.test.tsx` (5 tests) drives the real fetch wrapper through a stub.
+- **Runner trap (recorded):** `bun test test/sku-attributes.spec.ts` (bun's own runner) hangs — it bypasses jest's `globalSetup` (template DB). Backend suites must run via `bun run test` / `npx jest`.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+**Review of the implemented diff (step-04, iteration 0) — three layers: blind-hunter (10), edge-case-hunter (3), verification-gap (1 headline + 2 notes). 15 findings, verdicts rendered after verification at cited locations.**
+
+| # | Finding | Verdict | Evidence / route |
+|---|---------|---------|------------------|
+| 1 | Missing EOF newlines on all new files | low | Confirmed: `0031_sku_physical_attributes.sql`, `sku-attributes.ts`, `import.command.ts`, `test/sku-attributes.spec.ts`, `sku-attributes.ts`/`.test.ts` (FE), `sku-table.test.tsx` all end without a newline. Direct correction → **patch** |
+| 2 | `catalog.md:198` says fraction/over-cap import refusal "names the CSV column" | low | Confirmed wrong: `parseAttributeNumber` (`import.command.ts:966`) admits `^\d+(\.\d+)?$`, so fractions/over-cap reach `assertSkuAttributes` which names the API field — pinned by the import test (`byRow.get(3).detail` contains `widthMm`). Only minus/non-numeric names the CSV column. → **patch** (docs) |
+| 3 | `wms-be/README.md:45` carries the same muddled wording | low | Same defect as #2 in the interface contract. → **patch** (docs) |
+| 4 | No API test for dimension over-cap | low | Confirmed: only weight bounds and fractional `lengthMm: 12.5` are probed; nothing sends a dimension > 10,000. Direct test addition → **patch** |
+| 5 | No API test for dimension floor | low | Confirmed: 0/negative tested only for `weightGrams`. Same root cause as #4 → **patch** |
+| 6 | Controller `countryOfOrigin: ''` → null mapping untested | low | Pre-verified by the verification-gap layer (grep: no `''` arm in `test/`; the `hsn` template's `''` arm IS pinned at `catalog.spec.ts:603`). → **patch** |
+| 7 | FE `attributeInput` onRejected branch untested | low | Confirmed: `sku-table.test.tsx` has 5 tests, none drives the malformed-spelling client refusal. → **patch** |
+| 8 | Inconsistent cell accessors in `validateRow` (`get()` vs raw `v[...]`) | false | `parseAttributeNumber` trims internally (`(raw ?? '').trim()`, `import.command.ts:966`), so both access paths are normalized — no bad outcome occurs at the cited location |
+| 9 | FE Origin input neither transforms nor hints case | false | By design: the frozen matrix pins server-side refusal for bad country ("400 naming `countryOfOrigin`"), and that refusal renders in the form; `maxLength={2}` does not block any designed path |
+| 10 | Operator-facing vocabulary mismatch (`width_mm` vs `widthMm` for one cell) | false | Deliberate, recorded split (Implementation Notes: shape errors name the CSV column, value errors name the API field), pinned by test; changing it is a design renegotiation, not a patch |
+| 11 | Pre-11.2 stored replay snapshot omits the five `SkuResponse` fields | false | Replay serves the stored pre-edit response verbatim — that is the idempotency contract; the only current consumer (`sku-table.tsx` `onSaved`) reads `updated.code` and reloads live rows |
+| 12 | DTO mirrors precede the replay lookup (tightening would 400 a committed op) | false | Established pattern for every DTO-mirrored field (`gst_rate`, `hsn`); only live if a bound is tightened, and the stated convention is widen-only (0023/0024 precedent) |
+| 13 | Native min/max/step blocks submit before designed refusals render | medium | Confirmed real: the four attribute inputs use `type="number"` with `min={1} max={1000000} step={1}` (`sku-table.tsx:327-369`) and the form has no `noValidate` — while the reorder fields carry an explicit comment (`:393`): "The input constrains NOTHING beyond non-negativity… `step="any"`". Over-cap/fractional entries hit generic native validation copy; the designed named refusals are unreachable through the form. Same site as #14 → **patch** |
+| 14 | `type="number"` paste sanitization silently empties a field → read as clear | low | Same root cause as #13 (constrained number input instead of the form's precedent — 11-1 pincode uses `type="text" inputMode="numeric"`): a paste with a unit suffix sanitizes to `''`, which `attributeInput` maps to null → stored value cleared on save. → **patch** (grouped with #13) |
+| 15 | Migration re-run against an already-migrated DB | false | The drizzle journal is the re-run guard for every migration in the repo (uniform pattern across all 31); a manually-lost journal row is not a reachable program state |
+
+**Routing:** no intent_gap, no bad_spec, no defer. Six patch groups: EOF newlines; docs wording (#2+#3); FE input semantics (#13+#14); test gaps (#4+#5 dimension bounds, #6 `''` arm, #7 FE rejection branch).
 
 ## Design Notes
 
