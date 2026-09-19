@@ -2,9 +2,10 @@
 title: 'Story 10-6: Mobile decimal and catch-weight capture'
 type: 'feature'
 created: '2026-09-19'
-status: 'ready-for-dev'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: '6b7af99'
 context:
   - '_bmad-output/implementation-artifacts/epic-10-context.md'
   - 'docs/design/mobile/SYSTEM-DESIGN.md'
@@ -65,13 +66,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/api.ts` + `src/state/catalog-snapshot.ts` -- add `uomPrecision`/`catchWeightTracked` to `CatalogSku` with additive parse defaults -- the device can only validate entry against data in the snapshot (guide §4)
-- [ ] `src/lib/quantity-input.ts` (new) -- precision-aware parse (0-dp digit grammar unchanged; >0-dp decimal grammar capped at declared dp) + refusal copy byte-mirroring the server's precision message + weight parse (whole grams, >0, ≤ cap) + scale-round helper -- one statement, unit-tested, like wms-fe's `format-quantity.ts`
-- [ ] `app/receive.tsx` + `src/receiving/draft.ts` -- measured SKUs render decimal entry (48dp keys, oversized `.` and `0`, real text input); `setQty` loses Math.floor for >0-dp units; catch-weight flow prompts weight after scan (accessible name "Catch weight, kilograms, three decimal places" distinct from quantity), weights persist in the draft, confirm gates on weights count == qty, payload carries `weightsGrams` (absent on non-catch-weight lines) -- the story's namesake
-- [ ] `app/putaway.tsx` + `src/putaway/draft.ts`, `app/pick.tsx` + `src/picking/draft.ts` -- precision-aware qty/short-qty parse and copy, driven by the line's SKU -- every quantity path honors precision (guide §6)
-- [ ] `src/state/device-store.ts` -- single-flight on `replay()` (concurrent calls await the same in-flight pass; `enqueueOp` during it appends after, never deleted) -- PENDING's verified zero-scan-loss defect, fix already diagnosed
-- [ ] Tests -- unit-test the matrix rows (precision refusals, weight cap, magnitude confirm, snapshot defaults, replay single-flight) and update existing draft tests
-- [ ] `docs/repos/wms-mobile/README.md` -- contract: snapshot carries `uomPrecision`/`catchWeightTracked`; `grn.submit` payload carries `weightsGrams`
+- [x] `src/api.ts` + `src/state/catalog-snapshot.ts` -- add `uomPrecision`/`catchWeightTracked` to `CatalogSku` with additive parse defaults -- the device can only validate entry against data in the snapshot (guide §4)
+- [x] `src/lib/quantity-input.ts` (new) -- precision-aware parse (0-dp digit grammar unchanged; >0-dp decimal grammar capped at declared dp) + refusal copy byte-mirroring the server's precision message + weight parse (whole grams, >0, ≤ cap) + scale-round helper -- one statement, unit-tested, like wms-fe's `format-quantity.ts`
+- [x] `app/receive.tsx` + `src/receiving/draft.ts` -- measured SKUs render decimal entry (48dp keys, oversized `.` and `0`, real text input); `setQty` loses Math.floor for >0-dp units; catch-weight flow prompts weight after scan (accessible name "Catch weight, kilograms, three decimal places" distinct from quantity), weights persist in the draft, confirm gates on weights count == qty, payload carries `weightsGrams` (absent on non-catch-weight lines) -- the story's namesake
+- [x] `app/putaway.tsx` + `src/putaway/draft.ts`, `app/pick.tsx` + `src/picking/draft.ts` -- precision-aware qty/short-qty parse and copy, driven by the line's SKU -- every quantity path honors precision (guide §6)
+- [x] `src/state/device-store.ts` -- single-flight on `replay()` (concurrent calls await the same in-flight pass; `enqueueOp` during it appends after, never deleted) -- PENDING's verified zero-scan-loss defect, fix already diagnosed
+- [x] Tests -- unit-test the matrix rows (precision refusals, weight cap, magnitude confirm, snapshot defaults, replay single-flight) and update existing draft tests
+- [x] `docs/repos/wms-mobile/README.md` -- contract: snapshot carries `uomPrecision`/`catchWeightTracked`; `grn.submit` payload carries `weightsGrams`
 
 **Acceptance Criteria:**
 - Given a 3-dp kg SKU, when the operator types 2.5, the queued `grn.submit` carries 2.5 and the banner shows the accepted/queued state
@@ -80,6 +81,14 @@ context:
 - Given an in-flight replay, when a scan is enqueued, it survives and replays
 
 ## Implementation Notes
+
+- **Verification caveat:** `bun run lint` has no script in wms-mobile's `package.json` (scripts: start / android / ios / typecheck / test; `.github/workflows/ci.yml` runs test + typecheck only, no lint config in the repo). Reported honestly rather than claimed: typecheck and tests are the repo's only automated gates.
+- **Draft-line `weightsGrams` is key-present-with-undefined on non-catch-weight lines in memory** (built as a spread with `undefined`); the load-bearing absence is on the WIRE — `confirmPayload` builds the payload line with a spread conditional, so the JSON never carries the key, asserted by `'weightsGrams' in line` === false and by `JSON.stringify(payload)` not containing the key. Draft-level tests assert `weightsGrams === undefined` instead of key absence (the draft is React state, never serialized).
+- **The 10× guard's reference is the first captured weight for the SKU across the WHOLE receipt** (`firstCapturedWeightForSku` walks all draft lines of the same skuId), so batch-split lines of one SKU guard each other; a different SKU carries no reference and never fires the guard.
+- **The vanish arm** (`Math.round(value * 1000) === 0` refusal) is unreachable via typed entry on a 3-dp unit (the precision arm catches 4-place values first); it guards coarser-declared units (e.g. a 5-dp unit taking 0.00004). Tested at precision 5.
+- **Keypad scope:** the decimal keypad rides only the fields the spec names — receive quantity, catch weight, scale reading, plus putaway's Set field and pick's short-pick entry (precision-driven). Steppers stay ±1 integer everywhere; scan-increment stays +1 for all units.
+- **Pick screen restore-on-reject** (`onShortQty` resetting the field from the draft on refusal) now formats through `formatQuantity` so the restored text matches the declared precision.
+- Commits (local only, on `feat/10-6-mobile-decimal-and-catch-weight-capture`): 7698b51 (model + lib + tests), 23ef220 (replay single-flight), cdfda78 (screen surfaces). `bun test` 203 passing (baseline 143), `bunx tsc --noEmit` clean.
 
 ## Spec Change Log
 
