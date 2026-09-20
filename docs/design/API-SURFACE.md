@@ -1,6 +1,6 @@
 # API surface
 
-Every route the backend exposes, grouped by the module that owns it. **66 routes across 11 controllers.**
+Every route the backend exposes, grouped by the module that owns it. **69 routes across 11 controllers.**
 
 Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-be/README.md`](../repos/wms-be/README.md); this is the inventory — what exists, who owns it, what gates it.
 
@@ -52,6 +52,9 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `/tenants/{t}/catalog/products` | `sku.edit` | **11.3.** Identity only: `name` + `axes` (1–3). Duplicate name → `409 duplicate-product-name` |
 | GET | `/tenants/{t}/catalog/products` | — | **11.3.** Keyset; items carry the derived `skuCount` |
 | PATCH | `/tenants/{t}/catalog/products/{productId}` | `sku.edit` | **11.3.** Name always editable; `axes` immutable while variants are attached → `409 product-has-variants`. Empty body → `400 empty-product-edit` |
+| POST | `/tenants/{t}/catalog/skus/{skuId}/kit` | `sku.edit` | **11.4.** Attaches a composition to an existing imported SKU — the only door into kit-ness. 409 `kit-already-composed`; 400 `kit-self-reference`; 409 `kit-component-is-kit` (flat BOM); 409 `duplicate-kit-component`; 400 `empty-kit-composition` (the command owns the empty-array answer, not the DTO); **409 `kit-sku-holds-stock`** — a SKU carrying on-hand stock or a live reservation cannot become a kit |
+| PUT | `.../catalog/skus/{skuId}/kit` | `sku.edit` | **11.4.** Full replacement — DELETE + re-INSERT in one tx. PUT on a **non-kit** SKU → `404` (replace never creates kit-ness). No delete command exists |
+| GET | `/tenants/{t}/catalog/kits` | — | **11.4.** Keyset; kit SKUs with their compositions |
 
 **The only creator of SKUs is the CSV import.** There is no `POST /skus`.
 
@@ -59,7 +62,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 | Method | Path | Capability | Notes |
 |---|---|---|---|
-| POST | `/tenants/{t}/inventory/adjustments` | `stock.adjust` | The first ledger-movement producer. Serial-tracked SKUs need one serial per unit |
+| POST | `/tenants/{t}/inventory/adjustments` | `stock.adjust` | The first ledger-movement producer. Serial-tracked SKUs need one serial per unit. A kit SKU is refused sign-agnostically → `409 kit-cannot-hold-stock` (11.4) |
 | GET | `/tenants/{t}/warehouses/{w}/inventory/events` | — | The ledger timeline, keyset |
 | GET | `.../inventory/stock` | — | Derived on-hand by bin/SKU |
 | GET | `.../inventory/batches` | — | Batch balances |
@@ -81,7 +84,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision), bins, putawayTasks, pickTasks, packTasks (+ handlingUnits, 10.7), open POs. Composed at the api shell across modules |
 | GET | `/tenants/{t}/receiving/goods-receipts` | — | Keyset |
 | GET | `/tenants/{t}/receiving/over-receipts` | — | The review queue |
-| POST | `.../over-receipts/{id}/approve` | `review.decide` | Bumps the PO line ceiling |
+| POST | `.../over-receipts/{id}/approve` | `review.decide` | Bumps the PO line ceiling. A SKU that became a kit since the GRN → `409 kit-cannot-hold-stock` (11.4); the row stays `pending` for a reject |
 | POST | `.../over-receipts/{id}/reject` | `review.decide` | |
 | POST | `/tenants/{t}/receiving/qc-holds` | `qc.manage` | Quarantines a (sku, bin) scope — **excluded from ATP** |
 | POST | `.../qc-holds/{holdId}/release` | `qc.manage` | |
