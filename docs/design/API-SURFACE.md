@@ -23,11 +23,11 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | GET | `/tenants/{t}/warehouses` | — | Keyset |
 | POST | `/tenants/{t}/warehouses/{w}/zones` | `zone.create` | Foreign warehouse → `404` |
 | GET | `/tenants/{t}/warehouses/{w}/zones` | — | Keyset |
-| POST | `.../zones/{zoneId}/bins` | `bin.create` | Bin codes unique per **warehouse**, not per zone |
-| POST | `.../zones/{zoneId}/bins/grid` | `bin.create` | ≤ 500 bins → `422 grid-too-large`; any collision aborts the whole grid |
+| POST | `.../zones/{zoneId}/bins` | `bin.create` | Bin codes unique per **warehouse**, not per zone. Optional physical capacity (11-5): `lengthMm`/`widthMm`/`heightMm`/`maxWeightGrams`, positive whole ≤ cap, absent/null = unconstrained |
+| POST | `.../zones/{zoneId}/bins/grid` | `bin.create` | ≤ 500 bins → `422 grid-too-large`; any collision aborts the whole grid. Same optional capacity attributes (11-5) |
 | GET | `.../zones/{zoneId}/bins` | — | Keyset |
-| PATCH | `/tenants/{t}/warehouses/{w}/bins/{binId}` | `bin.block` | Block/unblock toggle |
-| POST | `.../bins/{binId}/merge` | `bin.retire` | Moves stock, emits ledger events |
+| PATCH | `/tenants/{t}/warehouses/{w}/bins/{binId}` | `bin.block` / `bin.create` | Per-body dispatch: `blocked` → block/unblock toggle (`bin.block`); capacity attributes `lengthMm`/`widthMm`/`heightMm`/`maxWeightGrams` → `editBinCapacity` (`bin.create`; 11-5); both or neither → `400 validation-failed` |
+| POST | `.../bins/{binId}/merge` | `bin.retire` | Moves stock, emits ledger events. 11-5 gates on the target's physical capacity: `bin-overweight` / `bin-volume-exceeded` / `bin-item-oversize` → `400` |
 | POST | `.../bins/{binId}/retire` | `bin.retire` | **Terminal.** Bin must be empty |
 | GET | `/tenants/{t}/setup-checklist` | — | Computed on read |
 | POST | `/tenants/{t}/users` | `users.invite` | Returns a one-time invite token; 7-day TTL |
@@ -94,7 +94,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 | Method | Path | Capability | Notes |
 |---|---|---|---|
-| POST | `/tenants/{t}/putaway/placements` | `putaway.execute` | **device.** Records suggestion-vs-actual. `bin-full`/`bin-blocked` → `400`; `insufficient-on-hand` → `422` (retryable, key unconsumed) |
+| POST | `/tenants/{t}/putaway/placements` | `putaway.execute` | **device.** Records suggestion-vs-actual. `bin-full`/`bin-blocked` → `400`; 11-5 physical gates `bin-overweight`/`bin-volume-exceeded`/`bin-item-oversize` → `400`; `insufficient-on-hand` → `422` (retryable, key unconsumed) |
 | GET | `/tenants/{t}/putaway/tasks` | — | Remaining work in the receiving bin |
 | GET | `/tenants/{t}/putaway/placements` | — | Keyset |
 

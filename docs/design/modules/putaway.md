@@ -52,6 +52,7 @@ The one table in the system with split ownership, and **the one with no architec
 | `zone_id` | uuid | NO | — | — | tenancy | |
 | `code` | text | NO | — | `bins_warehouse_id_code_unique` on `(warehouse_id, code)` — **two columns, no `tenant_id`** (`0003:24`) | tenancy | **Unique per WAREHOUSE, not per zone** |
 | `capacity` | bigint `mode:'number'` | NO | — | `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`) | tenancy | **Whole units only** (10.2). Shared base-UoM space — a bin holds many SKUs measured differently |
+| `length_mm` / `width_mm` / `height_mm` / `max_weight_grams` | integer | **YES** | — | `bins_length_mm_bounded` / `bins_width_mm_bounded` / `bins_height_mm_bounded` (`> 0 AND <= 100000`) and `bins_max_weight_grams_bounded` (`<= 100000000`) — CHECKs live only in migration `0034`, never in `schema.ts` | tenancy | **Story 11-5 — the physical capacity.** Millimetre dimensions and max weight in grams, integer WYSIWYG (no milli scaling). NULL = unconstrained. Tenancy owns the structure (create/grid/edit); putaway only **reads** it for the gates |
 | `type` | text | NO | — | **no CHECK** | tenancy | Free text. Not the only unguarded vocabulary — `ledger_events.type`, `putaway_placements.reason_code`, `catalog_import_errors.reason_code`, `inventory_quarantines.reason` and `qc_holds.reason` are all unguarded text too |
 | `blocked` | boolean | NO | `false` | — | **putaway** | `bin-state.command.ts` |
 | `system_owned` | boolean | NO | `false` | — | tenancy | RECEIVING / QC-HOLD bins. **Codes are not reserved** — an operator can still collide (epic-3 retro a2) |
@@ -81,12 +82,12 @@ Called from `tenancy.controller.ts:404`. The response shape and URL are tenancy'
 
 `putaway.command.ts` exports read-only derivation helpers and problem factories that `src/modules/tenancy/bin.command.ts:35-42` imports directly:
 
-- `binCandidatesInTx(tx, tenantId, warehouseId)` (`:768`) — the ranked eligible-bin list.
-- `binOccupancyInTx(tx, tenantId, warehouseId, binId)` (`:810`) — one bin's total on-hand.
-- `binFull(binCode, capacity, occupancy)` (`:916`), `binBlocked(binCode)` (`:926`), `binRetiredAsTarget(binCode)` (`:940`), `binRetiredAsSource(binCode)` (`:954`).
+- `binCandidatesInTx(tx, tenantId, warehouseId)` (`:768`) — the ranked eligible-bin list. Since 11-5 each candidate also carries the bin's four physical-capacity attributes and its current `weightLoad`/`volumeLoad` (numeric-string sums read as BigInt).
+- `binOccupancyInTx(tx, tenantId, warehouseId, binId)` (`:810`) — one bin's load: `BinLoad { units, weightLoad, volumeLoad }` — units as a `::bigint` sum, the two loads as `::numeric` sums of `quantity::numeric * attr` over `stock_on_hand` ⋈ `skus` (11-5). The sums read back as **strings**; every comparison is BigInt.
+- `binFull(binCode, capacity, occupancy)` (`:916`), `binBlocked(binCode)` (`:926`), `binRetiredAsTarget(binCode)` (`:940`), `binRetiredAsSource(binCode)` (`:954`), and the 11-5 physical rejections `binOverweight` / `binVolumeExceeded` / `binItemOversize` (all 400; see *The physical capacity gates* below).
 - `receivingBinOnHandInTx` (`:834`), `resolveSerialRefsInTx` (`:879`), `suggestBinInTx` (`:733`), `isMismatchReason` (`:722`).
 
-This is a deliberate seam: the capacity gate and its rejection wording exist once, so a merge and a placement refuse a full or blocked bin with the identical problem type and message.
+This is a deliberate seam: the capacity gate and its rejection wording exist once, so a merge and a placement refuse a full or blocked bin with the identical problem type and message. 11-5 extends the seam with `candidateFitsSku(candidate, sku, qtyMilli)` — the shared gate predicate behind suggestion, placement and task derivation, so "a suggestion never points at a bin the gate refuses".
 
 ---
 
@@ -142,8 +143,8 @@ Device-authenticated (`DeviceSessionGuard` at the shell, badge-in required — `
 9. `ensureReceivingBinInTx` (`:436`) — the from-bin identity, tenancy-owned.
 10. **Remaining check**: `remaining = min(line.appliedQty, receivingBinOnHandInTx(...))`; `scaled.qty > remaining` → 400 naming the remaining quantity (`:440-452`).
 11. **Target bin**, read `.for('update')` (`:454-495`): 404 if not in this warehouse; `systemOwned` → 400 (placements land in storage bins only); `retiredAt !== null` → 400 `bin-retired`; `blocked` → 400 `bin-blocked`.
-12. **Capacity gate**: `binOccupancyInTx(target) + scaled.qty > target.capacity` → 400 `bin-full` naming bin, capacity and occupancy (`:496-505`).
-13. **Suggestion re-derivation + mismatch reason** (`:506-525`) — see Key algorithms.
+12. **Capacity gates** (11-5 order: unit → weight → volume → dim fit): `binOccupancyInTx(target)` returns the shared `BinLoad`; `load.units + scaled.qty > target.capacity` → 400 `bin-full`; then the physical gates of *The physical capacity gates* below — `bin-overweight`, `bin-volume-exceeded`, `bin-item-oversize`, in that order (`:496-505`).
+13. **Suggestion re-derivation + mismatch reason** (`:506-525`) — see Key algorithms. The re-derivation passes the SKU's physical attributes, so the suggestion is gate-consistent with the placement that was just admitted.
 
 Writes: ledger movements (below), one `putaway_placements` row, an `audit_events` row (`action: 'putaway.placed'`, `reference` = the idempotency key), the device heartbeat, and the idempotency key.
 
@@ -163,9 +164,9 @@ Writes `bins.blocked` + `updated_at`. Emits outbox `bin.blocked` and an `audit_e
 
 ### Bin suggestion and ranking (`putaway.command.ts:733` / `:768`)
 
-`binCandidatesInTx` is one grouped query: every bin of the warehouse where `blocked = false AND system_owned = false AND retired_at IS NULL`, left-joined to `stock_on_hand`, `occupancy = coalesce(sum(quantity), 0)::bigint`, ordered by **occupancy ascending, then bin code ascending**. Capacity is *shared base-UoM space* — occupancy is the bin's total across every SKU, not per-SKU.
+`binCandidatesInTx` is one grouped query: every bin of the warehouse where `blocked = false AND system_owned = false AND retired_at IS NULL`, left-joined to `stock_on_hand`, `occupancy = coalesce(sum(quantity), 0)::bigint`, ordered by **occupancy ascending, then bin code ascending**. Capacity is *shared base-UoM space* — occupancy is the bin's total across every SKU, not per-SKU. Since 11-5 the same query also carries the bin's four physical attributes and its `weightLoad`/`volumeLoad` numeric sums, and `suggestBinInTx` takes the SKU's physical attributes as an extra argument.
 
-`suggestBinInTx` walks that ordered list and returns the **first** candidate where `occupancy + qty <= capacity`, or `null`. So the rule is: lowest-occupancy bin that fits, ties broken by code. This is the recorded FR-10 v1 deviation — capacity only. No velocity class, no zone affinity, no SKU-to-bin affinity, no nightly job; those ship with the deferred report story (`:727-732`).
+`suggestBinInTx` walks that ordered list and returns the **first** candidate where `candidateFitsSku` holds — the unit gate (`occupancy + qty <= capacity`) plus, since 11-5, the weight, volume and dim-fit gates below — or `null`. So the rule is: lowest-occupancy bin that fits, ties broken by code. This is the recorded FR-10 v1 deviation — capacity only. No velocity class, no zone affinity, no SKU-to-bin affinity, no nightly job; those ship with the deferred report story (`:727-732`).
 
 The `rationale` string is operator-facing and speaks base units: `Lowest occupancy (o/c) — room for r` (`:748`), or `No storage bin has room for these units` when nothing fits (`putaway.facade.ts:344`).
 
@@ -185,8 +186,21 @@ The target bin row is taken `.for('update')` **before** the occupancy read. With
 
 Lock order is `bins` row → serial locks → the warehouse advisory lock inside the ledger append. No other path locks bin rows first, so the order stays acyclic (`:455-462`). `mergeBin` deliberately takes the *same* bin-row lock (id-sorted for its two rows, `bin.command.ts:503-519`), which is what serializes merges against placements.
 
-### Suggestion re-derivation and the reason-code strip (`putaway.command.ts:506-525`)
+### The physical capacity gates (story 11-5)
 
+Three gates sit **after** the unchanged unit gate, in fixed order **weight → volume → dim fit**, and are expressed as the shared predicate `candidateFitsSku(candidate, sku, qtyMilli)` in `putaway.command.ts`. All arithmetic is **all-integer, milli-scaled** — the SKU attribute is an integer, the on-hand quantity is milli-units, so loads are computed in *attribute-milli* and compared against `limit × QUANTITY_SCALE`:
+
+- **Weight**: `weightLoad = Σ(qty_milli × coalesce(weight_grams, 0))`; full when `weightLoad + qty × weight_grams > max_weight_grams × 1000` → 400 `bin-overweight` ("carries X g of its Y g max weight"). Operator-facing load = loadMilli ÷ 1000, formatted by the BigInt-safe `fromMilliText` (`fromMilli` throws past 2^53; the numeric sums are BigInt here).
+- **Volume**: `volumeLoad = Σ(qty_milli × l × w × h)` over the SKU's mm dimensions; full when `volumeLoad + qty × l×w×h > (L × W × H) × 1000` → 400 `bin-volume-exceeded` (mm³).
+- **Dim fit** (per dimension, only when **both** sides are present): bin `length_mm < SKU length_mm` etc. → 400 `bin-item-oversize` naming the bin, the dimension, both numbers and the SKU code.
+
+Load arithmetic stays `::numeric` end to end — `::bigint` would overflow on an adversarial huge-quantity × max-attribute product. Fail-open on missing attributes: a SKU without attributes contributes units only (its weight/volume load is 0); a bin without a limit is unconstrained on that gate; a dim check binds per dimension only when both the bin and the SKU declare it.
+
+**Coexistence is deliberate and conservative**: a dimmed SKU still counts against the unit gate *and* the weight/volume gates — the physical numbers constrain on top of the whole-unit capacity, never instead of it. `stock_on_hand` is authoritative (no batch arm).
+
+The same predicate backs three sites only — the suggestion (`suggestBinInTx`), the placement re-derivation, and the facade's task derivation — plus merge's inline equivalent in tenancy, so a suggestion never points at a bin the gate refuses.
+
+### Suggestion re-derivation and the reason-code strip (`putaway.command.ts:506-525`)
 The suggestion baked into the device snapshot is **advisory**. At placement the server re-derives it from current state, then:
 
 - `suggestedBinId !== command.toBinId && reasonCode === null` → 400 demanding a code from the fixed enum.
@@ -200,7 +214,7 @@ The suggestion baked into the device snapshot is **advisory**. At placement the 
 
 | Writer | Columns | Why |
 | --- | --- | --- |
-| `src/modules/tenancy/bin.command.ts` | create / grid-generate (`code`, `capacity`, `type`, `zone_id`), `retired_at` + `retired_by` (merge's source retirement at `:701`, retire at `:894`) | Structural master data: what bins exist, and the terminal end of a bin's life. |
+| `src/modules/tenancy/bin.command.ts` | create / grid-generate (`code`, `capacity`, `type`, `zone_id` — plus, since 11-5, the four optional capacity attributes via `editBinCapacity`'s PATCH dispatch), `retired_at` + `retired_by` (merge's source retirement at `:701`, retire at `:894`) | Structural master data: what bins exist, what they can physically hold, and the terminal end of a bin's life. |
 | `src/modules/putaway/bin-state.command.ts:123` | `blocked` | **Operational** state: a blocked bin drops out of putaway suggestions and rejects placements the moment it flips. The module that consumes the flag owns the flag. |
 
 And the traffic runs both ways: tenancy's `bin.command.ts:35-42` imports `openQcHoldsForBinsInTx` from **inbound** and `binOccupancyInTx` / `binFull` / `binBlocked` / `binRetiredAsSource` / `binRetiredAsTarget` from **putaway**. Shared rejection helpers common to both sides live in a third file, `src/modules/tenancy/bin.errors.ts` (`binNotFound`, `binRetired409`, `binHoldOpen`), explicitly so there are no verbatim copies (`bin.errors.ts:3-7`).
@@ -214,7 +228,7 @@ And the traffic runs both ways: tenancy's `bin.command.ts:35-42` imports `openQc
 
 Recorded here because the rejections and the capacity arithmetic are this module's code.
 
-**`mergeBin` (`bin.command.ts:462`)** — capability `bin.retire`; both bin rows locked `.for('update')` **id-sorted before any arm is read**; guards in order: same-bin, either side system-owned, source retired (`binRetiredAsSource`), target retired (`binRetiredAsTarget`), target blocked (`binBlocked`) — **a blocked *source* is allowed by design, it is the only way to empty a blocked bin** (`:459-461`) — then the open-QC-hold guard (409 `bin-merge-hold-open`), then the all-or-nothing capacity gate `targetOccupancy + movedUnits > target.capacity` → `binFull` (`:656-664`). Arms are enumerated in three shapes matching the projections: serial-tracked SKUs enumerate through `InventoryFacade.serialsLocatedInBinInTx` and **refuse the merge outright if the serial count disagrees with the on-hand projection** (`:596-612`); batch-tracked SKUs enumerate `batch_on_hand` rows; untracked SKUs move on one plain arm. One `bin.merged` event per arm, then the source retires in the same commit — "merge is retire-with-stock."
+**`mergeBin` (`bin.command.ts:462`)** — capability `bin.retire`; both bin rows locked `.for('update')` **id-sorted before any arm is read**; guards in order: same-bin, either side system-owned, source retired (`binRetiredAsSource`), target retired (`binRetiredAsTarget`), target blocked (`binBlocked`) — **a blocked *source* is allowed by design, it is the only way to empty a blocked bin** (`:459-461`) — then the open-QC-hold guard (409 `bin-merge-hold-open`), then the all-or-nothing capacity gates — 11-5 order: the unit gate `targetLoad.units + movedUnits > target.capacity` → `binFull`, then `binOverweight` / `binVolumeExceeded` over the moved milli-loads, then a **per-moved-SKU** dim-fit loop → `binItemOversize` naming the offending SKU (`:656-664`). Arms are enumerated in three shapes matching the projections: serial-tracked SKUs enumerate through `InventoryFacade.serialsLocatedInBinInTx` and **refuse the merge outright if the serial count disagrees with the on-hand projection** (`:596-612`); batch-tracked SKUs enumerate `batch_on_hand` rows; untracked SKUs move on one plain arm. One `bin.merged` event per arm, then the source retires in the same commit — "merge is retire-with-stock."
 
 **`retireBin` (`bin.command.ts:765`)** — one-way and terminal. Guards: `bin.retire` → replay → row locked → system bin 400 → already retired 409 `bin-retired` → **open QC hold 409** → empty gate: every non-zero plain and batch on-hand arm is named in a 400 `bin-not-empty` (`:844-890`). The row is never deleted — the `(warehouse_id, code)` unique index keeps the code reserved forever. `bins_retired_pairing CHECK` (`drizzle/0016_numerous_bloodscream.sql:6`) makes `retired_at`/`retired_by` all-or-nothing.
 
@@ -230,7 +244,7 @@ The QC-hold guard on *retire* is the non-obvious one: the hold has already moved
 | Stock always leaves the system Receiving bin. | `fromBinId` is `ensureReceivingBinInTx`'s bin, never caller-supplied (`putaway.command.ts:436`, `:568`, `:589`). |
 | Placements land in storage bins only — never system, retired or blocked bins. | `putaway.command.ts:477-494`. |
 | Never over-place a GRN line. | `remaining = min(line.appliedQty, receiving-bin on-hand)` re-derived server-side at every placement (`:447`). |
-| A bin never exceeds its capacity. | `.for('update')` on the target row before the occupancy read, then the gate (`:454-503`); the same gate covers merge (`bin.command.ts:657`). |
+| A bin never exceeds its capacity — whole units *or* physical (11-5). | `.for('update')` on the target row before the load read, then the unit → weight → volume → dim gates (`:454-503`); the same gate set covers merge (`bin.command.ts:657`). |
 | The recorded suggestion is the **server's**, at placement time. | `suggestBinInTx` re-derived in-command (`:508`); `suggestedBinId` stored from it, never from the request. |
 | A reason code is required exactly when the actual bin differs from the server's suggestion — and stripped when it does not. | `:520-525`. |
 | One ledger event per serial unit, batch arm carried on each. | `:544-591`; `putaway.placed` registers `allowsSerialArm: true` (`ledger-registry.ts:266`). |
@@ -248,7 +262,7 @@ The QC-hold guard on *retire* is the non-obvious one: the hold has already moved
 
 Adjacent and worth knowing: `bin.merged` (`ledger-registry.ts:286`, reference kind `bin-merge`) is the same relocation shape, emitted by tenancy's merge.
 
-**Outbox types:** `putaway.recorded` (`putaway.command.ts:640`) · `bin.blocked` (`bin-state.command.ts:150`). Merge and retire emit `bin.merged` / `bin.retired` from tenancy.
+**Outbox types:** `putaway.recorded` (`putaway.command.ts:640`) · `bin.blocked` (`bin-state.command.ts:150`). Merge and retire emit `bin.merged` / `bin.retired` from tenancy, and 11-5's `editBinCapacity` emits `bin.capacity_changed` from there too (same shape as `bin.blocked`).
 
 **Audit rows** (`audit_events`, `reference` = the idempotency key): `putaway.placed` on `targetType: 'putaway_placement'` (`putaway.command.ts:670`) · `bin.blocked` on `targetType: 'bin'` (`bin-state.command.ts:165`).
 
@@ -277,3 +291,5 @@ Adjacent and worth knowing: `bin.merged` (`ledger-registry.ts:286`, reference ki
 10. **The `blocked` toggle keeps tenancy's URL and response shape** (`tenancy.controller.ts:391-407`, returning tenancy's `BinSnapshot`). Only the logic moved. Changing the response shape here is an FE-contract break even though the file lives in this module.
 
 11. **`bins` writes are split by column, but nothing mechanically enforces the split.** No architecture test covers `bins` — see *Bin administration and the shared `bins` boundary*. The convention is the only guard; a `retired_at` write added here, or a `blocked` write added to `bin.command.ts`, would pass CI.
+
+12. **The 11-5 load sums are `::numeric` and therefore read back as STRINGS** — every weight/volume comparison is BigInt against `limit × QUANTITY_SCALE`, and the operator-facing number goes through the BigInt-safe `fromMilliText`, not `fromMilli` (which throws past 2^53). Casting a load sum to `Number` or comparing it with `>` silently corrupts the gate; the same care the occupancy `::bigint` cast needs (flow diagram above), one scale up.
