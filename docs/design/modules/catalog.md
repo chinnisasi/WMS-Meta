@@ -1,6 +1,6 @@
 # Catalog module
 
-> What a tenant sells and how it is counted: SKUs, the products that group them into variant ranges (11.3), the spreadsheet import that creates the SKUs, batch and serial identity, and the closed unit-of-measure vocabulary every quantity in the system is denominated in.
+> What a tenant sells and how it is counted: SKUs, the products that group them into variant ranges (11.3), the kit compositions that let a SKU sell as a bundle of other SKUs (11.4), the spreadsheet import that creates the SKUs, batch and serial identity, and the closed unit-of-measure vocabulary every quantity in the system is denominated in.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton, the quantity/milli-unit boundary and the controlled-vocabulary pattern are assumed.
 
@@ -17,6 +17,7 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 | `uom_conversions` (`schema.ts:310`) | `factor` base units per alternate `uom`, per SKU | `uom_conversions_sku_id_uom_unique`; `factor` is a positive `integer`; target `uom` CHECK-constrained to the same vocabulary |
 | `batches` (`schema.ts:344`) | Batch **identity** for batch-tracked SKUs: code, mfg/expiry dates, status | `batches_tenant_sku_code_unique`; `batches_status_check` ∈ {`active`,`blocked`} (`drizzle/0010_sharp_hardball.sql:71`). **No location or quantity column, by design** — those live in inventory's `batch_on_hand` |
 | `serials` (`schema.ts:378`) | Serial **identity**: serial number, status | `serials_tenant_sku_serial_unique`; `serials_status_check`. **No location column** — a serial's location is derived from its latest `ledger_events` row |
+| `kit_compositions` (`kit.store.ts` writes; `drizzle/0033_kit_compositions.sql`) | **Kit-ness (11.4, AD-19)**: one row per component of a kit SKU — `kit_sku_id` → `component_sku_id` × `qty` (per ONE kit, in the component's base-UoM milli-units). A kit **is** a SKU; kit-ness is the presence of rows, never a flag | `kit_compositions_tenant_kit_component_unique` (unique `(tenant, kit_sku_id, component_sku_id)`); `kit_compositions_qty_positive`; `kit_compositions_no_self` (row-local `kit_sku_id <> component_sku_id`) — all three hand-appended, migration-SQL-only. **No FKs** — bare uuids validated in the command transaction. **No delete command** (append-only philosophy) |
 | `catalog_imports` (`schema.ts:410`) | One row per run: `mode`, committed/failed/skipped counts | The run ledger. Fix mode targets the **latest** row (`created_at` desc, `id` desc) |
 | `catalog_import_errors` (`schema.ts:442`) | One row per rejected data row: `row_number`, `sku_code`, `reason_code`, `reason_detail` | The latest run's non-null `sku_code`s **are** the fix set |
 
@@ -43,6 +44,16 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 |---|---|---|---|---|
 | `product_id` | uuid | **YES** | **No FK** — validated in the command transaction; `skus_product_id_idx` | The product this SKU is a variant of, or null when unattached (every pre-11.3 row) |
 | `variant_values` | jsonb | **YES** | `skus_variant_values_pairing` CHECK (`0032`, migration-SQL-only — drizzle-orm 0.45 cannot model a CHECK) | Object keyed by the product's axes, `{"size":"M","colour":"Red"}`. Must cover the axes **exactly** — the command-side rule (`assertVariantValues`), the CHECK is the pairing backstop. Attach/detach happens **only** through the SKU edit PATCH (`hsn` template: absent = unchanged, `productId: null` = detach and clear values) |
+
+### `kit_compositions` (11.4)
+
+| Column | Type | Null | Guard | Meaning |
+|---|---|---|---|---|
+| `kit_sku_id` | uuid | NO | — (no FK) | The kit SKU — an ordinary `skus` row whose kit-ness is *derived from this table*, never stored on the SKU |
+| `component_sku_id` | uuid | NO | `kit_compositions_no_self` (`0033`: `kit_sku_id <> component_sku_id`) | An ordinary, non-kit SKU (409 `kit-component-is-kit` refuses a kit as a component — the BOM is flat) |
+| `qty` | bigint | NO | `kit_compositions_qty_positive` | Per **one** kit, in the component's base-UoM **milli-units** — 2 kg of a kg-component is `2000` |
+
+`unique (tenant, kit_sku_id, component_sku_id)` is the duplicate-component backstop (409 `duplicate-kit-component` names the duplicate). **Every "is this a kit" question in the system is one SELECT on this table** — the import parser, the stock guards and the explosion all ask it through `getKitSkuIdsInTx`, and none of them consults a flag, because there is none.
 
 ### `skus` (the pre-11.3 columns)
 
@@ -96,6 +107,8 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 | `findBatch` `:249` / `findSerial` `:275` | Identity + `skuId`, or `null` | Detail routes' 404 checks |
 | `ensureBatches(tenantId, skuId, inputs)` `:307` / `ensureBatchesInTx` `:318` | Idempotent identity creation | Inbound's GRN command, stock adjustment |
 | `ensureSerials(tenantId, skuId, serialNumbers)` `:371` | Idempotent identity creation | Same |
+| `getKitCompositionInTx(tx, tenantId, kitSkuId)` `:457` | The composition rows (component sku id + milli-qty), **in the caller's tx** — the flat-BOM explosion read | Outbound's `createOrder` (11.4) |
+| `getKitSkuIdsInTx(tx, tenantId, skuIds)` `:466` | The subset of the given ids that are kits, **in the caller's tx** — the batch "is a kit" answer | Inbound's GRN submit + over-receipt **approve** arm, inventory's `stock.adjust`, and the kit command's own `assertComponentsAreNotKits` |
 
 **`uom.ts` file-level functions** are imported directly by anything that needs the vocabulary: `resolveUom`, `uomPrecision`, `isFractionalUom`, `serialTrackedFractionalUomDetail`, `unknownUomDetail`, plus the `UOMS` tuple (consumed by `catalog.dto.ts` for the OpenAPI enum).
 
@@ -160,6 +173,31 @@ sequenceDiagram
 
 The variant identity has exactly **one** write path per side: products are created/edited by `ProductCommand` (create + edit keyed by idempotency, the `createOrder` replay convention), and SKUs attach/detach/re-value through the **existing SKU edit PATCH** — no second write path. Import gains optional `product` / `variant_values` columns that **reference** an existing product by name (import never creates products — auto-declaring axes from the first CSV row's keys would make product identity an implicit side effect); a missing name is a row error, the uom-vocabulary refusal shape. Duplicate variants (two SKUs of one product carrying identical values) are refused in both paths via the sorted-keys `variantValuesFingerprint` — key-order independent, which is why it matches Postgres's semantic jsonb equality.
 
+### Kits — the only door into kit-ness, and the never-independent-stock guards (11.4)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant Ctl as catalog.controller
+  participant KCmd as KitCommand
+  participant O as outbound (createOrder)
+  participant PG as Postgres
+  Ops->>Ctl: POST /catalog/skus/:skuId/kit {components: [{skuId, qty}]}
+  Ctl->>KCmd: create
+  Note over KCmd: shape checks → hash → sku.edit → replay<br/>→ lock kit + component sku rows .for('update') id-ordered<br/>→ kit-sku-holds-stock (no on-hand, no live reservation)<br/>→ already-composed / self-reference / component-is-kit / duplicate<br/>→ INSERT rows → outbox in-tx → key LAST
+  KCmd-->>Ops: 201 {kit} — kit_compositions rows exist, kit-ness begins
+  Ops->>Ctl: PUT /catalog/skus/:skuId/kit (full component array)
+  Note over KCmd: replace — DELETE + re-INSERT in one tx;<br/>PUT on a NON-kit is 404 (create is the only door)
+  KCmd-->>Ops: 200 {kit}
+  Ops->>O: createOrder with a kit line
+  Note over O: phase 1 resolves the composition via getKitCompositionInTx<br/>and explodes the kit line into child order lines<br/>(parent_line_id), each reserving its component —<br/>the parent line itself holds nothing
+```
+
+Three doors the stock system closes at once — **a kit never holds independent stock (FR-38)**, so every +stock writer refuses a kit SKU with 409 `kit-cannot-hold-stock` naming it: the GRN submit (`receiving.command.ts`), `stock.adjust` (sign-agnostic — a kit refuses a negative delta as much as a positive one), and the over-receipt **approve** arm, which is a third +stock writer because a pending excess applies as a fresh `grn.received` delta at *decision* time, days after the GRN's own kit check ran (the row stays `pending` for a human reject). The create side is the mirror: a SKU that already carries on-hand stock or a live (`held`/`committed`) reservation cannot become a kit — 409 `kit-sku-holds-stock` — because every stock writer would then refuse it forever, stranding the stock and its ATP with no write-off path.
+
+**The race between a GRN and kit creation is closed by row locks, not timestamps.** Both commands take `.for('update')` on the same sku rows in id order — `receiving.loadSkus` orders by `skus.id` precisely so the lock order matches the kit command's `lockSkus` — so whichever commits first, the loser decides against committed state: a GRN that commits first makes the kit-create guard answer `kit-sku-holds-stock`; a kit-create that commits first makes the GRN's kit check answer `kit-cannot-hold-stock`.
+
 ### The UoM vocabulary and its precision
 
 ```mermaid
@@ -187,6 +225,24 @@ Create and edit run the `createOrder` replay convention exactly: shape checks �
 `edit` loads the product `for('update')` and refuses an axes change while any SKU is attached (409 `product-has-variants`, element-wise comparison — a reordered array is a different declaration, not the same one). `name` is always editable.
 
 `list` is a read (open to any tenant member — reads are never gated), keyset-paged on `(created_at, id)`; each item's `skuCount` is stitched from ONE grouped count query over the page's product ids, never an N+1.
+
+### `KitCommand.create / put / list` (`kit.command.ts`, 11.4)
+
+The kit commands attach a composition to an **existing** SKU — the CSV import is still the only creator of SKUs, so a kit begins as an ordinary imported SKU. One body DTO, `PutKitDto`, serves both mutating routes; the edit method is `put` (replace semantics), not `edit`.
+
+Both mutations run the `createOrder` replay convention: shape checks → `hashCommandPayload` → `assertPermission('sku.edit')` (deliberately no new capability — the story ships no FE surface beyond the regenerated client, the 11.3 precedent) → replay → **`lockSkus` takes `.for('update')` on the kit SKU row and every component SKU row, ordered by id** (this is what closes the concurrent mutual-composition cycle: two creates of A∋B and B∋A both see the other component as not-yet-a-kit under read committed, and the id-ordered row locks serialize them so the loser re-reads committed state and refuses 409 `kit-component-is-kit`) → the composition guards → write → `catalog.kit_created` / `catalog.kit_edited` in-transaction → key LAST.
+
+Guards, in the order they actually run:
+
+1. **Shape** — `assertComponents` (each qty > 0, milli-units of the component's base UoM) and the in-command duplicate check (409 `duplicate-kit-component` — the BOM is a set, not a list). An **empty array is deliberately left to the command**, not the DTO: `PutKitDto` carries no `@ArrayMinSize`, so the empty array reaches the guard and answers the named 400 `empty-kit-composition` on both routes instead of a generic edge-validation failure.
+2. **Replay**, then **the sku row locks** (`lockSkus`, id-ordered) — which also carry the 404s: an unknown kit or component SKU is refused at the lock, before any guard sees it.
+3. **Create only:** `assertNotKitInTx` (409 `kit-already-composed`), then `assertKitSkuHoldsNoStock` — 409 `kit-sku-holds-stock` when the SKU has `stock_on_hand > 0` or a live (`held`/`committed`) reservation. Decided against the locked kit row, so it answers committed state.
+4. **PUT's own door:** replace is an edit of an existing kit — the in-transaction check that `kit_compositions` already has a row for the kit 404s a non-kit SKU rather than silently entering kit-ness; **create is the only door**.
+5. `assertSelfReference` (400 `kit-self-reference`) → `assertComponentsAreNotKits` (409 `kit-component-is-kit`, via `getKitSkuIdsInTx`) → quantity conversion behind the locks.
+
+**Replace is DELETE + re-INSERT in one transaction** (`replaceComposition`), inserting in the caller's component order — the snapshot and the event carry the BOM the operator named, and the `(kit, component)` uniqueness backstops the set property. There is no delete command: a composition cannot be removed once created (append-only philosophy).
+
+`list` is a read, keyset-paged on the kit SKU's `(created_at, id)` — the `sku.list` shape; each kit's components are stitched from ONE joined query over the page's kit ids, never an N+1.
 
 ### `ImportCommand.execute` (`import.command.ts:151`)
 
@@ -349,6 +405,10 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | Two SKUs of one product never carry identical values | The duplicate-variant check in both write paths (edit 409; import row error), keyed by the sorted-keys fingerprint |
 | Import references products, never creates them | The resolution pass row-errors an unknown product name |
 | Product names are unique per tenant | `products_tenant_id_name_unique` + the command pre-check |
+| Kit-ness is derived, never stored — a kit **is** a SKU with composition rows | Every "is a kit" question is a `getKitSkuIdsInTx` SELECT; no flag column exists to drift from the rows (11.4) |
+| A kit never holds independent stock (FR-38) | 409 `kit-cannot-hold-stock` at all three +stock writers (GRN submit, `stock.adjust`, over-receipt **approve**); the create-side twin `kit-sku-holds-stock` refuses creating a kit on stock or a live reservation; the GRN-vs-kit-create race is closed by matching id-ordered sku-row `.for('update')` locks on both sides |
+| The BOM is flat — one SELECT resolves any composition | `assertComponentsAreNotKits` 409 `kit-component-is-kit`; no recursion anywhere |
+| Concurrent mutual compositions cannot both commit | `lockSkus` takes `.for('update')` on kit + component sku rows in id order — the loser re-reads committed state and refuses |
 | Catalog tables are catalog-exclusive | `test/architecture.spec.ts` bans writes outside the module; siblings use `CatalogFacade` |
 
 ---
@@ -361,6 +421,8 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | `catalog.sku_edited` | `SkuCommand.edit` | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
 | `catalog.product_created` | `ProductCommand.create` (11.3) | `{productId, name, axes}` |
 | `catalog.product_edited` | `ProductCommand.edit` (11.3) | `{productId, name, axes}` |
+| `catalog.kit_created` | `KitCommand.create` (11.4) | The kit snapshot (kit sku + the full component list) |
+| `catalog.kit_edited` | `KitCommand.put` (11.4) | Same shape; the replaced composition |
 
 Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the append, so it emits nothing.
 
@@ -389,3 +451,5 @@ Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the 
 **The `errors.sort` comment is stale.** `:261-263` says duplicates are collected "in the loop below"; that loop is above the sort. The behaviour is right — everything is pushed before `:264` sorts — but the comment misdirects.
 
 **`getSkuSummariesInTx` derives `uomPrecision` in process, never from a table** (`catalog.facade.ts:191-194`). There is no per-SKU precision to select. Adding a lookup read there is the nested-pool shape described above.
+
+**`assertComponentsAreNotKits` probes only the command's component ids, never the kit itself** (11.4). Its first draft probed the whole `componentById` map, which carries the KIT SKU alongside the components — and on PUT the kit is by definition already a kit, so every edit answered 409 `kit-component-is-kit` and no kit could ever be edited. The guard now passes `componentIds` (the command's own list) to `getKitSkuIdsInTx`. The general shape: a "these must not have property X" guard must be fed the list it is guarding, not a map that happens to include the subject of the command.

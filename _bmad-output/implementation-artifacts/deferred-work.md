@@ -320,3 +320,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-11-3-product-variants.md`
   summary: `docs/repos/wms-be/README.md`'s documented import header line omits the 11.2 columns (catch_weight_tracked, weight_grams, length_mm, width_mm, height_mm, country_of_origin) even though OPTIONAL_COLUMNS carries them — stale since 11-2.
   evidence: README surface bullet (the "Documented header:" line) predates 11-2 and was not touched by 11-3's diff; the code's OPTIONAL_COLUMNS is the authority. A docs-only correction, pre-existing debt.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-4-kits-and-bundles.md`
+  summary: CSV import gains an optional `kit_components` column so kit compositions can be loaded without API calls.
+  evidence: Split from story 11-4 at step-02 (spec over the 1600-token gate); user chose to defer. Import support lands with the 11-6 surfaces, consistent with 11-2/11-3's import-references precedent.
