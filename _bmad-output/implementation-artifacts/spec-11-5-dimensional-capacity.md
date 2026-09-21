@@ -71,15 +71,15 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `drizzle/0034_bin_dimensional_capacity.sql` -- add the four nullable columns with CHECKs (dims 1..100000 mm; weight 1..100000000 g) -- bins are bigger than SKUs; a floor location is an area
-- [ ] `src/shared/db/schema.ts` -- mirror the columns on `bins` -- single source the store reads
-- [ ] `tenancy.dto.ts` + `bin.command.ts` -- DTO fields + `assertBinCapacityAttributes` (positive whole integers within caps; null/absent = leave unchanged/clear per verb); create/grid/PATCH pass-through -- one validation door, `assertWholeUnitCapacity`'s sibling
-- [ ] `bin.command.ts` (PATCH arm) -- new `editBinCapacity` command following the command skeleton (hash, replay, `bin.create` capability, zone/bin locks) -- dimensions survive a warehouse retrofit
-- [ ] `putaway.command.ts` -- load-read + three new rejection helpers + gate extension at placement (after the unit gate, inside the existing `.for('update')` window) -- the gates share one read
-- [ ] `putaway.command.ts` + `putaway.facade.ts` -- candidate query gains weight/volume loads; shared `candidateFitsSku` predicate used by suggestion, placement re-derivation, and task derivation -- suggestion never points at a bin the gate refuses
-- [ ] `bin.command.ts` `mergeBin` -- target load gates + per-moved-SKU dim fit -- a merge cannot overflow what a placement cannot
-- [ ] tests -- matrix arms in `test/putaway.spec.ts` + `test/bin-admin.spec.ts`, contract drift in `test/api.spec.ts` -- the gates are the story
-- [ ] `docs/...` meta docs + openapi re-export -- contract currency
+- [x] `drizzle/0034_bin_dimensional_capacity.sql` -- add the four nullable columns with CHECKs (dims 1..100000 mm; weight 1..100000000 g) -- bins are bigger than SKUs; a floor location is an area
+- [x] `src/shared/db/schema.ts` -- mirror the columns on `bins` -- single source the store reads
+- [x] `tenancy.dto.ts` + `bin.command.ts` -- DTO fields + `assertBinCapacityAttributes` (positive whole integers within caps; null/absent = leave unchanged/clear per verb); create/grid/PATCH pass-through -- one validation door, `assertWholeUnitCapacity`'s sibling
+- [x] `bin.command.ts` (PATCH arm) -- new `editBinCapacity` command following the command skeleton (hash, replay, `bin.create` capability, zone/bin locks) -- dimensions survive a warehouse retrofit
+- [x] `putaway.command.ts` -- load-read + three new rejection helpers + gate extension at placement (after the unit gate, inside the existing `.for('update')` window) -- the gates share one read
+- [x] `putaway.command.ts` + `putaway.facade.ts` -- candidate query gains weight/volume loads; shared `candidateFitsSku` predicate used by suggestion, placement re-derivation, and task derivation -- suggestion never points at a bin the gate refuses
+- [x] `bin.command.ts` `mergeBin` -- target load gates + per-moved-SKU dim fit -- a merge cannot overflow what a placement cannot
+- [x] tests -- matrix arms in `test/putaway.spec.ts` + `test/bin-admin.spec.ts`, contract drift in `test/api.spec.ts` -- the gates are the story
+- [x] `docs/...` meta docs + openapi re-export -- contract currency
 
 **Acceptance Criteria:**
 - Given a bin with `max_weight_grams` set and stock whose scaled load exceeds it, when a placement targets it, then 400 `bin-overweight` and the bin state is unchanged.
@@ -87,6 +87,20 @@ context:
 - Given an existing bin (no attrs) with existing stock, when any placement/merge/suggestion runs, then behavior is byte-identical to today (gates inert).
 
 ## Implementation Notes
+
+*(append-only implementation log — nothing below modifies the frozen block)*
+
+- **Outbox/audit decision.** `editBinCapacity` emits outbox `bin.capacity_changed` (`{binId, warehouseId, lengthMm, widthMm, heightMm, maxWeightGrams}` — the post-write values, possibly null) plus an audit row `action: 'bin.capacity_changed'`, same shape as `bin.blocked`. The spec's Design Notes were silent on the event; `setBlocked` was the template. `createBin` still emits nothing (its 1.3 rule stands).
+- **`binItemOversize`'s detail names the SKU code** in addition to the bin, dimension and both numbers: a merge moves many SKUs, so the offending SKU is part of the rejection's identity, not decoration.
+- **`fromMilliText` (BigInt-safe milli→text formatter)** was added next to the rejection helpers because `fromMilli` throws past 2^53 and the weight/volume loads are numeric-string sums read as BigInt — the operator-facing "carries X g of its Y g max weight" numbers must not go through `fromMilli`.
+- **Load arithmetic.** `binOccupancyInTx` returns `BinLoad { units, weightLoad, volumeLoad }` from one grouped query (`stock_on_hand ⋈ skus`): units as `coalesce(sum(quantity),0)::bigint`, the loads as `coalesce(sum(quantity::numeric * coalesce(attr,0)),0)::numeric`. The `::numeric` sums read back as **strings**; every gate comparison is BigInt against `limit × QUANTITY_SCALE`. Never `::bigint` — a huge-qty × max-attr product would overflow int8.
+- **Idempotency payload hash.** `createBin`, `generateGrid` and `editBinCapacity` fold the four attribute keys into `hashCommandPayload`. Because `JSON.stringify` drops `undefined` keys, a pre-11.5 fingerprint (which never carried the keys) is byte-identical to a payload that sends them as `undefined` — older keys replay unchanged. `assertBinCapacityAttributes` sits **behind** the replay lookup (the `CreateBinDto.capacity` no-refusal-before-replay rule).
+- **Merge arm attribution.** `MergeArm` gained `skuCode` + the four SKU attrs so `mergeBin` can (a) compute `movedWeight`/`movedVolume` as BigInt reduce-sums over the arms and (b) run the per-moved-SKU dim-fit loop over `new Map(arms.map(a => [a.skuId, a])).values()` — dedup by skuId because batch arms split one SKU across rows.
+- **Test design (putaway).** New zone D with bins coded `0-D`/`0-V`/`0-W`/`0-F` so they sort before every `A-*` bin: with all four empty, the `0-*` group ranks first in the suggestion, so `0-D` being skipped by dim fit makes the skip observable regardless of the older bins' occupancies. `0-W` is filled to exactly its 5000 g limit first so the second placement trips `bin-overweight` with both numbers ('10000'/'5000'); `0-V` likewise to 1 000 000 000 mm³ before the volume arm. PUT-D (the gated SKU) is created by catalog import then PATCHed with its attributes; PUT-B stays attribute-less to pin fail-open.
+- **Test design (bin-admin).** Merge targets A-20..A-26 are pre-loaded to exactly their limits so each rejection arm fires on the first moved unit; the fitting merge into A-26 asserts the raw-attrs echo. The 0034 round-trip asserts the four columns in `information_schema`, the four CHECK names in `pg_constraint`, and that raw inserts of `length_mm = 0` and `max_weight_grams = 100000001` reject naming the CHECK — CHECKs exist only in migration SQL, never `schema.ts`.
+- **`editBinCapacity` allows system bins.** They are tenancy-owned structure; only putaway's `blocked` toggle refuses them. Retired bins 409 (`binRetired409`) — a retired bin's capacity is dead history.
+- **DTO/controller shape.** `PatchBinDto.blocked` went optional, so the controller's setBlocked call needs `dto.blocked!` — sound because the both/neither arms return earlier (lint's no-non-null-assertion sensitivity stayed clean).
+- **Verification.** `bun run test` 691/691 (38 suites), `bun run lint` / `bun run typecheck` / `bun run build` clean, `bun run db:generate` reports "No schema changes" (the hand-named SQL matches drizzle's output exactly; journal tag sed-fixed to the filename), snapshot chain `0034_snapshot.prevId` matches the 0033 snapshot id. Contract drift: `bun run openapi:export` re-exported; the FE drift guard stays red until the BE PR merges (expected on cross-repo stories).
 
 ## Spec Change Log
 
