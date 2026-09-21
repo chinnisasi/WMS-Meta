@@ -324,3 +324,21 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-11-4-kits-and-bundles.md`
   summary: CSV import gains an optional `kit_components` column so kit compositions can be loaded without API calls.
   evidence: Split from story 11-4 at step-02 (spec over the 1600-token gate); user chose to defer. Import support lands with the 11-6 surfaces, consistent with 11-2/11-3's import-references precedent.
+
+## Deferred from: three-layer review of spec-11-5-dimensional-capacity (2026-09-21)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-5-dimensional-capacity.md`
+  summary: `normalizeBin`'s pre-11.5 idempotency-snapshot fallback (absent capacity fields → null) is untested — no test replays a snapshot stored without the four fields.
+  evidence: Review layer 3, triage #13. The fallback is the same additive-nullable pattern as the retirement pair (`retiredAt`/`retiredBy`), so the risk is low; crafting a legacy snapshot row is its own test setup. First story touching `normalizeBin` should add the arm.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-5-dimensional-capacity.md`
+  summary: Stock adjustments bypass ALL bin capacity gates — no bin-row lock, no unit/weight/volume check — so any bin can be parked over every limit by an adjustment, after which every placement/merge into it refuses.
+  evidence: Review layer 2, triage #16 (adjacent, pre-existing for the unit gate; 11-5 widens the class to weight/volume). The gates fire on placement and merge by design (the 11-5 frozen Never list) — an adjust-side gate is a scope decision for a follow-up story, not a 11-5 patch.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-5-dimensional-capacity.md`
+  summary: A concurrent adjustment can race a placement past a stale (lower) load — the bin-row `.for('update')` serializes only gate-compliant writers, and adjust takes no bin-row lock.
+  evidence: Review layer 2, triage #16. Same pre-existing race the unit gate has; 11-5 does not widen the mechanism, only the currency. Fix shape would be a bin-row lock (or epoch re-check) in the adjust path — its own story.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-5-dimensional-capacity.md`
+  summary: `setBlocked`'s bin lock query omits the `tenantId` predicate (`bin-state.command.ts`), unlike `editBinCapacity`'s identical lookup which includes it.
+  evidence: Review layer 2, triage #16. RLS-covered today (the tenant tx scopes every query), so not a defect — an inconsistency. One-line fix whenever `bin-state.command.ts` is next touched; not patched in 11-5 to keep the review patch scoped.
