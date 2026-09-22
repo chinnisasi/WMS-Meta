@@ -2,7 +2,7 @@
 title: 'Kits and bundles (FR-38, AD-19)'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-progress'
+status: 'done'
 baseline_commit: '58d0596' # wms-be main HEAD when implementation began
 route: 'dispatch'
 review_loop_iteration: 0
@@ -33,7 +33,7 @@ context:
 - BOM is **flat** — a component SKU cannot itself be a kit (409 `kit-component-is-kit`). One SELECT resolves any composition; no recursion.
 - Component lines backorder **all-or-nothing per kit**: if any component cannot fully reserve, the whole kit line backorders (no partial kit holds). Component lines that do reserve are independent afterwards.
 - Both create and replace take `.for('update')` on the kit SKU row and every component SKU row, ordered by id — closing the concurrent mutual-composition cycle.
-- Milli-unit convention throughout: component quantity is per ONE kit, in the component's base UoM milli-units; child line qty = kit line qty (milli, base) × per-kit component qty (milli).
+- Milli-unit convention throughout: component quantity is per ONE kit, in the component's base UoM milli-units; child line qty = kit line qty (milli, base) × per-kit component qty (milli) **÷ 1000 (QUANTITY_SCALE)** — the division lands the child on the component's milli-units. *(Amended 2026-09-22, human-approved: the original sentence omitted the ÷1000 the code performs.)*
 
 **Never:**
 - No kit-level ledger events, no kit stock table, no parallel reservation book — `order.created` carries the exploded child lines; no new outbound event.
@@ -95,7 +95,7 @@ context:
 
 ## Spec Change Log
 
-## Review Triage Log
+**2026-09-22 — frozen-sentence amendment (human-approved via triage #9's flag):** the frozen milli-convention sentence now carries the ÷1000 (QUANTITY_SCALE) the code has always performed (`explodeKitLine`). Known-bad state avoided: a literal reading of the original sentence produces component quantities 1000× too large. No code change — the code and tests were already correct.
 
 **Round 1 (step-04, design/code review of commit 65c7da2 — two reviewers).** Zero frozen-spec violations; every finding below was triaged and actioned in the same review round.
 

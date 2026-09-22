@@ -322,7 +322,7 @@
   evidence: README surface bullet (the "Documented header:" line) predates 11-2 and was not touched by 11-3's diff; the code's OPTIONAL_COLUMNS is the authority. A docs-only correction, pre-existing debt.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-11-4-kits-and-bundles.md`
-  summary: CSV import gains an optional `kit_components` column so kit compositions can be loaded without API calls.
+  summary: ~~CSV import gains an optional `kit_components` column so kit compositions can be loaded without API calls.~~ **Closed 2026-09-22 by story 11-6** — the column landed (`import.command.ts`'s kit pass, cell grammar `code:qty;code:qty`, resolution after every SKU row through the kit store's guards, `catalog.kit_created` event parity), pinned by the 11.6 import describe in `test/kits.spec.ts`.
   evidence: Split from story 11-4 at step-02 (spec over the 1600-token gate); user chose to defer. Import support lands with the 11-6 surfaces, consistent with 11-2/11-3's import-references precedent.
 
 ## Deferred from: three-layer review of spec-11-5-dimensional-capacity (2026-09-21)
@@ -342,3 +342,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-11-5-dimensional-capacity.md`
   summary: `setBlocked`'s bin lock query omits the `tenantId` predicate (`bin-state.command.ts`), unlike `editBinCapacity`'s identical lookup which includes it.
   evidence: Review layer 2, triage #16. RLS-covered today (the tenant tx scopes every query), so not a defect — an inconsistency. One-line fix whenever `bin-state.command.ts` is next touched; not patched in 11-5 to keep the review patch scoped.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-11-6-web-variant-and-kit-surfaces.md`
+  summary: The Settings page fetches the whole SKU catalog 2–3× per mount with no shared cache — `useCatalogSkus` is instantiated separately in `VariantMatrix` (products card) and `KitForm` (SKU table), each running `fetchAllPages` over the entire tenant, on a page that already holds the paged SKU table.
+  evidence: Review blind-hunter finding 10 (11-6 triage, deferred as entry 10). Real but bounded today — small tenants pay nothing; a 10k-SKU tenant pays 3 × 200+ page fetches per mount. The fix shape is a shared catalog context (one fetch, many readers) — a refactor beyond this story's patch round. Acknowledged by the implementer during step-03.

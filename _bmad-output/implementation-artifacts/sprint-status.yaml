@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 2026-09-19
+last_updated: 2026-09-22
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -200,7 +200,7 @@ development_status:
   11-3-product-variants: done
   11-4-kits-and-bundles: done
   11-5-dimensional-capacity: done
-  11-6-web-variant-and-kit-surfaces: backlog
+  11-6-web-variant-and-kit-surfaces: review
   11-7-mobile-variant-aware-picking: backlog
   epic-11-retrospective: optional
 

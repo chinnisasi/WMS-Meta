@@ -128,6 +128,11 @@ const onChange = () => { onCursor(null); setPageEpoch(e => e + 1); };
 
 Without the remount the table still offers Prev on what is now page one, and the banner reports an acceptance the page on screen demonstrably cannot show.
 
+**Kit-ness is a client-side join (11.6), never a flag.** The API carries no `isKit`; the SKU table, the products card and the order detail all derive it from `useKits()` over `GET /catalog/kits` (`kitOf(skuId)`), following the module broadcaster: a kit POST/PUT calls `notifyCatalogChanged()` and every reader refetches. Two rules the kit surfaces pin:
+
+- **The kit editor's recovery is a refetch, not a local cache update.** After a kit POST that was refused `kit-already-composed`, the editor refetches the whole kits list (`fetchAllPages`) so the row's kit-ness is read from the server, then surfaces the refusal — and if even that refetch fails, the refusal STILL renders (`try/catch` falls through to the rejection banner). The refusal must never be eaten by a failed bookkeeping call.
+- **The attach picker offers unattached SKUs only** (`productId === null`): the backend's attach arm has no current-attachment guard, so offering an attached SKU would let the PATCH silently move it between products. Filter the options rather than validating the submission — the §7 option-filtering rule.
+
 ---
 
 ## 2. Writing a mutation
@@ -314,10 +319,10 @@ Storage is milli-units (`QUANTITY_DECIMALS = 3`, backend `src/shared/primitives/
 
 ### What is not done yet — read this before "fixing" a quantity
 
-- **`SkuResponse` does not carry `uomPrecision`.** Only `CatalogSnapshotSkuDto` — the mobile device snapshot — has it (`types.gen.ts:1818-1822`). The web reads `uom` and nothing else, so *today there is no way to read a SKU's declared precision from an endpoint this app calls.* Rule 2 cannot be implemented here without either the backend adding the field to `SkuResponse` (preferred — additive, and the pattern already exists) or this repo mirroring `UOM_PRECISION`, which would be a second hand-maintained mirror with all of `src/lib/users.ts`'s drift problem and none of its CI guard.
+- ~~**`SkuResponse` does not carry `uomPrecision`.**~~ **Closed by story 10-5:** `SkuResponse` now carries `uomPrecision` (derived from the unit, never an input), so the web reads a SKU's declared precision directly and `quantityInputLabel` renders the precision hint on quantity inputs.
 - **There is no quantity formatter in this repo.** No `Intl.NumberFormat`, no `toFixed` on any quantity. Every figure on screen is a bare interpolation — `{line.orderedQty} ord · {line.receivedQty} rec · {open} open` (`inbound-cards.tsx:179`), `{row.quantity} on hand` (`:527`), `lineQuantityLabel` (`outbound-orders.ts:125`), `orderTotalsLabel` (`:117`), `waveTotalsLabel` (`outbound-waves.ts:379`), `openQtyLabel` (`over-receipt.ts:13`).
 - **The order form refuses fractional quantities outright.** `parseDraftLines` tests `^\d+$` (`outbound-orders.ts:369`) and the input is `step={1}` (`outbound-orders.tsx:208`). For a `kg`-based SKU the form refuses a body the backend would accept. The `^\d+$` shape itself is right for a different reason (`:365-368`): `Number()` accepts `1e3` → 1000 and `0x10` → 16, neither of which a number field can produce and both of which the backend refuses. **Widen the pattern, do not replace it with `Number()`.**
-- **Reorder point and reorder quantity** are `type="number"` with no `step` (`sku-table.tsx:253`, `:264`), so the browser defaults to step 1 and refuses `0.5` — while `PatchSkuDto` documents both as precision-bearing quantities.
+- ~~**Reorder point and reorder quantity** are `type="number"` with no `step`.~~ **Closed by 10-5:** both inputs are `step="any"` (`sku-table.tsx`) — the browser constrains nothing beyond non-negativity, and the backend's precision refusal naming unit and precision is the authority.
 
 When you touch any of these, state which of the two precision-source options you took, and do it in one pass rather than per-surface.
 
