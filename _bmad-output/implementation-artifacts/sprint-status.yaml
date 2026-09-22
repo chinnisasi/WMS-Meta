@@ -201,7 +201,7 @@ development_status:
   11-4-kits-and-bundles: done
   11-5-dimensional-capacity: done
   11-6-web-variant-and-kit-surfaces: done
-  11-7-mobile-variant-aware-picking: backlog
+  11-7-mobile-variant-aware-picking: done
   epic-11-retrospective: optional
 
   # EPIC 21 — 3PL (correct-course 2026-09-19). Migration pair 21-1/21-2 runs

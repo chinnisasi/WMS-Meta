@@ -2,7 +2,7 @@
 title: 'Mobile variant-aware picking'
 type: 'feature'
 created: '2026-09-22'
-status: 'draft'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be 1927fc9 / wms-mobile a4f0144'
