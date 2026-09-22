@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 2026-09-22
+last_updated: 09-22-2026 22:20
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -202,7 +202,7 @@ development_status:
   11-5-dimensional-capacity: done
   11-6-web-variant-and-kit-surfaces: done
   11-7-mobile-variant-aware-picking: done
-  epic-11-retrospective: optional
+  epic-11-retrospective: done
 
   # EPIC 21 — 3PL (correct-course 2026-09-19). Migration pair 21-1/21-2 runs
   # in PHASE 0 (parallel to epic-11, after epic-10 lands); 21-3..21-8 are
@@ -613,3 +613,75 @@ action_items:
     owner: "Claude (respective next stories)"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
+  - id: "epic-11-retro-a1-fix-fe-axes-edit-corruption"
+    epic: 11
+    action: "Fix F1: product edit form prefills display grammar but parses comma-separated
+      — saving an unattached product edit silently rewrites its axes; prefill parseable
+      form (or parse the display join) + edit round-trip test (owner wms-fe)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a2-fix-be-kit-write-skew"
+    epic: 11
+    action: "Fix F2: id-ordered .for(update) SKU locks in stock-adjustment and over-receipt-approval
+      paths so kit-create guards serialize; add the concurrency test (owner wms-be)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a3-mechanical-mirror-guard"
+    epic: 11
+    action: "Fix F3: architecture.spec assertion reflecting over the three snapshot
+      SKU-arm mirrors and two pick-task-arm mirrors (owner wms-be)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a4-fe-fetch-cap-and-empty-state"
+    epic: 11
+    action: "Fix F4/F5: surface the 20-hop fetchAllPages truncation; fix failed-fetch
+      contradictory empty message (owner wms-fe)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a5-converge-malformed-uuid-arm"
+    epic: 11
+    action: "Fix F6: pick one arm (400 vs 404) for the in-command UUID backstop, fix
+      the two contradicting comments (owner wms-be)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a6-variant-values-prototype-guard"
+    epic: 11
+    action: "Fix F7: replace prototype-chain in / __proto__ assignment with own-property
+      map building in variant-values parsing (owner wms-be)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a7-batch-smalls-doc"
+    epic: 11
+    action: "Batch the smalls into meta docs: no-audit-rows-in-catalog decision, empty-body
+      code rule, kitCannotHoldStock facade face, 0030 backstop or exemption, phone
+      shape rule, kit-import case rule, O4 boundary decisions into module docs"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a8-resume-epic-retro-ritual"
+    epic: 11
+    action: "Keep the retrospective at every epic boundary — epics 4-10 ran none;
+      record and resume here"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a9-fe-shared-catalog-fetch"
+    epic: 11
+    action: "Defer: shared catalog context (one fetch, many readers) — F21/F4 tail
+      risk (owner wms-fe, perf)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-11-retro-a10-god-file-decomposition"
+    epic: 11
+    action: "Defer: when Epic 12+ touches bin.command.ts/import.command.ts, extract
+      the file-level in-tx seam (kit.store pattern) (owner wms-be)"
+    owner: ""
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
