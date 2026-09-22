@@ -2,7 +2,7 @@
 title: 'Web variant and kit surfaces'
 type: 'feature'
 created: '2026-09-22'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: 'wms-be e6cd193 / wms-fe de96601'
@@ -69,20 +69,73 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/src/modules/catalog/import.command.ts` -- `kit_components` column + parser + post-resolution pass through the kit guards -- the deferred import support
-- [ ] `wms-be/test/kits.spec.ts` -- the import I/O arms incl. file-internal component resolution and precision refusal -- the proof
-- [ ] `wms-fe/src/lib/api/client.ts` + `src/lib/use-catalog.ts` -- product/kit wrappers + hooks -- data layer
-- [ ] `wms-fe/src/components/settings/products-card.tsx` + `settings/page.tsx` -- products card + variant matrix -- the variant surface
-- [ ] `wms-fe/src/components/settings/sku-table.tsx` -- kit marker + create/edit kit forms -- the kit editor
-- [ ] `wms-fe/src/components/outbound/outbound-orders.tsx` -- parent/child line rendering -- the order display
-- [ ] `wms-fe` component tests for the new surfaces (happy-dom render helper exists) -- the FE pins
-- [ ] meta `docs/` -- frontend module docs, `docs/repos/wms-be/README.md` import header (fixes the stale 11-2 columns debt), PENDING, deferred-work closure -- keep the docs true
+- [x] `wms-be/src/modules/catalog/import.command.ts` -- `kit_components` column + parser + post-resolution pass through the kit guards -- the deferred import support
+- [x] `wms-be/test/kits.spec.ts` -- the import I/O arms incl. file-internal component resolution and precision refusal -- the proof
+- [x] `wms-fe/src/lib/api/client.ts` + `src/lib/use-catalog.ts` -- product/kit wrappers + hooks -- data layer
+- [x] `wms-fe/src/components/settings/products-card.tsx` + `settings/page.tsx` -- products card + variant matrix -- the variant surface
+- [x] `wms-fe/src/components/settings/sku-table.tsx` -- kit marker + create/edit kit forms -- the kit editor
+- [x] `wms-fe/src/components/outbound/outbound-orders.tsx` -- parent/child line rendering -- the order display
+- [x] `wms-fe` component tests for the new surfaces (happy-dom render helper exists) -- the FE pins
+- [x] meta `docs/` -- frontend module docs, `docs/repos/wms-be/README.md` import header (fixes the stale 11-2 columns debt), PENDING, deferred-work closure -- keep the docs true
 
 **Acceptance Criteria:**
 - Given a product with two attached variants, then the Settings products card expands to a matrix showing both with their axis values; attaching a third SKU with duplicate values is refused by name inline.
 - Given a kit SKU with a composition, then the SKU table marks it, the editor PUTs a replacement BOM, and an order containing it renders its children grouped under the parent line.
 - Given a CSV with a `kit_components` cell referencing an earlier row's SKU code, then the composition is created with the file-internal reference; a cell naming an unknown code or a kit as component is refused by row.
 - Given the whole suite, then `bun run test/typecheck/lint/build` pass in both repos and the FE drift + capability-mirror guards pass with no generated-client change.
+
+## Review Triage Log
+
+**Round 1 (step-04, three layers over the combined diff — blind-hunter 16, edge-case-hunter 9, verification-gap 4+4).** Two claims the implementer's context pre-flagged (the fix-mode comment, the missing kit event) were re-verified by all three layers independently.
+
+| # | Source | Finding | Verdict | Triage |
+|---|--------|---------|---------|--------|
+| 1 | blind + edge + gap | The code comments (`import.command.ts:202`, `:488`) claim fix mode can retry a refused kit composition; it cannot — the row's SKU committed, so a fix-mode resubmit dies at the tenant `duplicate-sku-code` check before the kit pass. Only the PUT route retries. Verified by me against `import.command.ts:247-262` + `:388-391`. | medium | **patch** (comment corrected; folded into entry 1) |
+| 2 | blind + gap | The import kit pass writes `kit_compositions` directly and emits only `catalog.imported` — no `catalog.kit_created` per created kit, unlike `KitCommand` (docs list KitCommand as the events' only source). No consumer today (LoggingEventBus only logs), but 11-7's snapshot or any future consumer misses import-created kits. Verified. | medium | **patch** (entry 2) |
+| 3 | blind + gap | The counts no longer partition: a kit-refused row is both committed and failed (13+10 > 16), the module doc still frames valid/errors as a partition, and the FE import banner's guidance ("re-import them as a fix run") is exactly the impossible path for kit-refused rows. Verified (verification-gap, pre-verified). | medium | **patch** (entry 1) |
+| 4 | blind | `stockKits`/`heldKits`/kit-side `preexistingKitIds` guards are structurally unreachable for fresh imports, while the spec I/O matrix lists those arms as reachable row errors, and no test pins them. | low | **rejected** — deliberate fail-closed defense; code loudly refusing a state the program cannot reach is correct behavior, and the fix (removing guards or amending the frozen matrix) would weaken a boundary the frozen Always-names. |
+| 5 | blind | The FE import card's fixed-header column list omits `variant_values` (11-3 debt) and `kit_components`, with no grammar example for the new cell — a user cannot discover the column from the UI. | medium | **patch** (entry 8) |
+| 6 | blind + gap | The SKU table never renders the kits join's failed state — `kitOf` returns undefined for every row, so every kit renders as a plain SKU with a create-only Kit button; the outage is silent in the surface whose headline feature is the marker. Pre-verified (verification-gap read the component end to end; all kits stubs in tests return 200). | medium | **patch** (entry 3) |
+| 7 | blind + edge | The saved-kit banner branches on component count, not mode: editing a kit down to one component says "X is now a kit" (and creating a multi-component kit says "kit updated"). Verified at `sku-table.tsx:202`. | low | **patch** (entry 4) |
+| 8 | blind + edge | `groupKitLines` drops second-level descendants (a child of a child is grouped under its parent, but that parent renders as a child row, not a group, so the grandchild never renders). | low | **rejected** — the backend guarantees one-level explosion (flat BOM, pinned since 11-4); the function's missing-parent arm already covers the real defensive need, and the recursion fix adds complexity for data the program cannot produce. |
+| 9 | blind | The order-detail summary line (`lineTotals(detail.data.lines)`) sums the flat list — a kit order's totals double-count contents (parent + children both counted; the line count is inflated too). Verified at `outbound-orders.tsx:627` + `outbound-orders.ts:100-111`. | medium | **patch** (entry 5) |
+| 10 | blind | `useCatalogSkus` is instantiated separately in `VariantMatrix` and `KitForm` — the Settings page fetches the whole catalog 2–3× with no shared cache; unbounded duplicate fetching on a 10k-SKU tenant. | medium | **defer** (entry 10 — real scaling note; fix is a shared-catalog-context refactor beyond this story's patch round) |
+| 11 | blind | `products-card.test.tsx`'s `stubRouter(role = 'owner')` accepts a role and discards it. | low | **rejected** — dead test parameter, no behavioral effect. |
+| 12 | blind | `ProductsCardSessioned`'s `products ?? { onCursor: undefined }` null-fallback is dead — `useProducts` never returns null. | low | **rejected** — harmless defensive optional chain, no behavior change available. |
+| 13 | blind | `parseKitComponentsCell` checks MAX_KIT_COMPONENTS only after parsing the whole cell; a pathological cell is split and built in full before refusal. | low | **rejected** — the file-size cap bounds cell length; the work before refusal is bounded and negligible. |
+| 14 | blind | The 11.6 test pins only three shape arms; the separator-only `empty-kit-composition`, empty-code and over-long-code arms are untested. | low | **patch** (entry 2) |
+| 15 | blind | The kit pass calls `validateRecordableQuantity(..., 'non-negative')` while the shape layer already refuses ≤ 0 — the mode label understates the invariant. | low | **rejected** — speculative drift note on a correct boundary; no harm reaches users or developers today. |
+| 16 | blind | The edit-mode header renders `existing` from the parent's kits map (stale as the user edits rows) and the quantity tooltip falls back to `quantityInputLabel(0)` when the component SKU is unresolved. | low | **rejected** — cosmetic hint text; the header honestly describes the BOM the form opened with, and the tooltip fallback covers a transient load window. |
+| 17 | edge | (Same location and claim as finding 1.) | — | carried |
+| 18 | edge | (Same location and claim as finding 8.) | — | carried |
+| 19 | edge | Inside the `kit-already-composed` recovery, the fresh kits-list `fetchAllPages` is not wrapped — if it throws, the rejection escapes onSubmit unhandled and the submission vanishes without feedback. Verified at `sku-table.tsx:638` (a throw inside the catch propagates; `finally` only resets pending). | low | **patch** (entry 7) |
+| 20 | edge | While the kits join loads (or after it fails), `kitOf` returns undefined and existing kits appear as selectable components — the "guaranteed refusals filtered, not validated" contract breaks transiently. | low | **rejected** — a transient window that self-heals when the join lands; the server's `kit-component-is-kit` refusal renders by name in the interim. The persistent arm (failed join) is entry 3's fix. |
+| 21 | edge | (Same location and claim as finding 7.) | — | carried |
+| 22 | edge | With a zero-SKU tenant, the attach CTA copy reads "Every SKU already carries a variant on this product" — false. Verified at `products-card.tsx:326-328`. | low | **patch** (entry 6) |
+| 23 | edge | The parent hold span renders `KIT_PARENT_HOLDS_LABEL` unconditionally — a dispatched kit order's parent still asserts "stock held on its components" after the holds were consumed. Verified at `outbound-orders.tsx:658`. | low | **patch** (entry 9) |
+| 24 | edge | `attachCandidates` filters only `productId !== product.id`, so a SKU attached to a DIFFERENT product is offered — and the server's attach arm has no current-attachment guard (`sku.command.ts:376-414`), so the PATCH silently moves it off that product. The frozen matrix says "choose an unattached SKU". Verified. | medium | **patch** (entry 11 — the code deviates from the frozen wording; filter to `productId === null`) |
+| 25 | edge | The frozen Decisions sentence says "FE converts at the API boundary"; the FE performs no conversion (the server converts decimals to milli at its own edge). | false | **rejected** — the finding's only fix is an edit to the frozen spec, and the normative content (decimals at the FE, never raw milli) is exactly what the code does; the parenthetical's misattribution changes no behavior. |
+| 26 | gap | (Same claim as finding 3, fuller: the import card's overlapping-counts display and its fix-run remedy are untested for the new semantics.) | — | carried |
+| 27 | gap | (Same claim as finding 6, pre-verified.) | — | carried |
+| 28 | gap | The products card's cursor pagination is wired but never exercised — every fixture returns `nextCursor: null` and no test clicks Next, so a broken page-2 fetch ships undetected. | low | **patch** (entry 12) |
+| 29 | gap | `inFileKitCodes` treats every row with a kit cell as a kit for sibling rows, including rows whose cell was refused — a sibling naming a refused kit is refused with "is itself a kit", false in that case. The mutual-pair refusal it pins is deliberate. | low | **rejected** — deliberate fail-closed file-internal consistency (if the refused kit is later composed via PUT, the sibling's reference would become kit-of-kit); the collateral is one imprecise error detail, not a wrong refusal. |
+| 30 | gap | (Same claim as finding 2.) | — | carried |
+| 31 | gap | The 11.6 test reaches into the 11.4 describe's fixture for `KIT-KE1`; a change to the 11.4 fixtures breaks the 11.6 arm with a failure pointing at the wrong describe. | low | **patch** (entry 2) |
+
+**Grouping and routing.** No intent_gap, no bad_spec — no loopback. All surviving entries are patch, plus one defer:
+
+- **Entry 1 (patch)** — findings 1, 3, 17, 26: the retry story for kit-refused rows is wrong in three places (BE comments, module-doc framing, FE import-card guidance) and the overlapping counts are unrendered/unpinned on the FE. Root cause: the kit pass's committed-and-failed row shape was never carried into the comment, the doc framing, or the card copy.
+- **Entry 2 (patch)** — findings 2, 14, 30, 31: the import pass's event gap and the new suite's thin shape coverage share one site — the kit pass + its test describe.
+- **Entry 3 (patch)** — findings 6, 27: the kits join's non-ready states have no UI arm in the SKU table.
+- **Entry 4 (patch)** — findings 7, 21: the saved-kit banner branches on count, not mode.
+- **Entry 5 (patch)** — finding 9: the order-detail summary sums the exploded flat list.
+- **Entry 6 (patch)** — finding 22: the empty-catalog attach copy.
+- **Entry 7 (patch)** — finding 19: unhandled rejection in the race-arm recovery.
+- **Entry 8 (patch)** — finding 5: the import card's stale column list and missing grammar example.
+- **Entry 9 (patch)** — finding 23: the dispatched parent's hold label.
+- **Entry 10 (defer)** — finding 10: duplicate whole-catalog fetching (severity real, unbounded only at 10k-SKU scale; fix is a shared-catalog context).
+- **Entry 11 (patch)** — finding 24: attach candidates include SKUs attached to other products (deviation from the frozen "unattached SKU" wording).
+- **Entry 12 (patch)** — finding 28: cursor pagination untested.
 
 ## Design Notes
 

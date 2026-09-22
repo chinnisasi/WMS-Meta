@@ -198,6 +198,8 @@ Three doors the stock system closes at once — **a kit never holds independent 
 
 **The race between a GRN and kit creation is closed by row locks, not timestamps.** Both commands take `.for('update')` on the same sku rows in id order — `receiving.loadSkus` orders by `skus.id` precisely so the lock order matches the kit command's `lockSkus` — so whichever commits first, the loser decides against committed state: a GRN that commits first makes the kit-create guard answer `kit-sku-holds-stock`; a kit-create that commits first makes the GRN's kit check answer `kit-cannot-hold-stock`.
 
+**The CSV import is a second door into kit-ness (11.6), wearing the same guards.** Its `kit_components` column parses syntactically per row (the `uom_conversions` cell grammar) but resolves **after all SKU rows commit**, so a component may be an earlier row of the same file; per-kit it re-runs the KitCommand's guards (`kit-sku-holds-stock`, `kit-already-composed`, `kit-self-reference`, `kit-component-is-kit`, precision-validated component quantities) and emits `catalog.kit_created` through the same `kitEventPayload` builder. A refused kit cell leaves its SKU committed — the counts overlap — and only the PUT route retries a composition, never fix mode (see the row-validation section).
+
 ### The UoM vocabulary and its precision
 
 ```mermaid
@@ -259,7 +261,7 @@ Guards, in the order they actually run:
 7. Per-row validation, then duplicate detection.
 8. Bulk insert of valid rows, chunked at 2,000.
 
-Writes: `skus`, `uom_conversions`, `catalog_imports`, `catalog_import_errors`, `idempotency_keys`. Emits `catalog.imported` with the counts.
+Writes: `skus`, `uom_conversions`, `kit_compositions` (11.6 — the kit resolution pass), `catalog_imports`, `catalog_import_errors`, `idempotency_keys`. Emits `catalog.imported` with the counts, plus one `catalog.kit_created` per composition the kit pass created (11.6 — the same `kitEventPayload` builder KitCommand uses).
 
 Response = idempotency snapshot = `{importId, mode, committedRows, failedRows, skippedRows, errors[]}`.
 
@@ -303,11 +305,15 @@ The only things that abort the whole run are file-level: too large, unparseable,
 
 ### Row validation order (`validateRow`, `import.command.ts:746`)
 
-Shape first, one error per row, **first failure wins**: `sku_code` present/≤64 → `name` present/≤200 → `uom` present/≤32 → **`uom` resolves in the vocabulary** → `gst_rate` integer 0–10000 → `hsn` ≤32 → `batch_tracked` → `serial_tracked` → **serial × fractional-UoM refusal** → `catch_weight_tracked` → **catch weight × serial refusal** → `reorder_point` → `reorder_qty` → `barcode` ≤64 → **the physical attributes (11.2)**: `weight_grams`/`length_mm`/`width_mm`/`height_mm` parse via `parseAttributeNumber` (`:966` — blank → null, the `^\d+(\.\d+)?$` grammar which ADMITS the decimal shape; only a minus sign or a non-numeric spelling is a row error naming the CSV column) and `country_of_origin`, then the ONE shared validator `assertSkuAttributes` rules on every present value — so a fraction or an over-cap number is refused THERE, naming the API field (`weightGrams`, not `weight_grams`) → `uom_conversions` parsing → **the variant columns (11.3)**: `product` ≤ 200, and a `variant_values` cell without a `product` cell is refused HERE (values ride the product); the cell parses with the `uom_conversions` cell-grammar precedent (`box:12` → `size=M; colour=Red` — split `;`, split the FIRST `=`, both sides trimmed).
+Shape first, one error per row, **first failure wins**: `sku_code` present/≤64 → `name` present/≤200 → `uom` present/≤32 → **`uom` resolves in the vocabulary** → `gst_rate` integer 0–10000 → `hsn` ≤32 → `batch_tracked` → `serial_tracked` → **serial × fractional-UoM refusal** → `catch_weight_tracked` → **catch weight × serial refusal** → `reorder_point` → `reorder_qty` → `barcode` ≤64 → **the physical attributes (11.2)**: `weight_grams`/`length_mm`/`width_mm`/`height_mm` parse via `parseAttributeNumber` (`:966` — blank → null, the `^\d+(\.\d+)?$` grammar which ADMITS the decimal shape; only a minus sign or a non-numeric spelling is a row error naming the CSV column) and `country_of_origin`, then the ONE shared validator `assertSkuAttributes` rules on every present value — so a fraction or an over-cap number is refused THERE, naming the API field (`weightGrams`, not `weight_grams`) → `uom_conversions` parsing → **the variant columns (11.3)**: `product` ≤ 200, and a `variant_values` cell without a `product` cell is refused HERE (values ride the product); the cell parses with the `uom_conversions` cell-grammar precedent (`box:12` → `size=M; colour=Red` — split `;`, split the FIRST `=`, both sides trimmed) → **the kit column (11.6)**: `kit_components` is syntactically parsed HERE with the same cell grammar — `pad:2;tape:1`, `code:qty` per entry, `qty` a positive decimal, a duplicate component code in one cell is `duplicate-kit-component` (the BOM is a set), an empty cell is simply "not a kit" and >`MAX_KIT_COMPONENTS` entries is a row error — but the names resolve only in the kit resolution pass below, because a component may be an **earlier row of the same file** and rows are not yet SKUs.
 
 Duplicate checks run afterwards because they need the whole file plus the tenant: file-internal code (naming the earlier row number), tenant code, then barcode (naming the conflicting SKU). Between those, the **variant resolution pass** (11.3) fetches the referenced products by name (a missing one is a row error — "import references products, it never creates them"), runs `assertVariantValues` against each product's axes (a mismatch is a row error naming the axis), and the duplicate loop adds `duplicate-variant-values` arms: within the file (naming the earlier row) and against the tenant's existing attached SKUs (naming that SKU's code). Errors are sorted by `rowNumber` before persisting (`:278`) so the report is in document order regardless of which pass produced each one.
 
-Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`, `duplicate-variant-values` (11.3).
+**The kit resolution pass (11.6) runs after all SKU rows commit**, inside the same transaction, so a component may be an earlier row of the file: the pass maps every kit cell's SKU by code, then per row runs the **same guards the KitCommand runs** — `kit-sku-holds-stock` (a fail-closed bulk check: the pass runs on a fresh import where no committed SKU has stock, but the guard is deliberate so a future reorder of the passes cannot strand it), `kit-already-composed` (create is the only door into kit-ness; PUT replaces) → `kit-component-not-found` (names the code, tenant or file) → `kit-self-reference` → `kit-component-is-kit` (a pre-existing kit **or** a kit declared earlier in the file — the BOM stays flat) → the component quantity validated by `validateRecordableQuantity` against **the component's own base UoM and its declared precision** (the explosion's rule, milli-units per one kit). Every valid composition inserts into `kit_compositions` and appends a `catalog.kit_created` event **through the same `kitEventPayload` builder the KitCommand uses** — event parity, not a second payload shape.
+
+The counts overlap on a kit refusal: **the SKU row and the kit failure are counted independently**, so `committedRows + failedRows` can exceed the file's row count. This is honest and deliberate — a refused kit cell does not un-commit its SKU. Only the **PUT kit route** can retry the composition: fix mode cannot, because the committed SKU is refused `duplicate-sku-code` on resubmit before the kit pass ever runs. The FE import card states this and points at the Kit action.
+
+Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`, `duplicate-variant-values` (11.3), and the kit-pass row codes (11.6): `kit-component-not-found`, `kit-self-reference`, `kit-component-is-kit`, `kit-already-composed`, `kit-sku-holds-stock`, `duplicate-kit-component`, `empty-kit-composition`.
 
 ### Fix mode (`import.command.ts:212-231`)
 
@@ -329,7 +335,7 @@ A fix upload is a full file, not a delta — the operator re-submits the correct
 
 ### Header contract and parsing
 
-Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `reorder_point`, `reorder_qty`, `barcode`, `product`, `variant_values` (11.3) (`:88-102`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2 and 11.3 through the parser**: a CSV carrying the new columns against a pre-story binary would be rejected wholesale, so the header contract and the row parser grew together.
+Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `reorder_point`, `reorder_qty`, `barcode`, `product`, `variant_values` (11.3), `kit_components` (11.6) (`:88-102`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2, 11.3 and 11.6 through the parser**: a CSV carrying the new columns against a pre-story binary would be rejected wholesale, so the header contract and the row parser grew together.
 
 Three parser traps handled explicitly:
 
@@ -421,7 +427,7 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | `catalog.sku_edited` | `SkuCommand.edit` | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
 | `catalog.product_created` | `ProductCommand.create` (11.3) | `{productId, name, axes}` |
 | `catalog.product_edited` | `ProductCommand.edit` (11.3) | `{productId, name, axes}` |
-| `catalog.kit_created` | `KitCommand.create` (11.4) | The kit snapshot (kit sku + the full component list) |
+| `catalog.kit_created` | `KitCommand.create` (11.4); **also `ImportCommand`'s kit resolution pass (11.6)** — one per composition the import created, via the same `kitEventPayload` builder | The kit snapshot (kit sku + the full component list) — base units, the command's convention |
 | `catalog.kit_edited` | `KitCommand.put` (11.4) | Same shape; the replaced composition |
 
 Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the append, so it emits nothing.

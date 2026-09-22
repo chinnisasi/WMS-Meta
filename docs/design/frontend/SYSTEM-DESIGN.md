@@ -44,7 +44,7 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 | `/` | Overview | **Partial.** Server component, `dynamic = 'force-dynamic'`. Four KPI tiles: three hold a literal `—`, the fourth renders a live `/health` probe behind a 3-second `AbortSignal.timeout` (`page.tsx:16-22`). Below it an intentionally empty `DataTable` |
 | `/inventory` | Inventory | `SurfacePlaceholder` |
 | `/inbound` | Inbound | **Real** — `InboundCards`: purchase orders, goods receipts, QC holds (place + release, gated on `qc.manage`) |
-| `/outbound` | Outbound | **Real** — `Outbound`: one warehouse picker shared by the orders surface (4.2b) and the waves surface (4.2c) |
+| `/outbound` | Outbound | **Real** — `Outbound`: one warehouse picker shared by the orders surface (4.2b) and the waves surface (4.2c); the order detail groups exploded kit lines parent-over-children and sums totals over top-level lines only (11.6) |
 | `/moves` | Moves | `SurfacePlaceholder` |
 | `/conflicts` | Conflicts & Reviews | **Real** — `OverReceiptQueue`. The only nav item that declares a capability (`review.decide`, `src/lib/navigation.ts:39`) |
 | `/notifications` | Notifications | `SurfacePlaceholder` |
@@ -52,7 +52,7 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 | `/channels` | Channels | `SurfacePlaceholder` |
 | `/compliance` | Compliance | `SurfacePlaceholder` |
 | `/reports` | Reports / Audit | `SurfacePlaceholder` |
-| `/settings` | Settings | **Real** — a `SurfacePlaceholder` header above eight working cards: setup checklist, warehouse create, zones/bins setup, catalog import, SKU table, users, warehouse list, devices (`settings/page.tsx:13-27`) |
+| `/settings` | Settings | **Real** — a `SurfacePlaceholder` header above nine working cards: setup checklist, warehouse create, zones/bins setup, catalog import, products (11.6), SKU table (with the kit editor, 11.6), users, warehouse list, devices (`settings/page.tsx:15-25`) |
 
 Six of twelve are still `SurfacePlaceholder` — a two-prop component rendering a heading and a sentence (`src/components/shell/surface-placeholder.tsx`). The IA is complete; the surfaces are not.
 
