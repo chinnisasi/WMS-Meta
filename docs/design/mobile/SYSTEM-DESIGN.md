@@ -171,14 +171,16 @@ Fetched online from `GET /tenants/{t}/devices/catalog-snapshot?warehouseId=…` 
 
 | Field | Carries | Why the device needs it offline |
 |---|---|---|
-| `skus[]` | id, code, name, **barcode**, uom, `batchTracked`, `serialTracked` | Barcode → SKU resolution with no network call; the batch-required and serial-required gates |
+| `skus[]` | id, code, name, **barcode**, uom, `batchTracked`, `serialTracked` — and, 11.7: **`variantValues`** + **`axes`** (nullable) | Barcode → SKU resolution with no network call; the batch-required and serial-required gates — and, 11.7, so the device can **say which variant a scan holds, offline** (UX-DR28). Display only: nothing decides on them; `null` means the SKU is unattached to a product, `absent` means a pre-11-7 seal |
 | `openPurchaseOrders[]` | lines with `orderedQty` / `receivedQty` / `openQty` | Which PO line a scan maps to, and the over-receipt (excess) math |
 | `bins[]` | id, code, zone, type, capacity, **`blocked`**, **`systemOwned`** | Bin-code resolution — and blocked/system bins ride the payload *deliberately*, so the device can **reject a scan against them pre-queue** rather than queueing an op the server will refuse |
 | `putawayTasks[]` | GRN line + placeable qty + `suggestedBin` + `rationale` | The putaway unit of work. The suggestion is advisory; the server re-gates at placement |
-| `pickTasks[]` | The whole walk: picklist/line ids, sku, bin, batch, qty, `sliceSeq`, `walkSeq`, `stopCount`, `binStateEpoch?` | **The whole walk rides the snapshot on purpose** — that is what lets a wrong-bin scan name *the next walk bin holding the expected SKU* with no network call (`src/picking/draft.ts:133-157`) |
+| `pickTasks[]` | The whole walk: picklist/line ids, sku, bin, batch, qty, `sliceSeq`, `walkSeq`, `stopCount`, `binStateEpoch?` — and, 11.7: **`kitParentSkuCode`** (nullable) | **The whole walk rides the snapshot on purpose** — that is what lets a wrong-bin scan name *the next walk bin holding the expected SKU* with no network call (`src/picking/draft.ts:133-157`). 11.7 adds the exploded kit component's parent kit SKU code, display-only (`from kit {code}` header line); no pick logic reads kit-ness |
 | `binStateEpoch?` on a pick task | The bin's opaque `state_epoch` at snapshot time | AD-14: the observation a queued pick carries back so the server can tell a bin that merely *moved on* from one that is unresolvable. Opaque — captured, stored and sent verbatim; the client never interprets or compares it |
 
 `parseCatalogSnapshot` (`src/state/catalog-snapshot.ts:13`) is the read boundary and exists because the snapshot grows additively: a cache sealed by an older build carries none of the keys a later story added, and a raw cast hands the screens `undefined` where they iterate. It defaults `bins`, `putawayTasks` and `pickTasks` to `[]`, so a device that upgraded without refreshing shows **no tasks of the new type instead of crashing**. It is kept dependency-free so it is testable without Expo.
+
+**Story 11.7 grew the snapshot per-row instead of per-array, and `parseCatalogSnapshot` is deliberately untouched.** `variantValues`/`axes` on a SKU and `kitParentSkuCode` on a pick task are optional keys (the `binStateEpoch` precedent): **absent** means an older build sealed the cache, **`null`** means the server answered and the answer is "no variants / not a kit component" — two different facts a display helper must read differently. The display grammar lives in one pure module, `src/picking/variant.ts`: `variantLabel` (axes in declaration order, `axis: value` joined with the web's ` · `, `—` for a value that is missing — mirroring wms-fe's `variantValuesLabel` so both clients read one product the same way), `describeSku` (`label (code)`, bare code when unlabelled), `verifiedAnnouncement` (the label leads the post-scan announcement — UX-DR28) and `kitContext` (`from kit {code}`, else null). The pick screen renders these verbatim and composes nothing itself; `verifyTaskSku` composes `describeSku` on **both** sides of a wrong-item rejection, so a wrong-variant scan names both variants and a stale cache degrades to today's exact prose. Because `app/` has no test seam, `variant.test.ts` pins every operator-facing string byte-for-byte.
 
 ### Replay classification
 
@@ -227,7 +229,7 @@ What the device decides on its own, per flow:
 |---|---|---|
 | Receive | Unknown barcode, ambiguous barcode, empty scan (`receiving/draft.ts:84-95`); batch code required for a batch-tracked SKU (`app/receive.tsx:224-227`); qty clamped to the server's int4 bound (`MAX_LINE_QTY`, `:38`) | Over-receipt is **not** a rejection — it shows an amber notice and the task continues; the server holds the excess for approval |
 | Putaway | Wrong SKU for the task, **serial-tracked SKU** (no serial entry in v1), system bin, blocked bin, unknown bin code (`putaway/draft.ts:108-159`); a bin ≠ the suggestion requires a reason from the fixed enum before the op may queue (`:176-181`) | Capacity, remaining quantity, whether the receiving bin still holds the stock |
-| Pick | Wrong item naming the expected SKU, system/blocked bin, a bin holding no line of this picklist — **with the next walk bin that holds the SKU named in the reason** (`picking/draft.ts:199-232`); serial duplicates and overruns; a SKU missing from a stale cache (`serialTracking → 'unknown'`, confirm closed, "refresh") | FEFO batch selection **inside the scanned bin**, live stock, the hold, the re-plan. An off-plan bin that is another stop of the same walk for the same SKU **passes** — the plan's bin is a suggestion |
+| Pick | Wrong item naming **both sides** — each as its variant label when it carries one, else its bare code, 11.7 (`picking/draft.ts` + `variant.ts`); system/blocked bin, a bin holding no line of this picklist — **with the next walk bin that holds the SKU named in the reason** (`picking/draft.ts:199-232`); serial duplicates and overruns; a SKU missing from a stale cache (`serialTracking → 'unknown'`, confirm closed, "refresh") | FEFO batch selection **inside the scanned bin**, live stock, the hold, the re-plan. An off-plan bin that is another stop of the same walk for the same SKU **passes** — the plan's bin is a suggestion |
 
 ---
 
@@ -309,20 +311,25 @@ Sync summary
 
 ## Testing
 
-`bun test` — **143 tests across 10 files, all pure**; `bun run typecheck` is strict `tsc --noEmit`. CI runs exactly those two (`.github/workflows/ci.yml:21-25`).
+`bun test` — **271 tests across 15 files, all pure**; `bun run typecheck` is strict `tsc --noEmit`. CI runs exactly those two (`.github/workflows/ci.yml:21-25`).
 
 | Suite | Tests | Covers |
 |---|---|---|
-| `src/picking/draft.test.ts` | 37 | The walk, the next-walk-bin hint, the bin gate on/off-plan, item verification, serials, the epoch capture, consumed stops, the stale-snapshot arms, the whole short-pick arm |
+| `src/receiving/draft.test.ts` | 48 | Barcode resolution, scan accumulation and increments, the SKU-switch batch reset, the int4 clamp, the over-receipt math, catch-weight weights (10.6), confirm payloads |
+| `src/picking/draft.test.ts` | 42 | The walk, the next-walk-bin hint, the bin gate on/off-plan, item verification (**both rejection sides named as variants, 11.7**), serials, the epoch capture, consumed stops, the stale-snapshot arms, the whole short-pick arm |
+| `src/packing/draft.test.ts` | 42 | The pack bench's decisions (10.7): count accumulation, label handling, mismatch prose, the exact-equality confirm gate |
+| `src/lib/quantity-input.test.ts` | 27 | The one quantity-input statement's contract (10.6): precision-aware parse, the refusal copy byte-mirroring the server's `precisionRefusalDetail`, clamps, scale/weight entry |
 | `src/offline/engine.test.ts` | 25 | FIFO exactly-once replay, unreachable-stays-queued, visible retraction, the four AD-14 arms, the attempt bound and its cooldown across simulated restarts, revocation stranding the tail, force-quit, cross-type FIFO, **plus the envelope-crypto round trip and interop with the server's sha256 stretch** |
-| `src/receiving/draft.test.ts` | 25 | Barcode resolution, scan accumulation and increments, the SKU-switch batch reset, the int4 clamp, the over-receipt math, confirm payloads |
-| `src/putaway/draft.test.ts` | 17 | Bin resolution, the blocked/system pre-check, the serial refusal, the mismatch-reason gate, the clamp, the payload |
-| `src/state/replay-classification.test.ts` | 13 | Every branch of the AD-14 mapping, including 401-is-not-a-refusal and role-denied-is |
+| `src/putaway/draft.test.ts` | 19 | Bin resolution, the blocked/system pre-check, the serial refusal, the mismatch-reason gate, the clamp, the payload |
+| `src/state/replay-classification.test.ts` | 18 | Every branch of the AD-14 mapping, including 401-is-not-a-refusal and role-denied-is |
+| `src/picking/variant.test.ts` | 11 | The 11.7 display grammar **pinned verbatim** — `variantLabel`'s axes order / ` · ` / `—` arms, `describeSku`, `verifiedAnnouncement` (variant-led and today's unattached/legacy arms), `kitContext` |
 | `src/scanning/engine.test.ts` | 8 | Capture-agnosticism (all three sources produce the same shape), format detection, the accept/reject arms |
+| `src/state/replay-gate.test.ts` | 8 | The replay single-flight gate's concurrency contract (10.6) — the zero-scan-loss fix, pinned pure |
 | `src/offline/outbox-store.test.ts` | 7 | The schema, migration and row mapping driven against **`bun:sqlite`** — round-tripping the attempt count and the session through both `appendOp` and `replaceOps`, upgrading a pre-4.3b database, migration idempotence, a non-duplicate-column failure rethrowing, and a corrupt-session-vs-corrupt-payload split |
-| `src/state/op-dispatch.test.ts` | 6 | Op type → sender, `Idempotency-Key` = the op's ULID for every type, and the exhaustiveness throw |
-| `src/state/device-store.test.ts` | 3 | Only `parseCatalogSnapshot` — legacy seal, current round-trip, corrupt seal |
+| `src/state/op-dispatch.test.ts` | 7 | Op type → sender, `Idempotency-Key` = the op's ULID for every type, and the exhaustiveness throw |
+| `src/state/device-store.test.ts` | 6 | Only `parseCatalogSnapshot` — a legacy seal per growth story (3.5, 10.6, 10.7, 11.7), the current round-trip, a corrupt seal |
 | `src/lib/ulid.test.ts` | 2 | Shape, time-sortability, uniqueness |
+| `src/api.test.ts` | 1 | `fetchApiPackOrder`'s wire shape executed against a stubbed `fetch` (10.7 review) — URL, method, idempotency key, badge token |
 
 **What is not covered, plainly:** there are **no component or screen tests at all** — nothing under `app/` is exercised, and there is no Detox/Maestro/e2e layer. Every rule that matters was deliberately pushed *out* of the screens into pure modules for exactly this reason (`op-dispatch.ts`, `replay-classification.ts`, `catalog-snapshot.ts`, the three draft models were each extracted after a defect that the Expo-runtime coupling had hidden), but the screens' own wiring — step transitions, focus management, banner selection — is verified by hand only.
 

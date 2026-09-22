@@ -139,7 +139,7 @@ Send `null` explicitly where the server's DTO expects the arm closed (`serials: 
 
 ### Adding a field
 
-The snapshot has grown four times (3.3 → 3.5 → 4.3 → 4.3b) and every growth was **additive**, because a device can be running an older build against a newer server and vice versa.
+The snapshot has grown eight times (3.3 → 3.5 → 4.3 → 4.3b → 10.2 → 10.6 → 10.7 → 11.7) and every growth was **additive**, because a device can be running an older build against a newer server and vice versa. Most growths added arrays (defaulted in `parseCatalogSnapshot`); **10.2 and 11.7 grew per-row** — `uomPrecision` on `CatalogSku` (10.2), then `variantValues`/`axes` on `CatalogSku` and `kitParentSkuCode` on `CatalogPickTask` (11.7) — and 11.7 deliberately left `parseCatalogSnapshot` untouched: these are optional display-only keys (the `binStateEpoch` precedent), where **absent** means a pre-11-7 seal and **`null`** means the server answered "no variant / not a kit component". A display helper reads absence and null to the same effect, but the legacy-seal test must still pin it **by equality with the keys omitted** (and the keys' absence asserted directly — `toEqual` alone would wave an `undefined`-valued insertion through), never `undefined`-valued.
 
 1. Add the field to the interface in `src/api.ts:464-571`. **Mark it optional only when absence is a real state on a real device** — `CatalogPickTask.binStateEpoch?: number | null` is optional because a snapshot sealed before story 4.3b genuinely has no such key, and `null` separately means "this bin has no epoch row yet" (`:546-557`). Required-and-always-sent fields stay required: `conflictClass` is required on the response precisely so readers cannot treat "moved on" and "untouched" as the same answer.
 2. **If it is a new array, default it in `parseCatalogSnapshot`** (`src/state/catalog-snapshot.ts:16-21`). A raw `JSON.parse` cast of an older seal hands the screens `undefined` where they iterate. With the default, a device that upgraded without refreshing shows no tasks of the new type instead of crashing.
@@ -270,7 +270,7 @@ This is a floor, not a wish list. UX-DR22, and the scan path is the one an opera
 - **A test that says "restart" must actually restart something.** Two engine tests named restart drove the in-memory store, which is exactly how the unwritten `session` column survived a whole story. A persistence claim needs `bun:sqlite` and a second `createOutboxStore` over the same handle (`outbox-store.test.ts:103-141`).
 - **Pin every arm of a discriminated union**, not the happy path. `replay-classification.test.ts` has one test per branch; `op-dispatch.test.ts` has one per op type plus the exhaustiveness throw.
 - **Assert defaults by equality.** `toMatchObject` is satisfied by an absent key, which defeats the point of a legacy-seal test.
-- When a rejection carries operator-facing prose, assert the prose. It is the interface.
+- When a rejection carries operator-facing prose, assert the prose. It is the interface. **The same holds for display strings**: because `app/` has no test seam, any string a screen renders verbatim (the 11.7 variant label, the verified announcement, the `from kit` line) must be composed in a pure helper whose suite pins it byte-for-byte — the screen composes nothing itself.
 
 ---
 

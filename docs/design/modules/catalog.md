@@ -101,7 +101,7 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 |---|---|---|
 | `getImportSummary(tenantId)` `:101` | `{skuCount, lastImport}` | Tenancy's setup checklist |
 | `findSku(tenantId, skuId)` `:138` | Identity + tracking flags, or `null` | Any module needing a 404 check before acting on a SKU |
-| `getSkuSummaries(tenantId)` `:160` / `getSkuSummariesInTx(tx, …)` `:177` | The device catalog snapshot's scan identity: code, name, barcode, `uom`, **`uomPrecision`**, tracking flags | The api shell's device snapshot |
+| `getSkuSummaries(tenantId)` `:210` / `getSkuSummariesInTx(tx, …)` `:227` | The device catalog snapshot's scan identity: code, name, barcode, `uom`, **`uomPrecision`**, tracking flags — and since 11.7 the variant arm: **`variantValues`** (the SKU's values on its attached product's declared axes) and **`axes`** (declaration order), via a left join on `products`; **null when the SKU is unattached** | The api shell's device snapshot (the mobile pick path says which variant a scan holds, offline — 11.7) |
 | `getBatches(tenantId, skuId)` `:198` | Batch identities, code-ordered | Inventory read surfaces |
 | `getBatchesForSkusInTx(tx, tenantId, skuIds)` `:223` | Batch identities for a set, in the caller's tx | Outbound's wave planner (the FEFO half) |
 | `findBatch` `:249` / `findSerial` `:275` | Identity + `skuId`, or `null` | Detail routes' 404 checks |

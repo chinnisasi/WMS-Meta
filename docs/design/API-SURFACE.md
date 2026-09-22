@@ -81,7 +81,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | PATCH | `.../purchase-orders/{poId}` | `po.manage` | Amend |
 | POST | `.../purchase-orders/{poId}/close` | `po.manage` | Carries open quantity to a successor |
 | POST | `/tenants/{t}/receiving/goods-receipts` | **device** | Partial, blind and over-receipt in one flow. Budget: ≤ 4 scans + 1 confirm for a single-SKU single-lot GRN |
-| GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision), bins, putawayTasks, pickTasks, packTasks (+ handlingUnits, 10.7), open POs. Composed at the api shell across modules |
+| GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision (10.2), catchWeightTracked (10.3/10.6), variantValues + axes (11.7) — null when unattached), bins, putawayTasks, pickTasks (+ kitParentSkuCode, 11.7 — display-only, null off-kit), packTasks (+ handlingUnits, 10.7), open POs. Composed at the api shell across modules |
 | GET | `/tenants/{t}/receiving/goods-receipts` | — | Keyset |
 | GET | `/tenants/{t}/receiving/over-receipts` | — | The review queue |
 | POST | `.../over-receipts/{id}/approve` | `review.decide` | Bumps the PO line ceiling. A SKU that became a kit since the GRN → `409 kit-cannot-hold-stock` (11.4); the row stays `pending` for a reject |
