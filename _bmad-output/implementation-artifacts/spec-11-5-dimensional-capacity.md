@@ -63,9 +63,9 @@ context:
 - `workspace/core/backend/wms-be/src/modules/putaway/putaway.command.ts:809-827` -- `binOccupancyInTx` extended to a load-read (units + weight + volume, one grouped query joining `skus`); new rejection helpers beside `binFull:916`
 - `workspace/core/backend/wms-be/src/modules/putaway/putaway.command.ts:727-806` -- `suggestBinInTx`/`binCandidatesInTx` + shared fit predicate
 - `workspace/core/backend/wms-be/src/modules/putaway/putaway.facade.ts:313-346` -- task-derivation fit uses the same predicate (sku rows must carry weight/dims)
-- `workspace/core/backend/wms-be/src/modules/putaway/bin-state.command.ts` -- the PATCH route's state command: unchanged; capacity attributes dispatch to a new tenancy command (see Design Notes)
+- `workspace/core/backend/wms-be/src/modules/putaway/bin-state.command.ts` -- the PATCH route's state command: its `{blocked}` arm is unchanged; the response echo gains the four fields (triage #3/#5 amended: the Code Map originally said "unchanged")
 - `workspace/core/backend/wms-be/src/modules/catalog/sku-attributes.ts:23-25` -- SKU-side caps (read-only reference; no catalog code changes)
-- `workspace/core/backend/wms-be/test/putaway.spec.ts`, `test/bin-admin.spec.ts`, `test/api.spec.ts` -- gate arms, validation, contract drift
+- `workspace/core/backend/wms-be/test/putaway.spec.ts`, `test/bin-admin.spec.ts` -- gate arms, validation, merge arms; `test/api.spec.ts` -- the pre-existing generic contract guard (disk openapi vs served document, `:104`) covers the re-export; no new drift test was added (triage #3)
 - `docs/design/API-SURFACE.md`, `docs/design/modules/putaway.md`, `docs/design/modules/tenancy.md`, `docs/repos/wms-be/README.md` -- meta docs (final task)
 
 ## Tasks & Acceptance
@@ -101,10 +101,34 @@ context:
 - **`editBinCapacity` allows system bins.** They are tenancy-owned structure; only putaway's `blocked` toggle refuses them. Retired bins 409 (`binRetired409`) — a retired bin's capacity is dead history.
 - **DTO/controller shape.** `PatchBinDto.blocked` went optional, so the controller's setBlocked call needs `dto.blocked!` — sound because the both/neither arms return earlier (lint's no-non-null-assertion sensitivity stayed clean).
 - **Verification.** `bun run test` 691/691 (38 suites), `bun run lint` / `bun run typecheck` / `bun run build` clean, `bun run db:generate` reports "No schema changes" (the hand-named SQL matches drizzle's output exactly; journal tag sed-fixed to the filename), snapshot chain `0034_snapshot.prevId` matches the 0033 snapshot id. Contract drift: `bun run openapi:export` re-exported; the FE drift guard stays red until the BE PR merges (expected on cross-repo stories).
+- **Correction (post-review).** The "DTO/controller shape" note above claimed `dto.blocked!` was sound — the three-layer review proved it UNSOUND for `{blocked: null}` (class-validator's `@IsOptional` skips null too; `hasBlocked = dto.blocked !== undefined` counts null as present). The patch replaces the assertion with an explicit 400 when `blocked` is present but not a boolean (triage #1).
 
 ## Spec Change Log
 
 ## Review Triage Log
+
+Three-layer review over the staged diff (spec compliance / correctness-adversarial / conventions+tests). One row per finding.
+
+| # | Finding (layer) | Verdict | Action |
+|---|---|---|---|
+| 1 | `{blocked: null}` on PATCH 500s — `@IsOptional` skips validation for null too, controller counts null as present, `setBlocked` writes null into a NOT NULL column (L3-1, L2-1; both found it) | **high — confirmed** | PATCH: 400 validation-failed when `blocked` is present but not a boolean; test arm added |
+| 2 | `assertBinCapacityAttributes` never exercised — the invalid-value loop passes via the DTO mirror alone; delete the validator and all tests still pass (L3-2) | **medium — confirmed** | command-level tests added (direct service calls with invalid values, both createBin and editBinCapacity), plus HTTP PATCH bad-value arms |
+| 3 | api.spec.ts claim vs empty diff (L1-1, L3-3) | **low — confirmed** | Code Map annotation corrected (the pre-existing generic contract guard at test/api.spec.ts:104 pins the re-export; no new drift test needed) |
+| 4 | Swagger 400 strings on placement/merge/PATCH not extended to the new codes; PATCH wording says system bin 400s but the capacity arm permits them (L1-4, L3-8) | **low — confirmed** | strings updated (placement, merge, PATCH 400 wording) |
+| 5 | `binOccupancyInTx` switched to `innerJoin(skus)` — a dangling stock row would drop out of the UNITS sum too; candidates left-join (L2-2, L3-5; also self-found) | **low — confirmed** | changed to leftJoin — the two load reads agree and units are join-independent |
+| 6 | `_journal.json` reformatted tabs → spaces; next db:generate re-churns; 0034 entry itself correct; 0034.sql lacks trailing newline (L2-5, L3-4; also self-found) | **low — confirmed** | journal restored to drizzle-kit tab format with the 0034 entry appended; newline added |
+| 7 | Bin volume `L×W×H` computed in doubles — exact only while `MAX_BIN_DIMENSION_MM³ < 2⁵³` (headroom to ~208,000 mm), unpinned (L2-3) | **low — confirmed** | comment + a static test pinning the exactness ceiling |
+| 8 | Gate logic in three copies; only merge's copy is named as a sync hazard (L3-7) | **low — confirmed** | cross-reference comments added on the placement and merge copies |
+| 9 | `fromMilliText` hardcodes pad-3 instead of deriving from `QUANTITY_DECIMALS` (L3-8) | **low — confirmed** | derived from `QUANTITY_DECIMALS` |
+| 10 | Caps imported from `bin.command.ts` into the DTO — import-graph weight; 11.2 precedent put the caps in a standalone file (L3-8) | **low — confirmed** | constants moved to `src/modules/tenancy/bin-capacity.ts` |
+| 11 | Dim fit width/height arms untested (L3-6) | **low — confirmed** | arms added |
+| 12 | "None fit → null" not driven by a NEW gate; weight-arm lacks post-400 on-hand assertion (L1-3, L3-6) | **low — confirmed** | both arms added |
+| 13 | Pre-11.5 idempotency snapshot replay (`normalizeBin` absent→null) untested (L3-6) | **low — confirmed, deferred** | deferred: the fallback is the same additive-nullable pattern as `retiredAt`/`retiredBy`; crafting a legacy snapshot row is its own test setup (deferred-work) |
+| 14 | `editBinCapacity` accepts limits below the bin's live load — every later placement refuses, no warning (L2-4) | **accepted design** | consistent with fail-open; documented in tenancy.md |
+| 15 | Gate order (unit first) asserted nowhere (L3-6) | **low — confirmed** | covered by the new command-level + HTTP arms asserting which code fires first |
+| 16 | ADJACENT, pre-existing (L2, L3): adjustments bypass ALL bin gates (no bin lock, no capacity check); a concurrent adjust can race a placement past a stale load; `setBlocked`'s lock omits the tenant predicate (RLS-covered) | **not this story's defect** | recorded in deferred-work.md |
+
+Deferred, not dropped: #13 → deferred-work.md; #16's three adjacent pre-existing notes → deferred-work.md.
 
 ## Design Notes
 
