@@ -346,3 +346,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-11-6-web-variant-and-kit-surfaces.md`
   summary: The Settings page fetches the whole SKU catalog 2–3× per mount with no shared cache — `useCatalogSkus` is instantiated separately in `VariantMatrix` (products card) and `KitForm` (SKU table), each running `fetchAllPages` over the entire tenant, on a page that already holds the paged SKU table.
   evidence: Review blind-hunter finding 10 (11-6 triage, deferred as entry 10). Real but bounded today — small tenants pay nothing; a 10k-SKU tenant pays 3 × 200+ page fetches per mount. The fix shape is a shared catalog context (one fetch, many readers) — a refactor beyond this story's patch round. Acknowledged by the implementer during step-03.
+
+## Deferred from: three-layer review of fix-a2 (epic-11 retro F2 patch) (2026-09-22)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-a2-be-kit-create-write-skew.md`
+  summary: The kit guard's RESERVATION half is not serialized against order-create — `assertKitSkuHoldsNoStock` also refuses a SKU with live reservations, but order-create reads kit-ness with no SKU-row lock (`order.command.ts:381`), so a concurrent kit create and order create can both commit: an order line holding a reservation against a kit SKU, never exploding, never pickable.
+  evidence: Blind-hunter lens on the fix-a2 diff. Pre-existing — fix A2's scope was the three +stock writers (all now serialize on the SKU row); the reservation writer was never in scope. Fix shape is the same `.for('update')` SKU lock in the order-create path's kit probe (order-create already locks only the orders row). Recorded in PENDING.md (catalog section).
