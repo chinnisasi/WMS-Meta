@@ -97,6 +97,7 @@ context:
 ## Spec Change Log
 
 - 2026-09-22 (design review): wrong-scan rejection arm added to scope (human decision); Code Map corrected (`PickTaskDto` → outbound.dto.ts, internal `PickTask` site, receiving.facade.ts third mirror); missing-value arm defined web-identical; announcement/rejection prose moved fully into pure helpers; AC and verification commands made provable.
+- 2026-09-22 (code review): review findings patched (see the Review Triage Log) — legacy-seal key-absence assertions, `variantLabel` empty-values arm, `verifyTaskSku` taskSku guard + mirror arms, `kitContext` empty-string guard, kit-parent-line-absent pin, expose-side README entry, four doc corrections.
 
 ## Review Triage Log
 
@@ -110,6 +111,16 @@ context:
   7. Verification commands unprovable as written — **medium** — wms-mobile lint dropped (no script), `git diff --exit-code openapi/` added, FE drift noted CI-enforced.
   8. Low findings folded in: anchor drift, `pick.tsx:378-380` mischaracterization, banner/header "name first" conflation, non-shareable test fixtures, kit-line render position, snapshot payload growth accepted, `outbound.md:264` invariant amended display-only, unicode `·` collision accepted (web parity), prompt arms stay code-only.
   - Verified clean by the reviewers and recorded: `parent_line_id` survives cancel (order lines never deleted); the join's parent is always a kit SKU (kit parents hold no reservation, waves plan only held lines); axes/values drift impossible server-side (all writes serialize on the product row `FOR UPDATE`); kit context repeats correctly per slice; no positional consumers of `CatalogSku`/`CatalogPickTask`; announcement order satisfies UX-DR28 literally via the `word. detail` banner composition.
+
+- 2026-09-22 — code review (three layers over the implemented diff; all suites independently re-run green: wms-be 699 + lint/typecheck/openapi-drift, wms-fe 341 + zero-diff regen + capability mirror, wms-mobile 271 + typecheck). No high-severity findings. Patched:
+  1. Legacy-seal test hardened — key ABSENCE asserted directly (`toEqual` alone waves an `undefined`-valued insertion through, the exact regression the arm exists to catch).
+  2. `variantLabel` empty-values-with-axes now renders all-dash pairs (web-identical) — the shape is DB-legal (`skus_variant_values_pairing` requires only a jsonb object), not merely command-refused.
+  3. `verifyTaskSku` guards the caller's `taskSku` (id must match the task) — a stale/mis-resolved lookup never speaks for the line; mirror arm (bare scan, variant-bearing line) and the mismatch arm pinned.
+  4. `kitContext` refuses an empty-string code (drift, not a kit); `axes: []` fallback arm pinned.
+  5. wms-be kit test now pins that the kit parent's own unplanned line never appears as a task.
+  6. Trailing newlines on the new mobile files.
+  - Doc corrections patched: `docs/repos/wms-be/README.md` got its 11-7 expose-side entry and the snapshot sku-arm shape made current (stale since 10.2 — the spec's meta task had omitted the expose-side READMEs); API-SURFACE `10.6` tag moved off `uomPrecision` (10.2) onto `catchWeightTracked`; mobile guide growth list corrected to eight growths with 10.2 named as the first per-row growth; `catalog.md` facade anchors made current (`:210`/`:227`).
+  - Deferred, recorded as accepted drift-only behavior (display-only, unreachable via the API today): self-referencing `parent_line_id` would render the line's own code as kit context; an orphaned product row turns the sorted-keys fallback into the live shape; a deleted parent kit SKU demotes a component to an ordinary line; `String(value)` trusts jsonb more than the DB does (web-parity composition, the stated acceptance).
 
 ## Design Notes
 
