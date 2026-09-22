@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-22-2026 22:20
+last_updated: 09-22-2026 23:05
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -619,14 +619,14 @@ action_items:
       — saving an unattached product edit silently rewrites its axes; prefill parseable
       form (or parse the display join) + edit round-trip test (owner wms-fe)"
     owner: ""
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
   - id: "epic-11-retro-a2-fix-be-kit-write-skew"
     epic: 11
     action: "Fix F2: id-ordered .for(update) SKU locks in stock-adjustment and over-receipt-approval
       paths so kit-create guards serialize; add the concurrency test (owner wms-be)"
     owner: ""
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
   - id: "epic-11-retro-a3-mechanical-mirror-guard"
     epic: 11
