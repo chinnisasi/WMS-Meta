@@ -51,10 +51,17 @@ Two sources, both authoritative:
 
 - **`retireBin` has no serial-arm empty gate** *(epic-3 retro a4, 3-6 review deferrals #2/#31)*
 - **System-bin identity is unprotected** — no `systemOwned` filter in `ensureReceivingBinInTx`, and `RECEIVING`/`QC-HOLD` codes are not reserved, so an operator can create a bin that collides with a system one *(epic-3 retro a2)*
+- **Stock adjustments bypass ALL bin capacity gates** — no bin-row lock, no unit/weight/volume check, so any bin can be parked over every limit by an adjustment, after which every placement/merge into it refuses *(11-5 review, deferred-work)*
+- **A concurrent adjustment races a placement past a stale load** — the bin-row `.for('update')` serializes only gate-compliant writers; adjust takes no bin-row lock (pre-existing for the unit gate; 11-5 widens the currency, not the mechanism) *(11-5 review, deferred-work)*
 
 ## tenancy
 
 - **badge-in hardening**: no PIN attempt lockout, no role gate on binding *(epic-3 retro a6)*. **Corrected 2026-09-18:** the same retro item also claimed the enroll replay lookup lacked a `tenantId` predicate — it does not; the code carries it and `test/devices.spec.ts:703` pins it. That arm is closed
+- **Migration 0005 owner-backfill** needs verification before any production deploy *(epic-1 retro item 5)*
+- **`roleHasCapability` throws on an unknown role** — `ROLE_CAPABILITIES[role].includes(...)` with no fallback, and stored sessions validate role only as `typeof === 'string'`. **Crash-class**, one-token fix, pre-existing since 1.5 *(4-2c review, wms-fe)*
+- **Architecture guard decision**: the vacuous facade-guard test is fix-or-delete, and AD-6's read policy needs settling *(epic-3 retro a7)*
+- **`setBlocked`'s bin lock omits the `tenantId` predicate** — unlike `editBinCapacity`'s identical lookup; RLS-covered today, an inconsistency rather than a defect *(11-5 review, deferred-work)*
+- **`normalizeBin`'s pre-11.5 idempotency-snapshot fallback is untested** — no test replays a snapshot stored without the four capacity fields; same additive-nullable pattern as the retirement pair, so low risk *(11-5 review, deferred-work)*
 - **Migration 0005 owner-backfill** needs verification before any production deploy *(epic-1 retro item 5)*
 - **`roleHasCapability` throws on an unknown role** — `ROLE_CAPABILITIES[role].includes(...)` with no fallback, and stored sessions validate role only as `typeof === 'string'`. **Crash-class**, one-token fix, pre-existing since 1.5 *(4-2c review, wms-fe)*
 - **Architecture guard decision**: the vacuous facade-guard test is fix-or-delete, and AD-6's read policy needs settling *(epic-3 retro a7)*

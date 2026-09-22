@@ -16,14 +16,14 @@ This module is the spine every other module calls into. `assertPermission` + `ge
 | `users` (`schema.ts:81`) | Owner + team members: email, scrypt hash, role, invite lifecycle | `email` is **globally unique across all tenants** (`users_email_unique`). `role` is the `user_role` pgEnum — the one Postgres enum in the schema. `status` ∈ {`invited`,`active`}. `invite_token_hash` is sha256; the raw token exists only in the invite response |
 | `warehouses` (`schema.ts:130`) | Stocking sites | `warehouses_tenant_id_code_unique` |
 | `zones` (`schema.ts:159`) | Floor areas | `zones_warehouse_id_code_unique` — scoped to the **warehouse**, not the tenant |
-| `bins` (`schema.ts:201`) | Putaway/pick locations | `bins_warehouse_id_code_unique`; `capacity` is milli-units with `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`, `drizzle/0027_uom_vocabulary.sql:360`); `retired_at`/`retired_by` stamped together (`bins_retired_pairing`, `drizzle/0016_numerous_bloodscream.sql:6`) and never cleared; `system_owned` marks the Receiving/QC-hold bins |
+| `bins` (`schema.ts:201`) | Putaway/pick locations | `bins_warehouse_id_code_unique`; `capacity` is milli-units with `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`, `drizzle/0027_uom_vocabulary.sql:360`); 11-5 adds the nullable physical capacity `length_mm`/`width_mm`/`height_mm` (`> 0 AND <= 100000`) and `max_weight_grams` (`<= 100000000`) — integer WYSIWYG, CHECKs only in migration `0034`; `retired_at`/`retired_by` stamped together (`bins_retired_pairing`, `drizzle/0016_numerous_bloodscream.sql:6`) and never cleared; `system_owned` marks the Receiving/QC-hold bins |
 | `devices` (`schema.ts:1099`) | Floor handhelds: enrollment code hash, label, badge PIN hash, operator binding, revocation | `devices_enrollment_code_hash_unique` is a **partial** index (`where enrollment_code_hash is not null`) — it is what makes redemption single-shot. `devices_status_check` ∈ {`active`,`revoked`} (`drizzle/0012_lonely_the_renegades.sql:40`) |
 | `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with inbound, putaway, outbound and carriers** — it is the one table this module owns that siblings write |
 | `idempotency_keys` (`schema.ts:238`) | AD-5 storage: `(tenant_id, key)` unique + payload hash + response snapshot | Also written by every other module. Extra `idempotency_keys_key_idx` exists solely for registration's key-only replay lookup |
 
 Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy declared **only** in migration SQL (`drizzle/0001_greedy_scarecrow.sql:55-70`).
 
-`bins.blocked` is owned by **putaway**, not here — story 3.6 re-homed the toggle's logic to `src/modules/putaway/bin-state.command.ts` because a blocked bin is operational state. The URL (`PATCH …/bins/{binId}`) still lands on this module's controller, which delegates (`tenancy.controller.ts:402`).
+`bins.blocked` is owned by **putaway**, not here — story 3.6 re-homed the toggle's logic to `src/modules/putaway/bin-state.command.ts` because a blocked bin is operational state. The URL (`PATCH …/bins/{binId}`) still lands on this module's controller, which delegates (`tenancy.controller.ts:402`). Since 11-5 that one route **dispatches per body**: a `blocked` field goes to putaway's `setBlocked`, capacity attributes (`lengthMm`/`widthMm`/`heightMm`/`maxWeightGrams`) go to this module's `editBinCapacity` under `bin.create`; sending both (or neither) is one 400 `validation-failed` telling the caller to send separate PATCH requests — one idempotency key per request. The two arms never mix a snapshot. `blocked` is strictly boolean — a present-but-non-boolean value (including `null`: class-validator's `@IsOptional` skips null too, which a 500 proved before the review caught it) is a 400 at the controller, before dispatch; the capacity attrs keep their null-means-clear reading.
 
 ---
 
@@ -87,7 +87,7 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 
 - `getMemberRole(tenantId, userId, tx?)` `:156` — the authority read. Pass `tx` and it runs inside your transaction; omit it and it opens its own. **Every foreign module calls this**, never `users` directly.
 - `requireActiveWarehouse(tenantId)` `:170` → `{warehouseId, code, name}` or 422 `no-active-warehouse`. The zero-warehouse invariant guard for stock-record creation.
-- `listWarehouses` `:200` / `listZones` `:241` / `listBins` `:282` — keyset-paginated reads. `listBins` converts `capacity` out of milli-units (`:330`).
+- `listWarehouses` `:200` / `listZones` `:241` / `listBins` `:282` — keyset-paginated reads. `listBins` converts `capacity` out of milli-units (`:330`) and, since 11-5, echoes the four physical-capacity attributes **raw** (integer facts, no `fromMilli`).
 - `computeSetupChecklist(tenantId)` `:344` — the four onboarding steps, computed on read from counts. No stored step rows.
 
 **File-level functions** other modules import directly (they are the shared command-entry pattern, not a facade breach):
@@ -154,7 +154,7 @@ The docstring asserts the two families are "mutually exclusive by claim shape". 
 
 ### Bin administration
 
-`merge` moves stock (emitting `bin.merged`, a two-arm relocation) and `retire` is **terminal and requires empty**. Both live in `bin.command.ts`, not putaway — putaway *directs* placement, tenancy *owns* the bin. `bins` is the one table deliberately shared by column: tenancy owns structure and `retired_at`, putaway owns `blocked`. It has **no architecture-test block**, which makes the shared-ownership case the least-guarded one in the repo.
+`merge` moves stock (emitting `bin.merged`, a two-arm relocation) and `retire` is **terminal and requires empty**. Both live in `bin.command.ts`, not putaway — putaway *directs* placement, tenancy *owns* the bin. `bins` is the one table deliberately shared by column: tenancy owns structure — since 11-5 that includes the four physical-capacity attributes (`editBinCapacity`) — and `retired_at`, putaway owns `blocked`. It has **no architecture-test block**, which makes the shared-ownership case the least-guarded one in the repo.
 
 ---
 
@@ -194,13 +194,13 @@ Note the ordering difference: `WarehouseCommand` has no parent assert; `ZoneComm
 
 ### `BinCommand.createBin` (`bin.command.ts:201`)
 
-Guards: `bin.create` → replay → `assertWarehouseInTenant` → `assertZoneInWarehouse` (inside `insertBin`, `:997`) → `assertWholeUnitCapacity` → insert.
+Guards: `bin.create` → replay → `assertWarehouseInTenant` → `assertZoneInWarehouse` (inside `insertBin`, `:997`) → `assertWholeUnitCapacity` → (11-5) `assertBinCapacityAttributes` → insert. The four optional physical-capacity attributes (`lengthMm`/`widthMm`/`heightMm`/`maxWeightGrams`) default to NULL = unconstrained when absent or null.
 
 **Emits nothing.** The spec named `zone.created` / `bins.generated` / `bin.blocked` only, so a manually created bin produces no outbox row (`:218-220`).
 
 ### `BinCommand.generateGrid` (`bin.command.ts:290`)
 
-Guards: arithmetic size check **before** materializing codes (`:295`; a `Z×99×99` request must not build a 255k array to reject it) → `grid-too-large` 422 above `MAX_BINS_PER_GRID_RUN` = 500 → `bin.create` → replay → warehouse + zone asserts → in-transaction collision pre-check naming the first conflicting code (`:358-365`) → one bulk insert.
+Guards: arithmetic size check **before** materializing codes (`:295`; a `Z×99×99` request must not build a 255k array to reject it) → `grid-too-large` 422 above `MAX_BINS_PER_GRID_RUN` = 500 → `bin.create` → replay → warehouse + zone asserts → (11-5) `assertBinCapacityAttributes` → in-transaction collision pre-check naming the first conflicting code (`:358-365`) → one bulk insert. Every generated bin carries the same optional attributes.
 
 One transaction, one idempotency record, all-or-nothing. Emits `bins.generated`.
 
@@ -214,11 +214,19 @@ The heaviest command in the module. Guards in exact order (`:474-665`):
 4. **Both bin rows locked `.for('update')`, id-sorted, before any arm is read** (`:508-519`). The `warehouseId` predicate *is* the cross-warehouse gate — a foreign id simply never resolves → 404.
 5. Structural: same-bin, source system-owned, target system-owned, source retired, target retired, target blocked. **A blocked *source* is allowed** — it is the only way to empty a blocked bin (`:548`).
 6. Open QC hold on either bin → 409 `bin-merge-hold-open` naming bin + hold (`:553-561`).
-7. Capacity: whole merge must fit or nothing moves → 400 `bin-full` (`:657-665`).
+7. Capacity, all-or-nothing, 11-5 order — unit gate first: `targetLoad.units + movedUnits > target.capacity` → 400 `bin-full`; then the physical gates over the moved milli-loads: `bin-overweight` / `bin-volume-exceeded`, then a per-moved-SKU dim-fit loop → 400 `bin-item-oversize` naming the offending SKU (`:657-665`). The load read is putaway's shared `binOccupancyInTx` (weight/volume as `::numeric` sums), never a re-derivation.
 
 Then: serial refs pre-locked tenant-wide, sorted, before the first append (`:673-679` — the stock-adjustment deadlock rule); one `bin.merged` ledger event per arm through `InventoryFacade`; source retired in the same commit; outbox → audit → idempotency key.
 
 Writes: `ledger_events` (via the facade), `bins` (source retirement), `audit_events`, `idempotency_keys`. Emits `bin.merged`.
+
+### `BinCommand.editBinCapacity` (story 11-5)
+
+Guards in skeleton order: **`bin.create`** (structure is tenancy master data — deliberately not a new capability) → replay → `assertWarehouseInTenant` → bin row locked `.for('update')` limit 1 → unknown bin 404 → `binRetired409` (a retired bin's physical capacity is dead history; **system bins stay editable** — they are tenancy-owned structure, only putaway's `blocked` toggle refuses system bins) → `assertBinCapacityAttributes` **behind the replay lookup** (the `CreateBinDto.capacity` no-`@IsInt`-before-replay rule of gotchas below, applied to the new fields) → UPDATE. Each field is `command.x === undefined ? row.x : command.x` — **absent leaves unchanged, present (even `null`) overwrites**, so `null` clears a limit back to unconstrained. **Accepted (11-5 triage #14):** the command does NOT compare the new limits against the bin's live load — limits below what the bin already holds are stored silently, after which every placement/merge into the bin refuses and the suggestion drops it (fail-open philosophy; the operator learns from the next refused placement, not from this write).
+
+Writes `bins.{length_mm,width_mm,height_mm,max_weight_grams}` + `updated_at`. Emits outbox `bin.capacity_changed` with the four (possibly null) values, plus an audit row (`action: 'bin.capacity_changed'`) — same shape as `bin.blocked`. `createBin` still emits nothing.
+
+`assertBinCapacityAttributes` mirrors `assertSkuAttributes`: absent or null skips, anything present must be a positive whole number within its cap — `MAX_BIN_DIMENSION_MM` = 100 000 mm and `MAX_BIN_WEIGHT_GRAMS` = 100 000 000 g, each 100× the SKU-side cap (`MAX_SKU_DIMENSION_MM` = 10 000, `MAX_SKU_WEIGHT_GRAMS` = 1 000 000), so any recordable SKU fits inside any recordable bin — else 400 `validation-failed` ("X is not a recordable bin capacity"). The CHECKs in migration `0034` backstop; they live only in the SQL, never `schema.ts` (the migration-checklist rule).
 
 ### `BinCommand.retireBin` (`bin.command.ts:765`)
 
@@ -323,6 +331,8 @@ Code shape is `<aisle letter>-<2-digit bay>-<2-digit level>`, e.g. `A-01-01`. `a
 
 Capacity is the one quantity in the system with **no unit at all** — a bin holds many SKUs measured many ways. `assertWholeUnitCapacity` therefore refuses anything that is not a whole integer ≥ 1, then converts to milli-units. Three aligned gates: the DTO documents `minimum: 1` (`tenancy.dto.ts:232-247` — deliberately *not* `@IsInt`, see gotchas), this function enforces, `bins_capacity_whole_units` backstops.
 
+**The physical capacity (11-5) is a different animal.** `lengthMm`/`widthMm`/`heightMm`/`maxWeightGrams` are plain integers with real units (mm, g) and **no milli scaling** — the WYSIWYG principle applied to a different scale: what the API takes is what the column holds is what the gate compares. The gates live in putaway (`candidateFitsSku`) and compare milli-loads against `limit × 1000`; `assertBinCapacityAttributes` is the only input gate and the `0034` CHECKs the backstop. The whole-unit and physical capacities coexist deliberately and conservatively: a dimmed SKU counts against the unit gate *and* the physical gates — see the putaway module doc.
+
 ### System bins (`receiving-bin.ts`)
 
 `ensureReceivingBinInTx` / `ensureQcHoldBinInTx` create the fixed-code `RECEIVING` and `QC-HOLD` zone+bin pairs idempotently **inside the caller's transaction**: insert `onConflictDoNothing`, then re-select. A concurrent first receipt races on the unique index and the loser re-selects the winner's rows. Both are `system_owned`, type `staging`, capacity 1,000,000 base units — intake is never capacity-gated.
@@ -346,6 +356,7 @@ The QC-hold re-select additionally requires `systemOwned = true` (`:169`): adopt
 | System bins are never blocked, merged or retired | `systemOwned` guards in `mergeBin` `:532-541`, `retireBin` `:820`, `bin-state.command.ts` |
 | A merge moves stock only through real ledger events | `BinCommand` injects `InventoryFacade`; `test/architecture.spec.ts` bans direct stock-table writes outside inventory |
 | A bin's capacity is a whole number of units | Three gates (above) |
+| A bin's physical capacity (11-5) is positive and bounded — or unconstrained | `assertBinCapacityAttributes` on create/grid/edit; the four `0034` CHECKs backstop; NULL = unconstrained |
 | Zone/bin codes are unique per **warehouse**, warehouse codes per **tenant** | The three unique indexes |
 | A revoked device is dead on its next request | Every device command re-resolves the row before acting |
 
@@ -388,6 +399,7 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 | `user.invited` / `user.role_changed` / `user.accepted` | `UsersCommand` | ids, email, role |
 | `device.enrollment_code_minted` / `device.enrolled` / `device.revoked` | `EnrollmentCommand` | `{deviceId, …}` — **never** the code, PIN or sealed key |
 | `bin.blocked` | putaway's `BinStateCommand` | — |
+| `bin.capacity_changed` (11-5) | `editBinCapacity` | `{binId, warehouseId, lengthMm, widthMm, heightMm, maxWeightGrams}` |
 
 `createBin` emits nothing (see Commands).
 
@@ -403,7 +415,7 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 
 **The bin payload-hash break is intentional and pinned.** Story 10.2 moved capacity scaling into the command, so a key written by a pre-10.2 build now 422s `idempotency-key-reuse` instead of replaying (`bin.command.ts:202-216`). `test/picking.spec.ts` asserts this as EXPECTED. Do not "fix" it with a compatibility branch.
 
-**Pre-3.6 idempotency snapshots lack `systemOwned`/`retiredAt`/`retiredBy`.** `normalizeBin` (`tenancy.controller.ts:516-527`) fills the absent fields on replay. Pinned by `test/bin-admin.spec.ts:838`. Any new nullable bin field needs the same treatment.
+**Pre-3.6 idempotency snapshots lack `systemOwned`/`retiredAt`/`retiredBy`.** `normalizeBin` (`tenancy.controller.ts:516-527`) fills the absent fields on replay. Pinned by `test/bin-admin.spec.ts:838`. Any new nullable bin field needs the same treatment — 11-5 followed it, and `normalizeBin` now defaults the four capacity attributes to `null` so a pre-11.5 snapshot replays through the new response shape.
 
 **`retireBin`'s empty gate reads `stock_on_hand` and `batch_on_hand` only** (`bin.command.ts:844-877`). `../PENDING.md` records the missing serial-arm gate: a serial the ledger locates in the bin while its projection reads zero would not block retirement. `mergeBin` *does* cross-check (`:601-609`) and refuses on disagreement.
 
