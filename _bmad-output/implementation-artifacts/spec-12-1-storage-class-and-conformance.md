@@ -3,7 +3,8 @@ story: 12-1-storage-class-and-conformance
 title: "12-1 storage class and conformance — FR-40 on the backend"
 type: 'feature'
 created: '2026-09-23'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '380c3a5'
 route: 'dispatch'
 review_loop_iteration: 0
 epic: 12
@@ -75,15 +76,15 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] Migration `0035` — `bun run db:generate`, then hand-append the CHECKs; journal row comes from generate.
-- [ ] `src/shared/primitives/storage-class.ts` — vocabulary, rank table, `storageClassSatisfies`, `assertStorageClass` (400 `validation-failed`), refusal factories.
-- [ ] `schema.ts` — both columns, doc comments naming the shared primitive and the CHECKs' migration-only home.
-- [ ] Putaway — class gate in `candidateFitsSku` (+ `SkuPhysicalAttributes`/`PutawayBinCandidate` fields and callers), placement refusal arm, facade projection + class-aware no-fit rationale.
-- [ ] Outbound — pool input shape (`binOrder` classes + `skuClassById`), `buildStockPool` row filter, wave planner catalog read, pick draw refusal.
-- [ ] Tenancy — bin create/grid/edit field (DTO + command + insert + snapshot), merge class gate after `onHandRows`, bin class-edit guard with the QC-hold arm (409 `storage-class-conflict`).
-- [ ] Catalog — SKU edit field (DTO + empty-patch list) + 409 guard with `.for('update')`, import optional column with blank→ambient.
-- [ ] Tests per suite above; `bun run openapi:export` (fields are additive; FE regen is NOT this story — expected FE drift-guard failure until BE merges is fine).
-- [ ] `docs/design/PENDING.md` — add the adjustment-bypasses-class entry beside the adjustment-bypasses-capacity one (:54), and the residual placement/pick-vs-SKU-edit race note (both commands read the SKU unlocked).
+- [x] Migration `0035` — `bun run db:generate`, then hand-append the CHECKs; journal row comes from generate.
+- [x] `src/shared/primitives/storage-class.ts` — vocabulary, rank table, `storageClassSatisfies`, `assertStorageClass` (400 `validation-failed`), refusal factories.
+- [x] `schema.ts` — both columns, doc comments naming the shared primitive and the CHECKs' migration-only home.
+- [x] Putaway — class gate in `candidateFitsSku` (+ `SkuPhysicalAttributes`/`PutawayBinCandidate` fields and callers), placement refusal arm, facade projection + class-aware no-fit rationale.
+- [x] Outbound — pool input shape (`binOrder` classes + `skuClassById`), `buildStockPool` row filter, wave planner catalog read, pick draw refusal.
+- [x] Tenancy — bin create/grid/edit field (DTO + command + insert + snapshot), merge class gate after `onHandRows`, bin class-edit guard with the QC-hold arm (409 `storage-class-conflict`).
+- [x] Catalog — SKU edit field (DTO + empty-patch list) + 409 guard with `.for('update')`, import optional column with blank→ambient.
+- [x] Tests per suite above; `bun run openapi:export` (fields are additive; FE regen is NOT this story — expected FE drift-guard failure until BE merges is fine).
+- [x] `docs/design/PENDING.md` — add the adjustment-bypasses-class entry beside the adjustment-bypasses-capacity one (:54), and the residual placement/pick-vs-SKU-edit race note (both commands read the SKU unlocked).
 
 **Acceptance Criteria:**
 - Given a warehouse with mixed bins and a frozen SKU, when putaway suggests and the operator confirms the suggested bin, then the suggestion is always a conforming bin, and a deliberate placement into a non-conforming bin 400s `bin-storage-mismatch` naming both classes.
@@ -117,6 +118,30 @@ context:
 
 ## Review Triage Log
 
+**Code review, 2026-09-23 — three context-free lenses over the implemented diff** (blind-hunter 14, edge-case 6, verification-gap 5). 25 raw findings consolidated to 15 rows; every claim verified against the code before its verdict.
+
+| # | Finding (lens) | Verdict | Disposition |
+|---|---|---|---|
+| 1 | `storageClass: null` reaches the NOT NULL columns → 500: `@IsOptional` skips null, `assertStorageClass` skips null, both write arms treat only `undefined` as absent (`bin.command.ts:1337`, `sku.command.ts:688`) — the exact hole the 11-5 review fixed for `blocked` at `tenancy.controller.ts:448-455` (BH2, VG-O1) | **high** — confirmed in both PATCH paths | **patch** — mirror the `blocked` precedent: explicit-null 400 at both controllers, tested |
+| 2 | A pre-12.1 stored SKU-edit snapshot replays without `storageClass` (`sku.command.ts:326-327` returns the stored snapshot verbatim; controller spreads it) — the replayed body violates `SkuResponse`. Bins got `normalizeBin`; SKUs got no fallback (EC3) | **medium** — verified; affects post-upgrade replays of in-flight legacy keys | **patch** — `?? 'ambient'` fallback at the replay serve point, tested with a seeded legacy snapshot |
+| 3 | The "pre-12.1 payloads fingerprint byte-identically" claims are pinned only by same-binary replay tests that cannot detect a hash-shape change (VG3; BH11 adds: no replay test re-serves a class-carrying edit's snapshot without re-running the guard) | **medium** — pre-verified with the demonstration that `?? null` would pass every existing test while 422-ing stored legacy keys | **patch** — frozen-digest replay tests (the `catch-weight.spec.ts:1068` pattern) + a class-carrying edit replay test |
+| 4 | The 0035 CHECKs have no SQL probe — every HTTP-level `'tropical'` refusal happens in TS, so a missing/drifted CHECK ships undetected (BH7, VG1; the repo's own convention pins every other CHECK set with a 23514 probe: `bin-admin.spec.ts:1250`, `sku-attributes.spec.ts:415`) | **medium** — pre-verified (the session's manual probe is not CI) | **patch** — direct-SQL 23514 probes naming both CHECKs, beside the 0034 pattern |
+| 5 | Design docs not updated: `putaway.md` still quotes the replaced rationale (:171) and the pre-12-1 gate order (:145); `API-SURFACE.md` lacks the new error arms; `docs/repos/wms-be/README.md` lacks the new fields (BH1) | **medium** — CLAUDE.md mandates doc currency; the meta commit is the vehicle | **patch** — fold the doc updates into this story's meta commit (step-05) |
+| 6 | The create route's `normalizeBin` legacy fallback is untested — the 3.6 legacy-replay test seeds only the blocked arm and asserts no `storageClass` (VG2) | **low** — fallback exists; untested | **patch** — extend the legacy-snapshot pattern to the create route |
+| 7 | `placeHold` can race the class-edit guards: release returns non-conforming stock (EC1, EC6) | **false** — `placeHold` takes the origin bin row `.for('update')` (`qc.command.ts:247-258`) and serializes with the bin class-edit; on the SKU side every unit a hold can move was visible to the guard's stock scan in its pre-hold location, or sits in a system bin (staging — excluded by design, and putaway's gate still applies on the way out) | Rejected |
+| 8 | A pre-12.1 grid-run snapshot replays with bins lacking `storageClass` (EC4) | **false** — `BinGridSnapshot` carries no bins (counts and codes only, `bin.command.ts:200-206`); nothing to normalize | Rejected |
+| 9 | The two class-edit guards fail in opposite directions on unknown hold/bin data (BH5) | **false** — both unknown-data states are unreachable (no delete verb for bins or SKUs anywhere), and the `origin.systemOwned` skip is the documented staging exclusion | Rejected |
+| 10 | Merge (400 `bin-storage-mismatch`) and class edit (409 `storage-class-conflict`) use different codes for the same condition (BH6) | **false** — the frozen I/O matrix prescribes exactly these codes: merge is a placement-class refusal (device-facing), a class edit is a state conflict; deliberate, not accidental | Rejected |
+| 11 | A placement/merge committing between the class-edit guard's scans and the edit's commit parks non-conforming stock the scan proved absent (EC2) | **medium** — real, and it is the mirror direction of the race already recorded as accepted currency at `PENDING.md` putaway:57 (the placement's unlocked SKU read predates this story) | **defer** — consolidates the recorded race; consolidated in deferred-work.md |
+| 12 | A wave line shorted purely by the class filter carries no reason naming the conflict (indistinguishable from empty stock to an operator) (BH4) | **low** — real UX gap; the frozen matrix chose "per existing shortfall arm", and naming the conflict is admin/mobile-surface material | **defer** — 12-7/12-8 material, recorded in deferred-work.md |
+| 13 | Copy corrections (all verified in the text): `EditSkuCommand.storageClass` doc claims a serialization it does not have (BH3); the facade seam comment's "only through this seam" overclaims — pick draws read `skus` directly, the pre-existing outbound pattern (EC5); the import row error names `storageClass` where the CSV column is `storage_class` (BH8); the device-facing `binStorageMismatch` detail carries editorial copy (BH14); the "Nothing to change" message lumps the class under "capacity attribute" (BH10); the picking test's planner-filter comment claims an assertion that is not discriminating (`A-80-01` sorts first and covers the line — the replan assertions carry the test) (VG-O2) | **low** — developer- or device-facing text | **patch** — direct rewordings |
+| 14 | Gate coverage gaps: `secure`/`hazardous` exact-match is never exercised at a gate (only `controlled` is); the bin-PATCH dispatch (structure-arm routing, `blocked`+`storageClass` 400 — verified present at `tenancy.controller.ts:463-470`) is untested (BH9, BH10) | **low** — behavior is correct and verified by reading; untested | **patch** — add the gate assertions and dispatch tests |
+| 15 | Mechanical: `drizzle/meta/_journal.json` hand-reformatted tabs→spaces across all 36 entries (next `db:generate` rewrites it back — pure churn); three new/edited files lack final newlines (`0035_storage_class.sql`, `storage-class.ts`, `bin-admin.spec.ts`) (BH12, BH13) | **low** — dev-facing churn | **patch** — restore the tab formatting; add the newlines |
+
+Design-review rows (below) precede this table and are unaffected.
+
+---
+
 Design review, 2026-09-23 — three context-free lenses over the spec (claim verification, edge cases, migration/verification gaps). 22 findings consolidated, deduped, triaged; every accepted amendment cites its lens sources.
 
 | # | Finding (lens) | Verdict | Disposition |
@@ -147,3 +172,7 @@ Design review, 2026-09-23 — three context-free lenses over the spec (claim ver
 Clean (all three lenses): vocabulary matches FR-40/AD-18 exactly; movement enumeration complete (`qc.held`/`qc.released`/`putaway.placed`/`bin.merged` are the only bin→bin movers; GRN targets only the system Receiving bin; pack/dispatch carry null bin arms; reconciliation rebuilds from ledger replay and cannot mint stock); guard positions verified in code; replay runs before every new guard (correct for a 409 edit rule); no `SELECT *` breakage from the new NOT NULL columns; merge/retire structural arms need no class-specific change; wave shortfall arm exists.
 
 ## Implementation Notes
+
+**Step-04 patch verification (2026-09-23, after all triage patches):** lint 0, typecheck 0, full suite fresh-isolated **709/709 green** (38/38 suites — 707 + the two new tests). One patch-fix round during verification: the legacy SKU replay test seeded a snapshot without `uomConversions` and the edge mapper's `.map` 500'd — real pre-12.1 snapshots carry the conversions (`SkuSnapshot.uomConversions` predates 12-1), so the seed was made representative rather than the mapper made tolerant.
+
+**Step-03 verification (2026-09-23, run by the session, not the implementer's report):** every execution task confirmed in the staged diff; every I/O-matrix row covered by a test that ran and passed; `bun run test` fresh isolated run **707/707 green** (38/38 suites, 117 s) — an earlier 105-failure run was two concurrent jest processes racing on the template DB (its failures sat in suites this diff barely touches, with sign-in assertions failing; the same suite passes in isolation). Migration CHECK proof re-run against `wms_template`: both columns NOT NULL DEFAULT `'ambient'`, both CHECKs present in `information_schema.table_constraints`, live `tropical` inserts refused by `bins_storage_class_check` / `skus_storage_class_check` (23514). OpenAPI diff zero removed lines — additive-only. `bun run lint` and `bun run typecheck` exit 0.
