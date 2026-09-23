@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-23-2026 22:12
+last_updated: 09-24-2026
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -224,7 +224,7 @@ development_status:
   # existing putaway (3.5) and pick (4.3) commands.
   epic-12: in-progress
   12-1-storage-class-and-conformance: done
-  12-2-hazard-segregation-matrix: in-progress
+  12-2-hazard-segregation-matrix: review
   12-3-secure-locations: backlog
   12-4-non-bin-location-types: backlog
   12-5-temperature-excursions: backlog

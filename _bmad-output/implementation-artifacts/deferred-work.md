@@ -362,3 +362,17 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-12-1-storage-class-and-conformance.md`
   summary: A placement or merge committing between the SKU class-edit guard's stock/hold scans and the edit's commit parks non-conforming stock the scans just proved absent — the mirror direction of the unlocked-read race already recorded as accepted currency at PENDING.md (putaway:57); same window, opposite ordering.
   evidence: Edge-case lens, triage #11. Both orderings share the same root cause (placement reads the SKU unlocked; the class-edit guard takes no locks on the stock writers) and the same failure mode (one placement of non-conforming stock per window, then refused by every downstream gate). Accepted currency — recorded here so the mirror direction is explicit beside the PENDING entry.
+
+## Deferred from: three-layer review of story 12-2 (2026-09-24)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-2-hazard-segregation-matrix.md`
+  summary: The placement's co-location gate reads the target bin's occupant classes unlocked inside the bin-row lock window, so an OCCUPANT's hazard edit can commit between the gate's read and the placement's write and co-locate an incompatible pair — the occupant-side half of the unlocked-read currency, which PENDING.md (putaway:58) records only for the INCOMING SKU's read (triage #6).
+  evidence: Edge-case lens, verified. The hazard-edit guard locks only the SKU row and the placement locks only the bin row; the shape is the same accepted currency as 11-5's bin-load race and 12-1's unlocked class read (one misplaced placement per window, then refused by every downstream gate). Fix shape is locking occupant SKU rows in the co-location read — heavier than the accepted family, so currency. The PENDING currency entry should be extended to name the occupant-side window (and its mirror: a placement committing between the hazard-edit guard's occupant scan and the edit's commit).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-2-hazard-segregation-matrix.md`
+  summary: The suggestion rationale collapses segregation refusals into "No conforming storage bin has room for these units" — an operator whose every bin is blocked by the matrix is told the bins have no room, though capacity exists (triage #9).
+  evidence: Blind-hunter lens. The spec chose the wording deliberately (the 12-1 currency kept the rationale unchanged); surfacing which rule excluded the bin is admin/mobile-surface material for stories 12-7/12-8, beside the 12-1 wave-line reason gap already recorded above.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-2-hazard-segregation-matrix.md`
+  summary: The 409 `hazard-segregation-conflict` remedy says "relocate the stock or release the holds first", but there is no gated bin-to-bin relocation surface to do it with — placement requires Receiving as its from-bin and merge requires an empty source (retire is terminal), so the operator has no first-class move-stock-between-bins flow (triage #24).
+  evidence: Edge-case lens, verified against the seams: the two relocation writers that exist (placement, merge) are both shaped for other jobs, and `stock.adjust` is the named bypass, not an operator remedy. A gated bin-to-bin relocation (guards mirroring the placement gates, one ledger arm) is Epic-5-shaped inventory work, not a 12-2 patch — deferring with the remedy's wording unchanged, since the sentence remains true (release-the-holds works today, and relocate becomes possible when the surface exists).
