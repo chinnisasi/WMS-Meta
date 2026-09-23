@@ -143,8 +143,9 @@ Device-authenticated (`DeviceSessionGuard` at the shell, badge-in required — `
 9. `ensureReceivingBinInTx` (`:436`) — the from-bin identity, tenancy-owned.
 10. **Remaining check**: `remaining = min(line.appliedQty, receivingBinOnHandInTx(...))`; `scaled.qty > remaining` → 400 naming the remaining quantity (`:440-452`).
 11. **Target bin**, read `.for('update')` (`:454-495`): 404 if not in this warehouse; `systemOwned` → 400 (placements land in storage bins only); `retiredAt !== null` → 400 `bin-retired`; `blocked` → 400 `bin-blocked`.
-12. **Capacity gates** (11-5 order: unit → weight → volume → dim fit): `binOccupancyInTx(target)` returns the shared `BinLoad`; `load.units + scaled.qty > target.capacity` → 400 `bin-full`; then the physical gates of *The physical capacity gates* below — `bin-overweight`, `bin-volume-exceeded`, `bin-item-oversize`, in that order (`:496-505`).
-13. **Suggestion re-derivation + mismatch reason** (`:506-525`) — see Key algorithms. The re-derivation passes the SKU's physical attributes, so the suggestion is gate-consistent with the placement that was just admitted.
+12. **Conformance gate** (12-1): `storageClassSatisfies(sku.storageClass, target.storageClass)` → else 400 `bin-storage-mismatch` (`:540`). The gate reads both classes from rows already in hand — the SKU read of step 6, the locked target of step 11 — so no extra query.
+13. **Capacity gates** (11-5 order: unit → weight → volume → dim fit): `binOccupancyInTx(target)` returns the shared `BinLoad`; `load.units + scaled.qty > target.capacity` → 400 `bin-full`; then the physical gates of *The physical capacity gates* below — `bin-overweight`, `bin-volume-exceeded`, `bin-item-oversize`, in that order (`:496-505`).
+14. **Suggestion re-derivation + mismatch reason** (`:506-525`) — see Key algorithms. The re-derivation passes the SKU's physical attributes, so the suggestion is gate-consistent with the placement that was just admitted.
 
 Writes: ledger movements (below), one `putaway_placements` row, an `audit_events` row (`action: 'putaway.placed'`, `reference` = the idempotency key), the device heartbeat, and the idempotency key.
 
@@ -164,11 +165,11 @@ Writes `bins.blocked` + `updated_at`. Emits outbox `bin.blocked` and an `audit_e
 
 ### Bin suggestion and ranking (`putaway.command.ts:733` / `:768`)
 
-`binCandidatesInTx` is one grouped query: every bin of the warehouse where `blocked = false AND system_owned = false AND retired_at IS NULL`, left-joined to `stock_on_hand`, `occupancy = coalesce(sum(quantity), 0)::bigint`, ordered by **occupancy ascending, then bin code ascending**. Capacity is *shared base-UoM space* — occupancy is the bin's total across every SKU, not per-SKU. Since 11-5 the same query also carries the bin's four physical attributes and its `weightLoad`/`volumeLoad` numeric sums, and `suggestBinInTx` takes the SKU's physical attributes as an extra argument.
+`binCandidatesInTx` is one grouped query: every bin of the warehouse where `blocked = false AND system_owned = false AND retired_at IS NULL`, left-joined to `stock_on_hand`, `occupancy = coalesce(sum(quantity), 0)::bigint`, ordered by **occupancy ascending, then bin code ascending**. Capacity is *shared base-UoM space* — occupancy is the bin's total across every SKU, not per-SKU. Since 11-5 the same query also carries the bin's four physical attributes and its `weightLoad`/`volumeLoad` numeric sums, and `suggestBinInTx` takes the SKU's physical attributes as an extra argument. Since 12-1 it also carries the bin's `storageClass` — and `SkuPhysicalAttributes` gained the SKU's class, so the candidate walk sees both sides of the FR-40 rule.
 
-`suggestBinInTx` walks that ordered list and returns the **first** candidate where `candidateFitsSku` holds — the unit gate (`occupancy + qty <= capacity`) plus, since 11-5, the weight, volume and dim-fit gates below — or `null`. So the rule is: lowest-occupancy bin that fits, ties broken by code. This is the recorded FR-10 v1 deviation — capacity only. No velocity class, no zone affinity, no SKU-to-bin affinity, no nightly job; those ship with the deferred report story (`:727-732`).
+`suggestBinInTx` walks that ordered list and returns the **first** candidate where `candidateFitsSku` holds — since 12-1 the **class gate first** (`storageClassSatisfies`; a non-conforming bin is refused no matter how empty it is), then the unit gate (`occupancy + qty <= capacity`), plus, since 11-5, the weight, volume and dim-fit gates below — or `null`. So the rule is: lowest-occupancy **conforming** bin that fits, ties broken by code. This is the recorded FR-10 v1 deviation — capacity only. No velocity class, no zone affinity, no SKU-to-bin affinity, no nightly job; those ship with the deferred report story (`:727-732`).
 
-The `rationale` string is operator-facing and speaks base units: `Lowest occupancy (o/c) — room for r` (`:748`), or `No storage bin has room for these units` when nothing fits (`putaway.facade.ts:344`).
+The `rationale` string is operator-facing and speaks base units: `Lowest occupancy (o/c) — room for r` (`:748`), or `No conforming storage bin has room for these units` when nothing fits (`putaway.facade.ts:344` — "conforming" arrived with 12-1: the candidate walk can now skip every bin on class).
 
 ### Task derivation (`putaway.facade.ts:216-349`)
 

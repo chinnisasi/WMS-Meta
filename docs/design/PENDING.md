@@ -52,7 +52,9 @@ Two sources, both authoritative:
 - **`retireBin` has no serial-arm empty gate** *(epic-3 retro a4, 3-6 review deferrals #2/#31)*
 - **System-bin identity is unprotected** — no `systemOwned` filter in `ensureReceivingBinInTx`, and `RECEIVING`/`QC-HOLD` codes are not reserved, so an operator can create a bin that collides with a system one *(epic-3 retro a2)*
 - **Stock adjustments bypass ALL bin capacity gates** — no bin-row lock, no unit/weight/volume check, so any bin can be parked over every limit by an adjustment, after which every placement/merge into it refuses *(11-5 review, deferred-work)*
+- **Stock adjustments bypass the storage-class gate too** *(12-1)* — the conformance predicate runs in the placement/pick/merge/allocation commands only; `stock.adjust` checks no class, so non-conforming stock can be parked in any bin by an adjustment (the same pre-existing currency as the capacity gap above, on the 12-1 gate). Every downstream gate then refuses it, which is the intended containment for now
 - **A concurrent adjustment races a placement past a stale load** — the bin-row `.for('update')` serializes only gate-compliant writers; adjust takes no bin-row lock (pre-existing for the unit gate; 11-5 widens the currency, not the mechanism) *(11-5 review, deferred-work)*
+- **The class gates read the SKU unlocked** *(12-1 deferred)* — the placement, pick draw and wave/allocation pool read the SKU's `storageClass` unlocked, and the SKU class edit locks only the SKU row, so a class edit can commit between a placement/pick's SKU read and its bin write. The window is the single-transaction pair (bin locked, SKU read inside it), and the failure mode is one placement that the post-edit SKU row would refuse — the same shape the 11-5 bin-load race takes. Recorded as accepted currency beside the adjustment bypass, not as a defect
 
 ## tenancy
 

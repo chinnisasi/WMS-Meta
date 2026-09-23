@@ -352,3 +352,13 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-fix-a2-be-kit-create-write-skew.md`
   summary: The kit guard's RESERVATION half is not serialized against order-create — `assertKitSkuHoldsNoStock` also refuses a SKU with live reservations, but order-create reads kit-ness with no SKU-row lock (`order.command.ts:381`), so a concurrent kit create and order create can both commit: an order line holding a reservation against a kit SKU, never exploding, never pickable.
   evidence: Blind-hunter lens on the fix-a2 diff. Pre-existing — fix A2's scope was the three +stock writers (all now serialize on the SKU row); the reservation writer was never in scope. Fix shape is the same `.for('update')` SKU lock in the order-create path's kit probe (order-create already locks only the orders row). Recorded in PENDING.md (catalog section).
+
+## Deferred from: three-layer review of story 12-1 (2026-09-23)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-1-storage-class-and-conformance.md`
+  summary: A wave line shorted purely by the storage-class filter carries no reason naming the conflict — the line reads `unfulfillable` with a `shortfallQty` indistinguishable from an empty-stock shortfall, so an operator cannot tell that drawable-looking stock exists but is excluded by class.
+  evidence: Blind-hunter lens, triage #12. The frozen I/O matrix chose "per existing shortfall arm"; naming the conflict (which bin excluded, which class) needs a reason surface on the line — admin/mobile-surface material for stories 12-7/12-8, not a backend data change.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-1-storage-class-and-conformance.md`
+  summary: A placement or merge committing between the SKU class-edit guard's stock/hold scans and the edit's commit parks non-conforming stock the scans just proved absent — the mirror direction of the unlocked-read race already recorded as accepted currency at PENDING.md (putaway:57); same window, opposite ordering.
+  evidence: Edge-case lens, triage #11. Both orderings share the same root cause (placement reads the SKU unlocked; the class-edit guard takes no locks on the stock writers) and the same failure mode (one placement of non-conforming stock per window, then refused by every downstream gate). Accepted currency — recorded here so the mirror direction is explicit beside the PENDING entry.
