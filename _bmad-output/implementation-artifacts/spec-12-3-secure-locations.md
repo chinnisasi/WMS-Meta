@@ -3,7 +3,7 @@ story: 12-3-secure-locations
 title: "12-3 secure locations — FR-42 authority gate on the backend"
 type: 'feature'
 created: '2026-09-24'
-status: 'in-review'
+status: 'done'
 baseline_commit: '4cb248c'
 route: 'dispatch'
 review_loop_iteration: 0
