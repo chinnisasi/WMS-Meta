@@ -225,7 +225,7 @@ development_status:
   epic-12: in-progress
   12-1-storage-class-and-conformance: done
   12-2-hazard-segregation-matrix: done
-  12-3-secure-locations: review
+  12-3-secure-locations: done
   12-4-non-bin-location-types: backlog
   12-5-temperature-excursions: backlog
   12-6-cold-chain-reporting: backlog
