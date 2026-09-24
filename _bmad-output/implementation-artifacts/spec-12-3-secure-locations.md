@@ -3,7 +3,7 @@ story: 12-3-secure-locations
 title: "12-3 secure locations — FR-42 authority gate on the backend"
 type: 'feature'
 created: '2026-09-24'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_commit: '4cb248c'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -72,11 +72,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `permissions.ts` — capability string, grants, `assertSecureBinAuthority`.
-- [ ] Five writers — placement, pick, merge, qc-hold, qc-release asserts beside their class gates.
-- [ ] `wms-fe/src/lib/users.ts` + `users.test.ts` — mirror (separate FE commit/PR, after the backend PR).
-- [ ] Tests per suite above, including the matrix-invariant test and the 403-detail shape.
-- [ ] `bun run openapi:export` if any error arm changes; `docs/design/API-SURFACE.md` — 403 arms on the five routes; `docs/design/PENDING.md` — extend the adjustment-bypass entry, record the walks-unchanged narrowing.
+- [x] `permissions.ts` — capability string, grants, `assertSecureBinAuthority`.
+- [x] Five writers — placement, pick, merge, qc-hold, qc-release asserts beside their class gates.
+- [x] `wms-fe/src/lib/users.ts` + `users.test.ts` — mirror (separate FE commit/PR, after the backend PR).
+- [x] Tests per suite above, including the matrix-invariant test and the 403-detail shape.
+- [x] `bun run openapi:export` — byte-identical (the document carries no per-route 403 arms); `docs/design/API-SURFACE.md` — 403 arms on the five routes; `docs/design/PENDING.md` — extend the adjustment-bypass entry, record the walks-unchanged narrowing.
 
 **Acceptance Criteria:**
 - Given a bin with `storageClass: 'secure'`, when an actor without `secure.move` places into it, picks from it, or (for merge/hold/release) moves it in any direction, then the command 403s `role-denied` naming `secure.move` and nothing is written.
@@ -87,6 +87,8 @@ context:
 ## Implementation Notes
 
 ## Spec Change Log
+
+- **2026-09-24 (implementation-time spec defect, fixed in code, human informed):** the frozen block's matrix-invariant sentence was internally inconsistent with the block's own decided grants — it required every role holding `putaway.execute`/`picks.execute`/`bin.retire`/`qc.manage` to hold `secure.move`, but the decided matrix deliberately denies `secure.move` to the operator, who holds the two floor verbs by definition. The five-capability invariant is unsatisfiable; the implementer enforced the coherent subset — **every role holding `bin.retire` or `qc.manage` must hold `secure.move`** (the dead-code pair, turned enforced) — and pinned the operator exclusion explicitly in the same test (`test/users.spec.ts`). The live-code placement/pick 403s are covered by their e2e arms, not by the matrix test. The frozen-block sentence itself still reads the old way (frozen blocks change only by human renegotiation); this entry is the record of the correction and its reason.
 
 ## Review Triage Log
 

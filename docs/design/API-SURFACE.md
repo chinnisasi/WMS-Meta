@@ -27,7 +27,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `.../zones/{zoneId}/bins/grid` | `bin.create` | ≤ 500 bins → `422 grid-too-large`; any collision aborts the whole grid. Same optional capacity attributes (11-5) and optional `storageClass` (12-1) |
 | GET | `.../zones/{zoneId}/bins` | — | Keyset |
 | PATCH | `/tenants/{t}/warehouses/{w}/bins/{binId}` | `bin.block` / `bin.create` | Per-body dispatch: `blocked` → block/unblock toggle (`bin.block`); structure attributes `lengthMm`/`widthMm`/`heightMm`/`maxWeightGrams`/`storageClass` → the structure arm (`bin.create`; 11-5 capacity, 12-1 class); both or neither → `400 validation-failed`; an explicit `storageClass: null` → `400 validation-failed` (the column is NOT NULL — omit it to leave the class unchanged). The class arm re-checks the vocabulary and **refuses a change that would strand existing stock non-conforming → `409 storage-class-conflict`** (12-1 — names the SKUs holding stock that would no longer fit; relocate or release first) |
-| POST | `.../bins/{binId}/merge` | `bin.retire` | Moves stock, emits ledger events. 11-5 gates on the target's physical capacity: `bin-overweight` / `bin-volume-exceeded` / `bin-item-oversize` → `400`; 12-1 merge-class gate `bin-storage-mismatch` → `400` — the target bin cannot satisfy a source SKU's class (names the offending SKUs); 12-2 merge-hazard gate `bin-segregation-conflict` → `400` — a moved SKU's hazard class co-locates with an incompatible occupant of the target (names both parties and both classes; moved-vs-moved is not re-checked — the source already co-locates them). The merge retires the source bin on success, so a retired source is refused (`binRetiredAsSource` → `400`) |
+| POST | `.../bins/{binId}/merge` | `bin.retire` | Moves stock, emits ledger events. 11-5 gates on the target's physical capacity: `bin-overweight` / `bin-volume-exceeded` / `bin-item-oversize` → `400`; 12-1 merge-class gate `bin-storage-mismatch` → `400` — the target bin cannot satisfy a source SKU's class (names the offending SKUs); 12-2 merge-hazard gate `bin-segregation-conflict` → `400` — a moved SKU's hazard class co-locates with an incompatible occupant of the target (names both parties and both classes; moved-vs-moved is not re-checked — the source already co-locates them); 12-3 authority gate → `403 role-denied` naming `secure.move` when the **source or target** is secure-class and the actor lacks `secure.move` (FR-42 — byte-identical for holders; dead code by matrix today, the users.spec invariant keeps it enforced). The merge retires the source bin on success, so a retired source is refused (`binRetiredAsSource` → `400`) |
 | POST | `.../bins/{binId}/retire` | `bin.retire` | **Terminal.** Bin must be empty |
 | GET | `/tenants/{t}/setup-checklist` | — | Computed on read |
 | POST | `/tenants/{t}/users` | `users.invite` | Returns a one-time invite token; 7-day TTL |
@@ -86,15 +86,15 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | GET | `/tenants/{t}/receiving/over-receipts` | — | The review queue |
 | POST | `.../over-receipts/{id}/approve` | `review.decide` | Bumps the PO line ceiling. A SKU that became a kit since the GRN → `409 kit-cannot-hold-stock` (11.4); the row stays `pending` for a reject |
 | POST | `.../over-receipts/{id}/reject` | `review.decide` | |
-| POST | `/tenants/{t}/receiving/qc-holds` | `qc.manage` | Quarantines a (sku, bin) scope — **excluded from ATP** |
-| POST | `.../qc-holds/{holdId}/release` | `qc.manage` | |
+| POST | `/tenants/{t}/receiving/qc-holds` | `qc.manage` | Quarantines a (sku, bin) scope — **excluded from ATP**. 12-3 authority gate → `403 role-denied` naming `secure.move` when the origin bin is secure-class and the actor lacks `secure.move` (FR-42; dead code by matrix today — every `qc.manage` holder holds `secure.move`) |
+| POST | `.../qc-holds/{holdId}/release` | `qc.manage` | 12-3 authority gate → `403 role-denied` naming `secure.move` when the origin-return bin is secure-class and the actor lacks `secure.move` (FR-42) |
 | GET | `/tenants/{t}/receiving/qc-holds` | — | open/released tabs |
 
 ## putaway — `putaway.controller.ts`
 
 | Method | Path | Capability | Notes |
 |---|---|---|---|
-| POST | `/tenants/{t}/putaway/placements` | `putaway.execute` | **device.** Records suggestion-vs-actual. `bin-full`/`bin-blocked` → `400`; 11-5 physical gates `bin-overweight`/`bin-volume-exceeded`/`bin-item-oversize` → `400`; 12-1 conformance gate `bin-storage-mismatch` → `400` (FR-40 — the bin's class must satisfy the SKU's, the temperature hierarchy colder-bin-over-warmer-SKU, non-temperature classes exact-match); 12-2 co-location gate `bin-segregation-conflict` → `400` (FR-41 — the target bin's occupants' hazard classes must be compatible with the SKU's; names both SKUs and both classes; a null class carries no rule in either direction); `insufficient-on-hand` → `422` (retryable, key unconsumed) |
+| POST | `/tenants/{t}/putaway/placements` | `putaway.execute` | **device.** Records suggestion-vs-actual. `bin-full`/`bin-blocked` → `400`; 11-5 physical gates `bin-overweight`/`bin-volume-exceeded`/`bin-item-oversize` → `400`; 12-1 conformance gate `bin-storage-mismatch` → `400` (FR-40 — the bin's class must satisfy the SKU's, the temperature hierarchy colder-bin-over-warmer-SKU, non-temperature classes exact-match); 12-2 co-location gate `bin-segregation-conflict` → `400` (FR-41 — the target bin's occupants' hazard classes must be compatible with the SKU's; names both SKUs and both classes; a null class carries no rule in either direction); 12-3 authority gate → `403 role-denied` naming `secure.move` when the target bin is secure-class and the actor lacks `secure.move` (FR-42 — operator is refused; the suggestion stays role-blind, advisory suggestion / binding gate); `insufficient-on-hand` → `422` (retryable, key unconsumed) |
 | GET | `/tenants/{t}/putaway/tasks` | — | Remaining work in the receiving bin |
 | GET | `/tenants/{t}/putaway/placements` | — | Keyset |
 
@@ -113,7 +113,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `/tenants/{t}/outbound/waves` | `waves.manage` | Omitted `orderIds` sweeps eligible orders oldest-first |
 | POST | `.../waves/{waveId}/release` | `waves.manage` | Cutoff passed → `409 cutoff-passed`, **wave stays planned** |
 | POST | `.../waves/{waveId}/cancel` | `waves.manage` | Frees orders to be re-waved |
-| POST | `/tenants/{t}/outbound/picks` | `picks.execute` | **device.** The conflict taxonomy lives here: `pick-bin-short` 409 = re-plannable, `pick-unresolvable` 409 = terminal/quarantine, `insufficient-on-hand` 422 = retryable; 12-1 conformance gate `bin-storage-mismatch` → `400` when the drawn bin's class cannot satisfy the SKU's (defensive — the draw only walks bins the placement and merge gates already admitted) |
+| POST | `/tenants/{t}/outbound/picks` | `picks.execute` | **device.** The conflict taxonomy lives here: `pick-bin-short` 409 = re-plannable, `pick-unresolvable` 409 = terminal/quarantine, `insufficient-on-hand` 422 = retryable; 12-1 conformance gate `bin-storage-mismatch` → `400` when the drawn bin's class cannot satisfy the SKU's (defensive — the draw only walks bins the placement and merge gates already admitted); 12-3 authority gate → `403 role-denied` naming `secure.move` when the drawn bin is secure-class and the actor lacks `secure.move` (FR-42 — operator is refused; the wave pool stays role-blind, advisory suggestion / binding gate) |
 | POST | `/tenants/{t}/outbound/packs` | `pack.execute` | **device** (10.7). Same `packOrder` command as the tenant pack route (which re-authorizes the device in-tx via `deviceId`), orderId in the body; no `dimensionsMm` on the device payload (`forbidNonWhitelisted` → 400). Scan mismatch → `422 pack-mismatch` naming **both** quantities; a revoked device → `403 device-revoked` |
 | GET | `.../waves/{waveId}` | — | With picklists in walk order |
 | GET | `/tenants/{t}/warehouses/{w}/outbound/waves` | — | Keyset |
@@ -141,7 +141,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 ## Capabilities
 
-Twenty-two, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI.
+Twenty-three, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 23rd is `secure.move` (12-3, FR-42): owner and Ops Manager only — the cage is off-limits to floor staff, so the Operator row is unchanged.
 
 | Role | Holds |
 |---|---|
