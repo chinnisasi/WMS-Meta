@@ -66,7 +66,8 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `putaway` | directed putaway, bin administration |
 | `outbound` | orders, waves, picklists, picks, pack, dispatch |
 | `carriers` | carrier registry, tenant credential vault |
-| `movements` · `replenishment` · `channels` · `compliance` · `reporting` · `notifications` | spine placeholders for epics 5–9 |
+| `compliance` | temperature excursions (FR-44): record → per-scope QC holds + zero-delta ledger events, resolve (the review flip) — 12-5 |
+| `movements` · `replenishment` · `channels` · `reporting` · `notifications` | spine placeholders for epics 5–9 |
 
 The api shell (`src/api/`) is where two modules' reads are joined — the device catalog snapshot composes across `inbound` and `outbound` there rather than making one module import the other.
 

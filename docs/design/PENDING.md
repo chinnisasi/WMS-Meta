@@ -87,6 +87,16 @@ Two sources, both authoritative:
 - **`openCredentialForAdapterUse` has no caller and no test** — the module's only envelope-opening read. Deleting its `tenantId` predicate would let any tenant open any other tenant's credential **with the full suite still green**. 4-6c brings the first caller; **pin the tenant predicate first** *(4-6b review)*
 - **Rotating `CARRIER_ENCRYPTION_KEY` is unsupported** — every stored blob becomes unopenable and idempotent replay breaks. Needs a key id in the blob and a re-seal path *(4-6b review)*
 
+## compliance
+
+*(12-5 built the temperature-excursion module; entries below are its known-not-done, grouped by what defers them.)*
+
+- **Serial-tracked and catch-weight SKUs refuse the whole excursion** (all-or-nothing, naming offenders) — per-unit / handling-unit quarantine is Epic 15's arm, not this module's
+- **The 12-7 review queue is unread by any UI** — `listExcursions` (keyset, `warehouseId`/`status` filters) is the backend read; the web review-queue surface, and the mobile capture UX-DR30, are 12-7 and 12-8
+- **No threshold model, no sensor ingestion, no auto-detection** — by design (UX-DR30): manual capture only, an operator-captured reading against a bin. Any threshold/alert work is future scope, not a gap
+- **The excursion↔hold linkage lives only in `temperature_excursions.hold_ids`** — ledger `qc.held` events carry reference kind `qc-hold` (holdId + fromBinId) with no excursion id, so a ledger-only reconstruction correlates excursions to holds by bin + timestamp, not by id. 12-6's cold-chain reporting consumes the excursion events (its own reference kind), which is unambiguous; if a later story needs hold-level attribution, the column is the join
+- **CI's migration drift guard does not pin `temperature_excursions_status_check`** — `verify.ts` round-trips only app_metadata (tenancy) fields; the status CHECK and RLS live in hand-appended SQL only, so a regenerated migration could silently drop them *(12-5 defer, deferred-work.md)*
+
 ## wms-mobile
 
 - **`uomPrecision` ships unconsumed.** The catalog snapshot carries it so the device can refuse a too-precise scan **offline, before queueing**. Until story 10-6 builds that, a too-precise dead-zone scan queues and is refused on replay — the exact behaviour the field exists to prevent. **A live gap, not a deferred nicety** *(story 10.2)*

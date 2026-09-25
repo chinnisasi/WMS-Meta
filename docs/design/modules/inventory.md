@@ -170,7 +170,7 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 
 `listEvents` :292 (keyset, newest first), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :430, `exportDigest` :453.
 
-In-transaction reads for composing callers: `stockByBinsInTx` :706, `batchOnHandByBinsInTx` :791, `batchOnHandForBinInTx` :827, `binStateEpochInTx` :744, `binStateEpochsInTx` :760, `qcScopeOnHandInTx` :1047, `qcHeldArmsInTx` :1092, `serialsLocatedInBinInTx` :1132.
+In-transaction reads for composing callers: `stockByBinsInTx` :706, `batchOnHandByBinsInTx` :791, `batchOnHandForBinInTx` :827, `binStateEpochInTx` :744, `binStateEpochsInTx` :760, `qcScopeOnHandInTx` :1047, `qcHeldArmsInTx` :1092, `serialsLocatedInBinInTx` :1132, `onHandInBinInTx` :1882 (every (sku, quantity>0) arm in one bin, ordered by SKU — 12-5's excursion sweep).
 
 **Units rule.** The HTTP-facing reads convert milli-units back to base UoM with `fromMilli` at the boundary (`inventory.facade.ts:351`, `:407`, `:911`, `:936`). The `…InTx` helpers feed **commands**, not responses, and deliberately stay in milli-units (`inventory.facade.ts:346-350`). Getting this backwards silently scales a quantity by 1000.
 
@@ -281,7 +281,7 @@ Emits: `stock.adjusted` on the outbox (`:327-346`), with `occurredAt` as **busin
 
 Serial movements (`adjustToSnapshot` `:485`): lock the whole serial set first (`:496-498`), then append N events of magnitude `QUANTITY_SCALE` each carrying its own `serialRef`. The snapshot reports the **last** appended event and the bin's final on-hand.
 
-Everything else that writes the ledger is a command in another module going through `appendLedgerEventInTx`: receiving (`grn.received`), QC (`qc.held`/`qc.released`), putaway (`putaway.placed`), bin merge (`bin.merged`), pick (`pick.picked`), pack (`pack.packed`), dispatch (`dispatch.dispatched`).
+Everything else that writes the ledger is a command in another module going through `appendLedgerEventInTx`: receiving (`grn.received`), QC (`qc.held`/`qc.released`), putaway (`putaway.placed`), bin merge (`bin.merged`), pick (`pick.picked`), pack (`pack.packed`), dispatch (`dispatch.dispatched`), compliance (`excursion.recorded`).
 
 ---
 
@@ -392,6 +392,7 @@ Anchoring has **no HTTP route and no background job**. Today it is driven only b
 | `pick.picked` :307 | `pick` | yes | yes | Pure draw — `toBinId` null |
 | `pack.packed` :331 | `pack` | **no** | **no** | `quantityDelta: 0`, both bins null — folds nothing |
 | `dispatch.dispatched` :356 | `dispatch` | **no** | **no** | `quantityDelta: 0`, both bins null — folds nothing |
+| `excursion.recorded` (12-5) | `excursion` (`excursionId`, `binId`, `readingC`) | **no** | **no** | `quantityDelta: 0`, both bins null — folds nothing; **one event per affected (sku, bin) scope** (every on-hand SKU in the excursion's origin bin, including scopes already under an open hold). The compliance module's only ledger write — FR-45 reconstructs the excursion (bin, reading, affected scopes) from these events alone |
 
 The two zero-quantity types keep both identity arms closed on purpose: they re-count nothing, and opening an arm would let a caller record a batch/serial claim the verification never made.
 

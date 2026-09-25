@@ -128,6 +128,14 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `.../connections/{id}/rotate` | `carrier.manage` | Replaces material **in place**; the row id is the stable handle |
 | POST | `.../connections/{id}/disconnect` | `carrier.manage` | **Hard delete.** Audit row survives |
 
+## compliance — `compliance.controller.ts`
+
+| Method | Path | Capability | Notes |
+|---|---|---|---|
+| POST | `/tenants/{t}/excursions` | `excursion.record` | Records a temperature excursion against a bin (FR-44, 12-5): sweeps the bin's on-hand, quarantines every affected (sku, bin) scope through the ONE hold core (`holdScopeInTx` — ordinary QC holds, ATP exclusion falls out of `qcHeldUnits`), one zero-delta `excursion.recorded` ledger event per **affected** scope (including scopes already under an open hold — skipped for quarantine, still ledger-visible). All-or-nothing: any serial-tracked or catch-weight SKU refuses the whole excursion → `400 validation-failed` naming every offender and why; empty or system-owned bin → `400`; bin 404. `Idempotency-Key` required; same-key replay → same snapshot, different payload → `422 idempotency-key-reuse`. Secure-class bin + actor without `secure.move` → `403 role-denied` (the hold core's FR-42 gate) |
+| POST | `.../excursions/{excursionId}/resolve` | `review.decide` | The review-status flip only (FR-44) — status → `resolved`, `resolvedBy/At` stamped, outbox `excursion.resolved` + audit. **Releases nothing**: stock disposition stays `qc.manage` release / `stock.adjust`. Unknown id → `404`; already resolved → `409 excursion-resolved`; `Idempotency-Key`; replay re-serves the snapshot |
+| GET | `/tenants/{t}/excursions` | — | The review-queue read (12-7's Conflicts & Reviews), open to any member. Keyset on `(createdAt, id)`, `warehouseId` filter (foreign → `404`), `status=open|resolved` filter; malformed cursor → `400 invalid-cursor` |
+
 ## Infrastructure
 
 | Method | Path | Notes |
@@ -141,13 +149,13 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 ## Capabilities
 
-Twenty-three, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 23rd is `secure.move` (12-3, FR-42): owner and Ops Manager only — the cage is off-limits to floor staff, so the Operator row is unchanged.
+Twenty-four, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 24th is `excursion.record` (12-5, FR-44): owner, Ops Manager and Operator — recording what the floor observes is a floor verb (`putaway.execute`'s rationale); it does **not** gate a resolve (`review.decide`'s).
 
 | Role | Holds |
 |---|---|
 | **Owner** | everything |
 | **Ops Manager** | everything except `users.invite`, `users.role_change` |
-| **Operator** | `putaway.execute`, `picks.execute`, `pack.execute`, `dispatch.execute` — the floor verbs only |
+| **Operator** | `putaway.execute`, `picks.execute`, `pack.execute`, `dispatch.execute`, `excursion.record` — the floor verbs only |
 | **Accountant** | nothing (read-only) |
 
 ## Device-authenticated routes
