@@ -384,3 +384,19 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-12-3-secure-locations.md`
   summary: The generated FE client lies about `SkuResponse.hazardClass` nullability — `@hey-api/openapi-ts` 0.99.0 renders enum+nullable fields without `| null` (plain-nullable fields like `hsn` render fine), so FE types claim a hazard class is always one of the seven classes while the runtime returns null for every plain SKU.
   evidence: Found 2026-09-24 while regenerating the client for WMS-FE #36 — BE `catalog.dto.ts:233` declares `@ApiProperty({ enum: HAZARD_CLASSES, nullable: true })`, the committed `openapi.json` carries `"nullable": true`, and `types.gen.ts:475` emits `hazardClass: 'explosive' | … | 'gas'` with no null arm. Fix: upgrade/patch the generator (or reshape the DTO to a oneOf) and regenerate; until then any FE consumer reading a SKU's hazardClass works against a false type.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-4-non-bin-location-types.md`
+  summary: `stock.adjust` bypasses the bulk-asset single-SKU occupancy gate — an adjustment can add a second SKU into a holding tank (triage #15).
+  evidence: Blind-hunter lens, verified. The standing containment pattern: the 11-5/12-1/12-2/12-3 gates carry the identical documented bypass (PENDING `inventory` entries), and the state is recoverable via draws (the draw path has no gate). Recovering an over-mixed tank is possible today only through that bypass-in-reverse; a PENDING entry names the new gate.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-4-non-bin-location-types.md`
+  summary: The FE mirrors "which types are bulk" (`BULK_ASSET_TYPES`, `GRID_TYPES`) and the weight cap (`MAX_BIN_WEIGHT_GRAMS = 100_000_000`) by hand, with no cross-repo parity pin — a BE-side change to either set fails only at runtime (triage #16, re-raised by review 2 for the cap).
+  evidence: Verification-gap lens, verified (the FE cap matches the backend today). Semantic classifications cannot ride the generated openapi, so some mirror is unavoidable; the missing piece is a parity checker — systemic work beside triage #17, and 12-7's storage admin will reshape the FE surface anyway.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-4-non-bin-location-types.md`
+  summary: The putaway mismatch-reason enum is hand-kept in five places (BE primitive, BE DTO, BE openapi-derived FE types, two wms-mobile mirrors) with no cross-repo parity test — this story updated three of the five and the drift class just bit (triage #17).
+  evidence: Verification-gap lens. The BE-internal half is fixed (one `mismatch-reason.ts` source, re-exported); the cross-repo half needs a parity checker — systemic, deferred to 12-8, which touches the mobile mirrors anyway. The FE create-picker and mobile reason mirrors each carry their own local pin from this story.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-4-non-bin-location-types.md`
+  summary: The suggestion rationale text misstates exclusion reasons for pools emptied by exclusion — a tank-only warehouse says "No conforming storage bin has room for these units" though the tank was excluded by type, not capacity (triage #18).
+  evidence: The wording pre-exists 12-4 (any pool-empty-by-exclusion case produced it — 12-2's triage #9 already records the same collapse for segregation refusals); 12-4 adds a new trigger without changing the shape. Fix belongs with the rationale-reasoning work deferred there (12-7/12-8 admin/mobile surfaces).
