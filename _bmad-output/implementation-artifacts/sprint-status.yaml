@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-25-2026
+last_updated: 09-26-2026
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -228,7 +228,7 @@ development_status:
   12-3-secure-locations: done
   12-4-non-bin-location-types: done
   12-5-temperature-excursions: done
-  12-6-cold-chain-reporting: backlog
+  12-6-cold-chain-reporting: review
   12-7-web-storage-and-segregation-admin: backlog
   # The sub-500ms on-device conformance refusal — a refusal the floor never
   # sees is a cold-chain break the backend correctly prevented.
