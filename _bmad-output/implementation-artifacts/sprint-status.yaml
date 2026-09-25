@@ -226,7 +226,7 @@ development_status:
   12-1-storage-class-and-conformance: done
   12-2-hazard-segregation-matrix: done
   12-3-secure-locations: done
-  12-4-non-bin-location-types: review
+  12-4-non-bin-location-types: done
   12-5-temperature-excursions: backlog
   12-6-cold-chain-reporting: backlog
   12-7-web-storage-and-segregation-admin: backlog
