@@ -400,3 +400,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-12-4-non-bin-location-types.md`
   summary: The suggestion rationale text misstates exclusion reasons for pools emptied by exclusion — a tank-only warehouse says "No conforming storage bin has room for these units" though the tank was excluded by type, not capacity (triage #18).
   evidence: The wording pre-exists 12-4 (any pool-empty-by-exclusion case produced it — 12-2's triage #9 already records the same collapse for segregation refusals); 12-4 adds a new trigger without changing the shape. Fix belongs with the rationale-reasoning work deferred there (12-7/12-8 admin/mobile surfaces).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-5-temperature-excursions.md`
+  summary: The CI migrations drift guard (src/shared/db/verify.ts) round-trips only app_metadata, so hand-appended table CHECKs (e.g. 0038's temperature_excursions_status_check) are pinned by no automated verification.
+  evidence: Observation filed by the 12-5 verification-gap layer; the RLS half of the same migration is covered by the e2e RLS probe, the CHECK half is not. Nothing in the current code path can violate the CHECK (the command writes only 'open'/'resolved'). Settling it = extending verify.ts to round-trip table-level CHECK constraints — an infra change beyond story 12-5.

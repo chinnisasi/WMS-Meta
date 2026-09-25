@@ -17,6 +17,7 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **tenancy** | [`tenancy.md`](tenancy.md) | Tenants, auth, users, roles and capabilities, warehouses, zones, bins, device enrollment and badge-in |
 | **catalog** | [`catalog.md`](catalog.md) | SKUs, CSV import, batches, serials, the UoM vocabulary |
 | **carriers** | [`carriers.md`](carriers.md) | The carrier adapter registry and the tenant credential vault |
+| **compliance** | [`compliance.md`](compliance.md) | Temperature excursions (FR-44/45): record → per-scope QC holds + zero-delta ledger events, resolve (the review flip) |
 
 ## Planned
 
@@ -25,7 +26,7 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | `movements` | 5 | Transfer orders, stock adjustments with approval thresholds, cycle counts, variance review |
 | `replenishment` | 6 | Reorder points, breach alerts, suggested POs, expiry and aging |
 | `channels` | 7 | Channel connections, standing availability buffers, order ingestion, fulfilment writeback |
-| `compliance` | 8 | GST invoicing, e-way bills, HSN summary — and later customs, excise and controlled-substance registers (epics 16–18) |
+| `compliance` (remaining) | 8 | GST invoicing, e-way bills, HSN summary — and later customs, excise and controlled-substance registers (epics 16–18). Temperature excursions is built above |
 | `reporting` | 9 | Operational dashboard, notification panel, global audit trail, async export |
 | `notifications` | 9 | The notification panel and mobile pushes |
 
