@@ -228,7 +228,7 @@ development_status:
   12-3-secure-locations: done
   12-4-non-bin-location-types: done
   12-5-temperature-excursions: done
-  12-6-cold-chain-reporting: review
+  12-6-cold-chain-reporting: done
   12-7-web-storage-and-segregation-admin: backlog
   # The sub-500ms on-device conformance refusal — a refusal the floor never
   # sees is a cold-chain break the backend correctly prevented.
