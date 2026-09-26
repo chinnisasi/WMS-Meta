@@ -404,3 +404,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-12-5-temperature-excursions.md`
   summary: The CI migrations drift guard (src/shared/db/verify.ts) round-trips only app_metadata, so hand-appended table CHECKs (e.g. 0038's temperature_excursions_status_check) are pinned by no automated verification.
   evidence: Observation filed by the 12-5 verification-gap layer; the RLS half of the same migration is covered by the e2e RLS probe, the CHECK half is not. Nothing in the current code path can violate the CHECK (the command writes only 'open'/'resolved'). Settling it = extending verify.ts to round-trip table-level CHECK constraints — an infra change beyond story 12-5.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-12-6-cold-chain-reporting.md`
+  summary: The hand-emitted 0039 expression index (ledger_events_order_ref_idx) is invisible to the drizzle snapshot and its existence/definition is asserted by no automated check — verify.ts round-trips only app_metadata.
+  evidence: 12-6 verification-gap layer + triage #7/#26. The index is confirmed present in the dev DB (pg_indexes verified) and usable only when the query carries the `? 'orderId'` qual (now patched into ledgerEventsByOrderRefInTx), but a future hand-edited migration could drop or reshape it with nothing failing. Settling it = extending src/shared/db/verify.ts introspection to assert index existence/definition (and, separately, a documented procedure for the next hand-emitted index) — an infra change beyond story 12-6; same family as the 12-5 CHECK-drift-guard defer.

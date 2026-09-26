@@ -95,7 +95,7 @@ Two sources, both authoritative:
 - **The 12-7 review queue is unread by any UI** — `listExcursions` (keyset, `warehouseId`/`status` filters) is the backend read; the web review-queue surface, and the mobile capture UX-DR30, are 12-7 and 12-8
 - **No threshold model, no sensor ingestion, no auto-detection** — by design (UX-DR30): manual capture only, an operator-captured reading against a bin. Any threshold/alert work is future scope, not a gap
 - **The excursion↔hold linkage lives only in `temperature_excursions.hold_ids`** — ledger `qc.held` events carry reference kind `qc-hold` (holdId + fromBinId) with no excursion id, so a ledger-only reconstruction correlates excursions to holds by bin + timestamp, not by id. 12-6's cold-chain reporting consumes the excursion events (its own reference kind), which is unambiguous; if a later story needs hold-level attribution, the column is the join
-- **CI's migration drift guard does not pin `temperature_excursions_status_check`** — `verify.ts` round-trips only app_metadata (tenancy) fields; the status CHECK and RLS live in hand-appended SQL only, so a regenerated migration could silently drop them *(12-5 defer, deferred-work.md)*
+- **CI's migration drift guard does not pin `temperature_excursions_status_check`** — `verify.ts` round-trips only app_metadata (tenancy) fields; the status CHECK and RLS live in hand-appended SQL only, so a regenerated migration could silently drop them *(12-5 defer, deferred-work.md)*. The same guard cannot see hand-emitted expression indexes: 0039's `ledger_events_order_ref_idx` is in the live DB but in no drizzle snapshot, so a future hand-edited migration could drop or reshape it with nothing failing *(12-6 defer, same entry family)*
 
 ## wms-mobile
 
