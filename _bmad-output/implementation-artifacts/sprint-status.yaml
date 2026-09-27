@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-27-2026
+last_updated: 09-28-2026
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -232,7 +232,7 @@ development_status:
   12-7-web-storage-and-segregation-admin: done
   # The sub-500ms on-device conformance refusal — a refusal the floor never
   # sees is a cold-chain break the backend correctly prevented.
-  12-8-mobile-conformance-refusal-and-excursions: review
+  12-8-mobile-conformance-refusal-and-excursions: done
   epic-12-retrospective: optional
 
   epic-13: backlog
