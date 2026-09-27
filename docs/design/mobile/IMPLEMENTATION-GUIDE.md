@@ -216,6 +216,8 @@ requestAnimationFrame(() => hidRef.current?.focus());
 
 ## 6. Quantities — and the `uomPrecision` gap
 
+**Closed by 10-6 — this section's "gap" is history, kept for the reasoning.** Story 10-6 carried `uomPrecision` end to end on-device (`CatalogSku` types it; `parseCatalogSnapshot` defaults it to `0`; `src/lib/quantity-input.ts` is the precision-aware parse with the server-mirrored refusal detail) and every quantity path — receive, putaway, pick, pack — consumes it. The pre-10-6 prose below describes what it replaced; do not re-derive it.
+
 Backend stories 10.1 and 10.2 changed quantities system-wide:
 
 - Quantities are **fractional to 3 decimal places**, stored as scaled integers in milli-units below the HTTP edge.
@@ -234,9 +236,9 @@ Backend stories 10.1 and 10.2 changed quantities system-wide:
 | Putaway, clamp | `Math.max(0, Math.min(Math.floor(qty), MAX_PLACEMENT_QTY))` (`src/putaway/draft.ts:138`) |
 | Pick, short quantity | `text.replace(/[^0-9]/g, '')` then `Number.parseInt` (`app/pick.tsx:303-307`); the model refuses anything failing `Number.isInteger` (`src/picking/draft.ts:344`) |
 
-The consequence is concrete: **a too-precise scan in a dead zone queues, and is refused on replay — the exact behaviour the field was added to prevent.** `../PENDING.md:74` records it as a live gap, not a deferred nicety.
+The consequence was concrete pre-10-6: **a too-precise scan in a dead zone queued, and was refused on replay** — the exact behaviour the field was added to prevent.
 
-When the mobile story lands, the work is: carry `uomPrecision` on `CatalogSku`; replace the digits-only filters with a precision-aware parse driven by the drafted line's SKU; refuse an over-precise entry in the **Rejected** banner naming the unit and its precision (mirroring the server's message so the operator sees one story, not two); and keep the existing integer clamps for the units that declare 0 places. Until then, do not describe the device as validating precision.
+10-6's landed work (recorded so the pattern is re-usable for the next per-row field): carry `uomPrecision` on `CatalogSku`; replace the digits-only filters with a precision-aware parse driven by the drafted line's SKU (`src/lib/quantity-input.ts`); refuse an over-precise entry in the **Rejected** banner naming the unit and its precision (mirroring the server's message so the operator sees one story, not two); and keep the existing integer clamps for the units that declare 0 places. **12-8 note:** the snapshot has grown a ninth time since — `storageClass` on both the SKU and bin arms, parsed with the **10-6 default pattern** (`?? null`, added keys), because conformance gates read a definite `string | null` rather than key-absence; the 11-7 exact-equality legacy pin gained the null explicitly.
 
 The int4 clamps (`MAX_LINE_QTY` / `MAX_PLACEMENT_QTY = 2_147_483_647`) stay regardless: they are the client half of a server column bound, and an oversized entry must never retract a queued op at replay (`src/receiving/draft.ts:33-38`).
 
