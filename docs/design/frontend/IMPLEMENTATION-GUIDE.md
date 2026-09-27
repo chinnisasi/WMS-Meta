@@ -133,6 +133,19 @@ Without the remount the table still offers Prev on what is now page one, and the
 - **The kit editor's recovery is a refetch, not a local cache update.** After a kit POST that was refused `kit-already-composed`, the editor refetches the whole kits list (`fetchAllPages`) so the row's kit-ness is read from the server, then surfaces the refusal — and if even that refetch fails, the refusal STILL renders (`try/catch` falls through to the rejection banner). The refusal must never be eaten by a failed bookkeeping call.
 - **The attach picker offers unattached SKUs only** (`productId === null`): the backend's attach arm has no current-attachment guard, so offering an attached SKU would let the PATCH silently move it between products. Filter the options rather than validating the submission — the §7 option-filtering rule.
 
+### 1.5 Resetting on a scope switch — keyed state, not a reset effect
+
+When a surface's derived scope changes (warehouse, status tab, tenant), state that belongs to the OLD scope must not survive the switch: a loaded trace re-fetched under a new warehouse answers a false 404 (12-7 review), a resolve banner persists above a queue it no longer describes. The instinct — `useEffect(() => setX(null), [scope])` — **fails the house ESLint rule `react-hooks/set-state-in-effect`**, and for good reason: the effect runs one render behind the scope change, so a downstream hook can see the stale state paired with the new scope for one pass (12-7's literal reset-effect shape would have let the trace hook fire the false 404 anyway).
+
+**The pattern is keyed derivation:** store the scope INSIDE the state, derive the visible value by comparing scopes in the same render —
+
+```ts
+const [loadedOrder, setLoadedOrder] = useState<{ warehouseId: string; orderId: string } | null>(null);
+const orderId = loadedOrder !== null && loadedOrder.warehouseId === warehouseId ? loadedOrder.orderId : null;
+```
+
+A switch invalidates the state in the same render, with no effect ordering to get wrong. 12-7 uses it three times (`cold-chain-trace.tsx` loaded order + draft, `excursion-queue.tsx` outcome banner keyed by `{tab, warehouseId}`). Reach for it before reaching for a reset effect.
+
 ---
 
 ## 2. Writing a mutation
@@ -159,6 +172,8 @@ async function confirmCancel(orderId: string) {
 ### 2.1 The Idempotency-Key
 
 AD-5: every mutating request carries a client-minted ULID (`lib/ulid.ts:28` — hand-rolled to the backend's 26-char Crockford base32 format, no dependency). `fetchApi*` wrappers for mutations take it as a required parameter, so forgetting it does not compile.
+
+> **Two id vocabularies — never confuse them.** Entity ids (orders, SKUs, bins, holds, excursions…) are dashed lowercase **UUIDv7** (`wms-be/src/shared/primitives/ids.ts`); ULIDs are the **Idempotency-Key vocabulary only**, never an entity id. 12-7's trace viewer shipped with the two swapped — a spec invented a "order ids are ULIDs" gate, the implementation and its tests enshrined it, and the surface could not load a single real order until three review layers caught it. Before writing any id shape check or id-input affordance, read the BE's id vocabulary first-hand (`ids.ts`, the route's own param validation) and test with a fixture in that shape — not with a fabricated value in the shape you assumed.
 
 **The key's lifetime is the *intent*, not the HTTP attempt.** Three shapes, all correct:
 

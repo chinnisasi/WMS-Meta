@@ -87,7 +87,7 @@ Errors: `400 validation-failed` (bad shape, out-of-bounds reading, >2 decimals, 
 
 ### `ExcursionFacade.listExcursions`
 
-Keyset on `(created_at, id)` (newest first), `warehouseId` filter (foreign → `404`), `status=open|resolved` filter, `decodeCursorSafe` guard → `400 invalid-cursor`, default page 50 (1..200). The review-queue read for 12-7.
+Keyset on `(created_at, id)` (newest first), `warehouseId` filter (foreign → `404`), `status=open|resolved` filter, `decodeCursorSafe` guard → `400 invalid-cursor`, default page 50 (1..200). The review-queue read for 12-7. **12-7 gave both mutations their first web consumers**: the `/conflicts` excursion queue consumes `listExcursions` (joining the affected-units labels to `GET /receiving/qc-holds` — an enrichment read whose failure degrades the card, never the queue) and gates resolve on `review.decide` with a per-click Idempotency-Key; the `/compliance` trace viewer consumes `getOrderColdChainTrace`.
 
 ## Cold-chain read (story 12-6, FR-45)
 
