@@ -4,13 +4,13 @@
 
 All paths below are relative to `workspace/core/backend/wms-be`.
 
-Files: `src/modules/inventory/{inventory.module,inventory.facade,inventory.command,inventory.dto,ledger.service,ledger-registry,reservation.service,reconcile,anchor-store}.ts`.
+Files: `src/modules/inventory/{inventory.module,inventory.facade,inventory.command,adjustment-approval.command,adjustment-reason,inventory.dto,ledger.service,ledger-registry,reservation.service,reconcile,anchor-store}.ts`.
 
 ---
 
 ## Owns
 
-Eight tables. Every one of them is module-exclusive: `test/architecture.spec.ts:116` fails any stock-table write from outside `src/modules/inventory`, and `test/architecture.spec.ts:134` further pins `stock_on_hand` / `batch_on_hand` / `bin_state_epochs` mutation to the single file `ledger.service.ts` (`PROJECTION_OWNER`, `test/architecture.spec.ts:37`). RLS policies, CHECKs and triggers for all of them live **only in the migration SQL**, never in `schema.ts` — the repo's hand-append pattern.
+Ten tables. Every one of them is module-exclusive: `test/architecture.spec.ts:116` fails any stock-table write from outside `src/modules/inventory`, and `test/architecture.spec.ts:134` further pins `stock_on_hand` / `batch_on_hand` / `bin_state_epochs` mutation to the single file `ledger.service.ts` (`PROJECTION_OWNER`, `test/architecture.spec.ts:37`). RLS policies, CHECKs and triggers for all of them live **only in the migration SQL**, never in `schema.ts` — the repo's hand-append pattern.
 
 | Table | Holds | Invariants and where they live |
 | --- | --- | --- |
@@ -22,6 +22,8 @@ Eight tables. Every one of them is module-exclusive: `test/architecture.spec.ts:
 | `reservations` (`schema.ts:911`) | The hold journal — the durable truth Valkey mirrors. `(tenant, warehouse, sku)` scope, never bin-level; `owner_type`/`owner_id`; `quantity` (milli-units); `state`; `expires_at`. | `reservations_state_check` restricts state to `held|committed|released|expired` (`drizzle/0009_overjoyed_sway.sql:38`) — a typo'd state would silently drop the row out of every `state = 'held'` consumer and corrupt the mirror. `reservations_quantity_positive` (`:42`). `reservations_open_owner_scope_unique` is **partial on `state = 'held'`**: one open hold per owner scope. |
 | `reconciliation_checkpoints` (`schema.ts:899`) | One row per (tenant, warehouse) partition: `last_seq` watermark, `invalid_attempts`, `last_divergences` (the repeat memory), `incremental_count` (story 10.4 — bounded passes since the last full pass; the scheduled full pass's trigger). | `reconciliation_checkpoints_last_seq_nonnegative` (`drizzle/0008_lowly_khan.sql:59`). One row per partition (unique index). An **existing** checkpoint's cycle state is never overwritten by the reconcile failure path — that path's fresh-row INSERT (`last_seq 0`, `ON CONFLICT DO NOTHING`, story 10.4) writes the no-checkpoint defaults and is the deliberate exception. |
 | `inventory_quarantines` (`schema.ts:854`) | Scopes that diverged **repeatedly** inside one checkpoint window, with the divergent seq range. | `inventory_quarantines_status_check` (`open|resolved`, `drizzle/0008_lowly_khan.sql:55`), `from_seq <= to_seq` (`:61`), and one OPEN row per scope (partial unique index). Consumed by ATP: an open quarantine excludes that (sku, bin) from sellable on-hand. |
+| `stock_adjustment_policies` (5-2, `schema.ts`) | One row per tenant: the approval-threshold opt-in (config-not-code). `quantity_threshold` nullable — but the API never writes null, so the disable mechanism is the ABSENT row. | `stock_adjustment_policies_tenant_id_unique` (one row per tenant) + `stock_adjustment_policies_quantity_threshold_check` (null or ≥ 0, `drizzle/0044_adjustment_approval.sql:100`). |
+| `stock_adjustment_pendings` (5-2, `schema.ts`) | The over-threshold adjustments parked for Owner decision: the converted signed delta (milli), reason/note, the RESOLVED arms (`batch_id`, `serial_ids` jsonb, `handling_unit_ids` jsonb), the override reason (restored into the approved referenceDoc), `threshold_quantity_at_request` (frozen context), requester/decider stamps and `status`. | `stock_adjustment_pendings_status_check` (`pending|approved|rejected`), `stock_adjustment_pendings_reason_code_check` (the closed 8-value vocabulary, pinned TS↔DB by a spec test), `stock_adjustment_pendings_quantity_check` (non-zero signed delta), `stock_adjustment_pendings_threshold_check` (≥ 0), all `drizzle/0044_adjustment_approval.sql:88-99`. No status transition is DB-enforced — the conditional terminal UPDATE is the backstop. |
 
 Not owned but read for integrity or scope: `bins`, `skus`, `warehouses` (tenancy/catalog master data — read-only, never written here), `idempotency_keys`, `outbox_messages`.
 
@@ -127,6 +129,31 @@ One row per (tenant, warehouse) partition, unique.
 
 **Consumed by ATP:** an open quarantine excludes that (sku, bin) from sellable on-hand.
 
+### `stock_adjustment_policies` — the threshold opt-in (5-2)
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `tenant_id` | uuid | NO | — | `stock_adjustment_policies_tenant_id_unique` | One row per tenant |
+| `quantity_threshold` | integer | **YES** | — | `stock_adjustment_policies_quantity_threshold_check` | Base UoM ceiling; **null = flow disabled, same semantics as an absent row** — but no API path writes null, so the disable mechanism is the absent row (an ops-grade disable verb is deferred) |
+
+### `stock_adjustment_pendings` — the parked over-threshold adjustments (5-2)
+
+| Column | Type | Null | Default | Guard | Meaning |
+|---|---|---|---|---|---|
+| `warehouse_id` · `bin_id` · `sku_id` | uuid | NO | — | keyset idx | The resolved scope, frozen at request |
+| `quantity_milli` | bigint `mode:'number'` | NO | — | `stock_adjustment_pendings_quantity_check` (≠ 0) | **Signed** milli-units — the converted delta at request time; the approval rebuilds base units with `fromMilli` (exact round-trip, AD-9) |
+| `reason_code` | text | NO | — | `stock_adjustment_pendings_reason_code_check` | The closed 8-value vocabulary; a spec test pins the TS list against this CHECK |
+| `note` | text | NO | — | — | The DTO requires a non-empty note on every adjustment |
+| `batch_override_reason` | text | **YES** | — | — | The override draw's mandatory FEFO-override reason — restored into the approved event's referenceDoc so the approved referenceDoc is byte-identical to what the same request would have produced immediately |
+| `batch_id` · `serial_ids` (jsonb) · `handling_unit_ids` (jsonb) | — | **YES** | — | — | The RESOLVED arms frozen at request (batch id resolved then; serial identities ensured then). A rejected pend leaves ensured-but-inert serials — the same currency as any refused adjustment |
+| `occurred_at` | timestamptz | NO | — | — | The requested business time, preserved; the approved events' `occurred_at` is the DECISION time |
+| `requested_by` · `requested_at` | uuid · timestamptz | NO | — | — | |
+| `status` | text | NO | `'pending'` | `stock_adjustment_pendings_status_check` | `pending \| approved \| rejected` — terminal UPDATE is conditional on `status = 'pending'` |
+| `decided_by` · `decided_at` | uuid · timestamptz | **YES** | — | — | Stamped by the winning decision |
+| `threshold_quantity_at_request` | integer | NO | — | `stock_adjustment_pendings_threshold_check` (≥ 0) | The threshold as it stood when the row was raised — the context the queue card shows |
+
+**Indexes:** `(tenant_id, status, created_at, id)` — the queue read's keyset cursor.
+
 ---
 
 ## Public seam
@@ -139,9 +166,13 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 
 | Method (`inventory.facade.ts:`) | Does | Called by |
 | --- | --- | --- |
-| `adjustStock(command, idempotencyKey)` :227 | The `stock.adjustment` command; returns the snapshot. | `src/api/inventory.controller.ts` |
-| `adjustmentFingerprint(command)` :265 | Command-owned payload hash for the api layer's replay pre-check — the api layer never hashes payload bytes itself. | `src/api/inventory.controller.ts:150` |
-| `replayAdjustment(tenantId, key, payloadHash)` :278 | Returns the stored snapshot on hash match, throws 422 `idempotency-key-reuse` on mismatch, `null` when no row. **Replay beats composition** — see Gotchas. | `src/api/inventory.controller.ts:147` |
+| `adjustStock(command, idempotencyKey)` :255 | The `stock.adjustment` command; returns the **discriminated result** — `{kind: 'applied', snapshot}` (201) or `{kind: 'pending', pending}` (202, the pend snapshot with its threshold context). | `src/api/inventory.controller.ts` |
+| `setAdjustmentPolicy(command, idempotencyKey)` :262 | PUT the tenant's threshold row (owner-only `adjustments.approve`). Creates or updates; concurrent first-time PUTs race the unique index — the loser 409s. | `src/api/inventory.controller.ts` (5-2) |
+| `getAdjustmentPolicy(tenantId)` :270 | The policy row, or `null` when none exists (the flow is disabled — the controller answers 404). A read. | `src/api/inventory.controller.ts` (5-2) |
+| `listAdjustmentPendings(tenantId, query)` :275 | The pending queue — keyset cursor pagination, newest first, status-filterable. A read, never capability-gated. | `src/api/inventory.controller.ts` (5-2) |
+| `decideAdjustment(command, idempotencyKey)` :283 | The terminal approve/reject (owner-only). Approve re-executes the stored arms through the full guard set and the ledger writes inside the decision transaction; reject flips status with no stock write. | `src/api/inventory.controller.ts:326,:367` (5-2) |
+| `adjustmentFingerprint(command)` :321 | Command-owned payload hash for the api layer's replay pre-check — the api layer never hashes payload bytes itself. | `src/api/inventory.controller.ts:150` |
+| `replayAdjustment(tenantId, key, payloadHash)` :334 | Returns the stored snapshot on hash match (either shape — applied or pend), throws 422 `idempotency-key-reuse` on mismatch, `null` when no row. **Replay beats composition** — see Gotchas. | `src/api/inventory.controller.ts:147` |
 | `appendLedgerEventInTx(tx, movement)` :242 | The in-transaction ledger passthrough — registry gate, hash chain, projection fold, advisory locks. | receiving, qc, putaway, bin-merge, pick, pack, dispatch commands (7 files) |
 | `lockSerialsInTx(tx, tenantId, serialRefs)` :252 | Pre-locks a whole serial set tenant-wide in sorted order before the first append. Deadlock avoidance — mandatory for multi-serial callers. | putaway, bin, pick commands |
 | `lockWarehouseInTx(tx, tenantId, warehouseId)` :781 | Takes the same per-warehouse advisory xact lock `appendMovement` takes, so a caller that reads stock state and then acts on it holds writers off for the whole decision. Callers own lock **order**. | `outbound/pick.command.ts` |
@@ -214,7 +245,61 @@ sequenceDiagram
   Cmd-->>C: 201 snapshot
 ```
 
-The serial arm (`adjustToSnapshot`) locks the whole serial set first, then appends N events of `QUANTITY_SCALE` each; the snapshot reports the **last** event with the bin's final on-hand — which is the mismatch recorded in `PENDING.md`.
+The serial arm (`adjustToSnapshot`) locks the whole serial set first, then appends N events of `QUANTITY_SCALE` each; the snapshot reports the **last** event with the bin's final on-hand — which is the mismatch recorded in `PENDING.md`. A **multi-serial** timeline query returns the aggregate event (`id`/`seq` null) instead of the last single event — story 5-2's retro-A4 scoping: only multi-serial responses changed shape, single-serial keeps its exact pairing.
+
+### The approval-threshold branch — pend and decide (story 5-2)
+
+With a policy row present, an adjustment whose |delta| **strictly exceeds** the threshold never reaches the ledger writes — it parks. The branch sits behind the replay lookup, after `assertAdjustableInTx`'s guard set, immediately before the ledger writes; the pend writes NO ledger event, NO on-hand/ATP change, NO handling-unit status change.
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant Ctl as inventory.controller
+  participant Cmd as StockAdjustmentCommand
+  participant PG as Postgres — tenant tx
+  participant OB as outbox_messages
+
+  C->>Ctl: POST /inventory/adjustments + Idempotency-Key
+  Ctl->>Cmd: adjust(command, key)
+  Note over Cmd: shape checks + replay + assertAdjustableInTx<br/>(the same guards as the immediate path)
+  Cmd->>PG: read policy row (no lock)
+  alt no row, or |delta| <= threshold
+    Cmd->>PG: appendMovement → projections
+    PG-->>C: 201 snapshot
+  else |delta| > threshold — STRICTLY greater
+    Cmd->>PG: INSERT stock_adjustment_pendings<br/>(resolved arms + override reason + threshold context)
+    Cmd->>OB: stock_adjustment.pending_approval (notifyRole owner)
+    Cmd->>PG: audit stock_adjustment.recorded (targetType pend)
+    Cmd->>PG: idempotency_keys ← LAST
+    PG-->>C: 202 pend snapshot
+  end
+```
+
+```mermaid
+sequenceDiagram
+  participant O as Owner
+  participant Ctl as inventory.controller
+  participant Cmd as AdjustmentApprovalCommand
+  participant PG as Postgres — tenant tx
+
+  O->>Ctl: POST .../adjustment-pendings/:id/approve|reject + Idempotency-Key
+  Ctl->>Cmd: decideAdjustment(command, key)
+  Cmd->>PG: BEGIN — assertPermission('adjustments.approve') BEFORE replay
+  Cmd->>PG: idempotency lookup (stored decision replays)
+  Cmd->>PG: pend row .for('update') — 404 unknown, 409 decided
+  alt reject
+    Cmd->>PG: conditional UPDATE status='rejected' + audit
+  else approve
+    Cmd->>Cmd: rebuild command from the STORED arms<br/>(override reason restored from the row)
+    Cmd->>Cmd: assertAdjustableInTx — the FULL guard set, re-run at decision time
+    Cmd->>PG: applyAdjustmentInTx → ledger events + projections
+    Note over Cmd,PG: a guard failing NOW (bin retired, on-hand<br/>starved, HU moved) rolls back the whole tx —<br/>the row stays pending; the 4xx names the world
+  end
+  Cmd->>PG: audit + idempotency_keys ← LAST
+  PG-->>O: 200 decision snapshot
+```
+
+The boundary to keep straight: `assertAdjustableInTx`'s guards answer 4xx **before** any pend; the **write-side** refusals — the ledger fold's `insufficient-on-hand`, serial-elsewhere, the HU write-off 409 — run **below** the branch, so a draw the fold would refuse still pends, and the decision re-runs those refusals (rollback-leaves-pending). A pend whose world has moved is rejected-able, not auto-resolved; the stale-batch/re-request operational gap is in `PENDING.md`.
 
 ### The ATP decision — deliberately split, and fail-closed
 
@@ -274,6 +359,7 @@ Guards, in order — the order is load-bearing:
 4. Idempotency lookup (`:272-290`): same key + same hash replays the snapshot with no second event; same key + different hash is 422 `idempotency-key-reuse`.
 5. Integrity: warehouse in tenant, bin in warehouse, SKU in tenant (`:295-300`) — all 404 before any write. The bin read also refuses a **retired** bin (400 `bin-retired`, `:424`) and the system **QC-hold bin** (400 `qc-bin-not-adjustable`, `:436`): an adjustment through the QC bin would drop ATP with no hold row and no release path.
 6. Only now the precision refusal and the base→milli conversion (`:311-318`), using the SKU's `uom`. Everything above that line is base units; everything below is milli-units.
+7. Story 5-2, after the full guard set (`assertAdjustableInTx`) and immediately before the ledger writes: the **threshold branch**. The policy row is read without a lock (a concurrent flip only moves the pend-vs-apply line between two correct outcomes). No row, or |delta| ≤ threshold × scale → the immediate path. |delta| **strictly greater** → insert the pend (resolved arms, `batch_override_reason`, `threshold_quantity_at_request`), audit `stock_adjustment.recorded` with `targetType stock_adjustment_pending`, outbox `stock_adjustment.pending_approval` (`notifyRole: 'owner'`), idempotency key last — and return 202. The audit row points at `firstEventId` on the immediate path, at the pend id on the pend path.
 
 Writes: the ledger event(s) + `stock_on_hand` + `batch_on_hand` + `bin_state_epochs` (all through `appendMovement`), the `outbox_messages` row, and the `idempotency_keys` row. A unique violation on the idempotency key is a 409 `conflict` telling the caller to retry and read the settled result (`:357-363`).
 
@@ -282,6 +368,15 @@ Emits: `stock.adjusted` on the outbox (`:327-346`), with `occurredAt` as **busin
 Serial movements (`adjustToSnapshot` `:485`): lock the whole serial set first (`:496-498`), then append N events of magnitude `QUANTITY_SCALE` each carrying its own `serialRef`. The snapshot reports the **last** appended event and the bin's final on-hand.
 
 Everything else that writes the ledger is a command in another module going through `appendLedgerEventInTx`: receiving (`grn.received`), QC (`qc.held`/`qc.released`), putaway (`putaway.placed`), bin merge (`bin.merged`), pick (`pick.picked`), pack (`pack.packed`), dispatch (`dispatch.dispatched`), compliance (`excursion.recorded`).
+
+### `AdjustmentApprovalCommand` (`adjustment-approval.command.ts`, story 5-2)
+
+The approval-threshold surface: `setAdjustmentPolicy`, `getAdjustmentPolicy`, `listAdjustmentPendings`, `decideAdjustment` — all reached through the facade, never imported past it.
+
+- **`setAdjustmentPolicy`** — owner-only (`adjustments.approve`, the same capability the decisions carry). Idempotent under the key; create races the per-tenant unique index (concurrent first-time PUTs: one 200, loser 409 `conflict`); update is `.for('update')` on the current row. DTO caps the threshold at `@Max(2147483647)` so it dies as a 400, not a Postgres range 500. Audits `stock_adjustment.policy_updated`.
+- **`getAdjustmentPolicy`** — a read; `null` (→ controller 404) when no row exists, which is the flow-disabled state.
+- **`listAdjustmentPendings`** — keyset cursor pagination over `(status, created_at, id)`; the cursor encodes the **full-precision** raw instant (see Gotchas). Status filter consumes `ADJUSTMENT_PENDING_STATUSES` from the schema (single-sourced with the DB CHECK).
+- **`decideAdjustment`** — copies `decideOverReceipt`'s order: authority (`adjustments.approve`, **owner-only** — 28/28 capability pin) BEFORE replay; idempotency lookup replays the stored decision; then the pend row `.for('update')` (404 unknown, 409 already-decided); approve rebuilds the command from the stored arms — `approvedOverrideReason` restored from `batch_override_reason` so the approved referenceDoc is byte-identical to the immediate path's — re-runs `assertAdjustableInTx` (arm-required parity checks included, so a SKU flagged tracked after the raise refuses here), applies through `applyAdjustmentInTx`, and stamps audit + outbox with the decision time; the terminal UPDATE is conditional on `status = 'pending'`, so a concurrent double-decide is one 409; the idempotency key is written LAST. Reject flips status with no stock write. Both arms answer 200 with an `AdjustmentDecisionSnapshot` (reject: `events: []`).
 
 ---
 
@@ -399,6 +494,7 @@ The two zero-quantity types keep both identity arms closed on purpose: they re-c
 **Outbox event types emitted from this module** (all ride the transactional outbox, AD-7 — they are not ledger events and do not touch the registry):
 
 - `stock.adjusted` — `inventory.command.ts:330`, in the command's transaction. Payload quantity is in **base** units.
+- `stock_adjustment.pending_approval` (5-2) — from the threshold branch, same transaction, `notifyRole: 'owner'`. The decision outcome itself emits nothing — the requester learns from the queue/audit (a notification gap noted in `PENDING.md`).
 - `ledger.chain_broken` — severity-1, from `verifyChain` (`ledger.service.ts:880`) and `anchorChain` (`:998`). It has no domain write to piggyback on, so it opens its own small tenant transaction, and a failure to append **propagates**: a lost chain-break alert must fail loudly.
 - `reconciliation.divergence` — from the reconcile cycle (`reconcile.ts:243`) and from a manual rebuild (`ledger.service.ts:828`, with `trigger: 'manual-rebuild'`). One alert per cycle naming every divergent scope, its projected/replayed quantities in base units, its seq range, and whether it is a repeat. A batch-arm divergence additionally names its `batchRef` (optional key, story 10.4 — payload only; repeat classification and quarantine stay (sku, bin)-keyed).
 - `reconciliation.checkpoint_invalid` — on the twice-invalid checkpoint discard (`reconcile.ts:434`).
@@ -479,3 +575,7 @@ These have all caused, or were caught one review short of causing, a real defect
 16. **Cursor payloads reach a `::uuid` / `::timestamptz` cast in SQL.** `decodeCursorSafe` (`inventory.facade.ts:185`) validates both the uuid shape and the exact canonical instant shape — `Date.parse` alone accepts far looser input — so a crafted cursor is a 400, not a 500.
 
 17. **Changing `canonicalEventBytes` or `fingerprint` breaks stored data.** The canonical byte shape is what every stored `event_hash` was computed over, and the fingerprint is what every stored idempotency key was hashed with. Story 10.2 moved unit conversion behind the replay lookup and thereby changed the fingerprint; that break was taken deliberately under the pre-launch premise and is pinned as EXPECTED by the cross-version replay guard in `test/picking.spec.ts` (`inventory.command.ts:143-152`). There is no compatibility branch. Do not change either function without an equivalent decision and an equivalent pin.
+
+18. **The write-side refusals sit BELOW the threshold branch.** `assertAdjustableInTx` checks identity, arms and shape — but the ledger fold's `insufficient-on-hand`, serial-elsewhere and the HU write-off 409 all run in `applyAdjustmentInTx`, below the branch. So an over-threshold draw beyond on-hand **pends (202)** where the same at-threshold request gets the fold's 422 — pinned by a boundary test. The decision re-runs the write-side refusals; their rollback leaves the row pending (rollback-leaves-pending). Comments or specs claiming "only an adjustment that would have applied can pend" are wrong about this half — only the command-tier guards answer before the pend. `inventory.command.ts` threshold-branch comment.
+
+19. **Keyset cursors encode the FULL-precision instant, not `canonicalInstant`'s.** Postgres holds timestamptz to microseconds while `canonicalInstant` truncates to ms via JS `Date` — and rows appended in ONE transaction share one `now()` to the microsecond (a multi-serial adjustment appends its per-serial events in a single transaction), so a ms-truncated cursor's strict `<` predicate skipped the whole tail of the tie group on the next page. The ledger-timeline and pending-queue reads select the raw `::text` instant in a second pass and encode cursors from `fullPrecisionInstant` (`src/shared/primitives/time.ts`); responses still surface the ms-canonical instant. A regression back to canonical cursors is silent until a tie group spans a page boundary.

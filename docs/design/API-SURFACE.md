@@ -63,7 +63,12 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 | Method | Path | Capability | Notes |
 |---|---|---|---|
-| POST | `/tenants/{t}/inventory/adjustments` | `stock.adjust` | The first ledger-movement producer. Serial-tracked SKUs need one serial per unit. A kit SKU is refused sign-agnostically → `409 kit-cannot-hold-stock` (11.4) |
+| POST | `/tenants/{t}/inventory/adjustments` | `stock.adjust` | The first ledger-movement producer. Serial-tracked SKUs need one serial per unit. A kit SKU is refused sign-agnostically → `409 kit-cannot-hold-stock` (11.4). **5-2:** over a tenant approval threshold the same request answers **202** with the pend snapshot (no ledger event, no on-hand change) — the status is dynamic (201/202) |
+| PUT | `/tenants/{t}/inventory/adjustment-policies` | `adjustments.approve` | **5-2.** Sets the tenant's threshold (FR-19); |delta| strictly exceeding it pends. `Idempotency-Key`; concurrent first-time PUTs → one 200, loser `409 conflict`; threshold > int4 → 400 (`@Max`). Owner-only — the write rides the decisions' capability |
+| GET | `/tenants/{t}/inventory/adjustment-policies` | — | **5-2.** The policy row; **404 `not-found`** when none exists — the flow is disabled and every adjustment applies immediately |
+| GET | `/tenants/{t}/inventory/adjustment-pendings` | — | **5-2.** The approval queue — keyset cursor pagination, newest first, `?status=pending\|approved\|rejected`; a read, never capability-gated |
+| POST | `.../inventory/adjustment-pendings/{pendingId}/approve` | `adjustments.approve` | **5-2.** Owner-only decision. Re-executes the stored arms through the full guard set; a moved world (bin retired, on-hand starved, HU moved) rolls back the whole tx → the guard's 400/409/422 verbatim, row stays `pending`. Unknown → `404`; already decided → `409`; non-owner → `403 role-denied`. `Idempotency-Key`; replay re-serves the stored decision |
+| POST | `.../inventory/adjustment-pendings/{pendingId}/reject` | `adjustments.approve` | **5-2.** The same contract, reject arm — status flip only, `events: []`, no stock write |
 | GET | `/tenants/{t}/warehouses/{w}/inventory/events` | — | The ledger timeline, keyset |
 | GET | `.../inventory/stock` | — | Derived on-hand by bin/SKU |
 | GET | `.../inventory/batches` | — | Batch balances |

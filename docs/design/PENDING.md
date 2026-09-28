@@ -3,7 +3,7 @@
 **Everything known-but-not-done, grouped by the module that owns it.** Check your module's section before writing a story against it — several of these are already-diagnosed defects with the fix identified, and picking one up alongside related work is cheaper than a separate story.
 
 Two sources, both authoritative:
-- **`_bmad-output/implementation-artifacts/deferred-work.md`** — **65 entries.** Findings from story reviews that were real but out of that story's scope
+- **`_bmad-output/implementation-artifacts/deferred-work.md`** — **117 entries.** Findings from story reviews that were real but out of that story's scope
 - **`_bmad-output/implementation-artifacts/sprint-status.yaml` → `action_items`** — **33 open.** Epic retrospective commitments
 
 ---
@@ -12,7 +12,7 @@ Two sources, both authoritative:
 
 | Item | Why it matters | Source |
 |---|---|---|
-| **Keyset cursor truncates to milliseconds** against microsecond `created_at`, so same-millisecond rows at a page boundary are **silently skipped** | Affects every `buildPage(rows.map(toView))` site in the repo. A real correctness bug in pagination, not cosmetic | epic-2 retro a1 |
+| **Keyset cursor truncates to milliseconds** against microsecond `created_at`, so same-millisecond rows at a page boundary are **silently skipped** | Affects every `buildPage(rows.map(toView))` site in the repo. A real correctness bug in pagination, not cosmetic. **5-2 repaired the two inventory cursors** (ledger timeline + pending queue) — they now encode from the raw `::text` instant via the shared primitive `fullPrecisionInstant` (`src/shared/primitives/time.ts`); every other `buildPage` site still truncates and can adopt the same primitive when next touched | epic-2 retro a1 |
 | **`decodeCursorSafe`/clamp guards are copy-pasted**, not a shared primitive | Six copies of the same UUID regex; the next one to drift is a 500 instead of a 400 | epic-1 retro item 6 |
 | **Idempotency scaffolding is duplicated verbatim across nine command files** | `writeIdempotencyKey` ×5, the replay block hand-inlined everywhere. A shared helper is its own change | 4-6 review, epic-3 retro a8 |
 | **`unavailable` means two different things** — a real stockout and a fail-closed Valkey outage | Epic 7's channel consumers will branch on it. Needs its own machine code before they do | epic-2 retro a8 |
@@ -24,8 +24,12 @@ Two sources, both authoritative:
 
 - **Grant ceiling vs concurrent adjustment race** — the module header claims "never oversells"; the actual guarantee is narrower. Either re-validate committed on-hand after the Valkey win, or weaken the claim *(epic-2 retro a2)*
 - **Reconciliation starvation** — never-checkpointed partitions are not re-queued on failure, and no periodic full pass exists, so the bounded-scan escape hatch is unreachable *(epic-2 retro a6)*
-- **Multi-serial adjustment response snapshot mismatch** — the last per-unit event id/seq is paired with the aggregate delta, in both the response and the outbox payload *(epic-2 retro a4)*
 - **Verification gaps**: `exportDigest`'s three refusal arms, `anchorChain`'s empty-ledger arm and concurrent-anchor case, outbox ack-delete failure injection, the reconcile failure stamp, `parseLastDivergences` malformed entries *(epic-2 retro a7)*
+- **No withdraw/cancel verb or TTL for abandoned adjustment pends** — a pend raised in error lives until an owner rejects it; the frozen 5-2 intent settles the flow as pending→decide with exactly two outcomes *(5-2 review, deferred-work)*
+- **A pend whose FEFO-resolved batch is consumed before approval always 422s** — reject-and-re-raise is the only recourse; re-request/re-resolve belongs to the 5-4/5-5 consolidated review-queue UX *(5-2 review, deferred-work)*
+- **The approval-threshold flow cannot be disabled via the API** — PUT requires a non-null threshold and no DELETE/nulling verb exists, so disable is SQL-only; the absent row is the disable mechanism *(5-2 review, deferred-work)*
+- **Approve/reject carries no decision note, and the requester is never notified of the outcome** — the decide command records status/decider stamps only, and the outbox notifies the owner at pend creation but nothing answers the requester; both are 5-4/5-5 queue-UX wants *(5-2 review, deferred-work)*
+- **`fullPrecisionInstant` discards non-UTC offsets** — it matches and then drops any non-UTC offset in the raw instant, emitting Z; harmless while deployments run UTC session TZ (none pin it in config), a cursor-ordering hazard if one ever doesn't *(5-2 review, deferred-work)*
 - **Blocked batch status is unenforced on the draw side** — the FEFO draw does not consult batch status *(epic-2 retro a13)*
 - **Typed-error hardening**: `ttlSeconds: 0` should be a 400; `verifyChain` range input is unvalidated; the int4 ceiling overflow should be a typed 422 *(epic-2 retro a14)*
 - **Shared test bootstrap + lock-key registry** — the nine-suite deployment-parity block wants extracting; advisory keys want one registry *(epic-2 retro a10)*

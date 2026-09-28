@@ -456,3 +456,22 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-1-transfer-orders.md`
   summary: Web `/moves` transfers surface (list + create + detail + confirm) deferred from story 5-1 to a follow-up FE story.
   evidence: 5-1's epic ACs name no web surface; the backend-first ordering (4-6b→4-6d precedent) lands BE + mobile first. The FE surface needs the capability mirror, a referenceDoc-filtered or detail-embedded ledger-legs view, and regen after the BE routes exist.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
+  summary: No withdraw/cancel verb or TTL exists for abandoned adjustment pends — a pending row created in error lives until an owner rejects it.
+  evidence: Blind-hunter finding verified against the frozen intent, which settles the flow as pending→decide with exactly two outcomes; the operational gap is real but adding a third terminal path is beyond this story's intent. Candidate PENDING.md entry alongside the over-receipt flow, which has the same shape.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
+  summary: A pend whose FEFO-resolved batch is consumed before approval re-executes against the stale batch and 422s — the only recourse is reject and re-raise; no re-request/re-resolve flow exists.
+  evidence: Designed behavior (rollback-leaves-pending is the frozen boundary and the stored-arms re-execution is the human-approved decision), but a real operational dead-end for approvers; surface it in the 5-4/5-5 consolidated review queue UX rather than adding an API arm now.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
+  summary: The approval-threshold flow cannot be disabled via the API — PUT requires a non-null threshold and there is no DELETE/nulling verb, so disable is SQL-only (triage #23/#44/#54).
+  evidence: Verified — `stock_adjustment_policies.quantity_threshold` is nullable and its CHECK admits null, but the PUT DTO requires non-null and no other write path exists; the frozen I/O note names the ABSENT row as the disable mechanism. An ops-grade disable verb (DELETE or PUT null) is a follow-up surface for the 5-4/5-5 queue UX story.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
+  summary: Approve/reject carries no decision note — the decide command records status/decided_by/decided_at only (triage #24).
+  evidence: Verified against the frozen decision contract (exactly two outcomes, no note channel). A note field is a queue-UX want for 5-4/5-5; adding one now would touch the decision command, DTO and audit row for no current consumer.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
+  summary: The requester is never notified of the decision outcome — the outbox notifies the owner at pend creation only; the decide path writes audit + terminal status with no outcome outbox row (triage #25).
+  evidence: Verified at the decide command (no outbox insert on either terminal arm). Notification plumbing for the requester belongs with the 5-4/5-5 review-queue UX, beside the row-16 re-request defer.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
+  summary: `fullPrecisionInstant` (src/shared/primitives/time.ts) matches and then DISCARDS any non-UTC offset in the raw `::text` instant, emitting a Z-suffix — if a deployment ever ran a non-UTC session TZ, keyset cursors would misorder pages (triage #49).
+  evidence: Verified by regex read and a repo-wide grep finding no session-TZ pinning in the db config. Harm requires a non-UTC deployment TZ (unconfirmed); when the primitive is next touched, either pin the session TZ at the pool level or parse the offset into the comparison.
