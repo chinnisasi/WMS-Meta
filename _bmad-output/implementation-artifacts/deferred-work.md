@@ -475,3 +475,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-2-stock-adjustments-with-approval-thresholds.md`
   summary: `fullPrecisionInstant` (src/shared/primitives/time.ts) matches and then DISCARDS any non-UTC offset in the raw `::text` instant, emitting a Z-suffix — if a deployment ever ran a non-UTC session TZ, keyset cursors would misorder pages (triage #49).
   evidence: Verified by regex read and a repo-wide grep finding no session-TZ pinning in the db config. Harm requires a non-UTC deployment TZ (unconfirmed); when the primitive is next touched, either pin the session TZ at the pool level or parse the offset into the comparison.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-3-cycle-count-scheduling-and-execution.md`
+  summary: No index support for the per-class scheduler scan (no `skus (tenant_id, abc_class)` index in 0045) and `count_variances` lacks a `task_id` index (review triage BH-15).
+  evidence: Verified — migration 0045 adds neither index. The scheduler scan is less costly than the review claimed (the join drives off warehouse-scoped stock_on_hand rows, not full sku scans), but the `count_variances.task_id` index IS needed: 5-4's resolution surface and the submit/recount arms look variance rows up by task. Add both indexes in the next movements migration (5-4's) rather than touching the landed 0045.

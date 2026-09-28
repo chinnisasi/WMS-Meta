@@ -1,12 +1,12 @@
 # Movements module
 
-> Stock that MOVES by plan: transfer orders (the two-leg ledger legs), and later stock adjustments with approval thresholds, cycle counts and variance review. The last spine module to be populated — story 5-1 (FR-18/FR-29) gave it its first citizen.
+> Stock that MOVES by plan: transfer orders (the two-leg ledger legs), cycle counts (stored observational tasks over a frozen bin state), and later stock adjustments with approval thresholds and variance review. The last spine module to be populated — story 5-1 (FR-18/FR-29) gave it its first citizen.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton is followed closely here and is not repeated.
 
 **The module's one idea:** every planned stock movement is a pair of ledger legs, not a field on a row. The stock never "leaves the system" between the legs — it parks, physically and visibly, in a system-owned IN-TRANSIT bin, so the serial-in-exactly-one-bin invariant survives unbroken and ATP exclusion falls out of a bin-code predicate rather than a state flag.
 
-This doc covers the transfer-orders slice (story 5-1). Stock adjustments (5-2), cycle counts (5-3), variance review (5-4) and the human review queue (5-5) grow here.
+This doc covers the transfer-orders slice (story 5-1) and the cycle-count slice (story 5-3). Stock adjustments (5-2), variance review (5-4) and the human review queue (5-5) grow here.
 
 ---
 
@@ -16,8 +16,12 @@ This doc covers the transfer-orders slice (story 5-1). Stock adjustments (5-2), 
 |---|---|---|
 | `transfer_orders` (`src/shared/db/schema.ts`) | One row per transfer: `source_warehouse_id`, `dest_warehouse_id`, `status`, `note`, `created_by`, plus the per-transition stamps (`outbound_confirmed_by/at`, `inbound_confirmed_by/at`, `cancelled_by/at`) | See below |
 | `transfer_order_lines` | One row per line: `sku_id`, `quantity_milli`, `from_bin_id`, `to_bin_id` (the PLANNED dest bin — the scanned bin at confirm is authoritative), `batch_ref`, `note` | Line qty positive (CHECK); a line is immutable after create |
+| `count_policies` (**5-3**) | One row per (tenant, warehouse, abcClass): `interval_days` — the ABC schedule the worker generates due tasks from | Unique on `(tenant, warehouse, abc_class)` (CHECK); upsert semantics, no delete verb yet |
+| `count_tasks` (**5-3**) | One row per count: `warehouse_id`, `bin_id`, `status` (`pending \| completed`), `origin` (`on_demand \| scheduled \| recount`), `bin_state_epoch` (nullable bigint — FROZEN at task start), `created_by` (null = the scheduler), `completed_by/at` | One OPEN task per bin (SELECT-then-INSERT under the tenant advisory lock); a system-owned bin is NEVER countable |
+| `count_task_lines` (**5-3**) | One row per expected SKU: `sku_id`, `expected_quantity_milli`, `counted_quantity_milli` (null = not yet counted) | Expected is the bin state **at task start**, never recomputed; `expected/counted ≥ 0` (CHECK) |
+| `count_variances` (**5-3**) | One row per differing SKU at submit: `task_id`, `sku_id`, `expected/counted/delta` (delta CHECK = counted − expected), `epoch_conflict` bool, `status` (`open` in 5-3 — 5-4 owns the later states) | Written at submit and never updated by 5-3; variance is SKU-level (no batch/serial detail) |
 
-CHECKs and RLS live only in `drizzle/0043_transfer_orders.sql`:
+CHECKs and RLS live only in `drizzle/0043_transfer_orders.sql` (transfers) and `drizzle/0045_cycle_counts.sql` (counts — fail-fast `to_regclass` guard, CHECKs, RLS for all four count tables, `skus.abc_class` additive column via the same migration):
 
 - `transfer_orders_status_check` — `draft | in_transit | completed | cancelled` (the three-layer vocabulary: TS tuple + CHECK + `@IsIn`).
 - `transfer_order_lines_quantity_check` — `quantity_milli > 0`.
@@ -47,7 +51,9 @@ A system-owned **IN-TRANSIT bin per warehouse** (zone `IN-TRANSIT`, bin `IN-TRAN
 
 `MovementsModule` imports `InventoryModule` + `TenancyModule` and exports `MovementsFacade` **alone**; `test/architecture.spec.ts` has the movements block (the facade allowlist covers the `transfer.facade` specifier). The api shell composes `getTransferTasks` into the device catalog snapshot (`receiving.controller.ts` — the sanctioned cross-module join pattern).
 
-`MovementsFacade` (`src/modules/movements/transfer.facade.ts`) carries: `createTransfer`, `confirmOutbound`, `confirmInbound`, `cancelTransfer`, `listTransfers` (keyset on `(createdAt, id)`), `getTransfer` (detail with BOTH legs' events), and `getTransferTasksInTx` — the device snapshot's derived task read (no task table; the putaway precedent): in-transit transfers destined to the warehouse, over-read `MAX_SNAPSHOT_TRANSFER_TASKS + 1` then sliced, each task line quoting the planned dest bin's `binStateEpoch` captured **on the same tx as the task** (the pick precedent — a stale quote is how the server LEARNS the bin moved).
+`MovementsFacade` (`src/modules/movements/transfer.facade.ts`) carries: `createTransfer`, `confirmOutbound`, `confirmInbound`, `cancelTransfer`, `listTransfers` (keyset on `(createdAt, id)`), `getTransfer` (detail with BOTH legs' events), `getTransferTasksInTx` — the device snapshot's derived task read (no task table; the putaway precedent): in-transit transfers destined to the warehouse, over-read `MAX_SNAPSHOT_TRANSFER_TASKS + 1` then sliced, each task line quoting the planned dest bin's `binStateEpoch` captured **on the same tx as the task** (the pick precedent — a stale quote is how the server LEARNS the bin moved) — and `getCountTasksInTx` (**5-3**, `count.command.ts`'s service + `count.dto.ts`): the snapshot's **stored** count-task feed — the movements module's first stored task table. Pending tasks for the warehouse, oldest first, `MAX_SNAPSHOT_COUNT_TASKS + 1` over-read then sliced; the over-read row IS the truncation signal and emits a `logger.warn` naming tenant + warehouse (5-1's computed-then-dropped signal is the anti-shape). Each card quotes the task row's frozen `binStateEpoch`, never a live re-read.
+
+The scheduler worker (`CountSchedulerWorker` in `src/jobs/jobs.module.ts`, the `ReservationReaper` shell: parse-env `COUNT_SCHEDULER_POLL_MS`, unset/0 = OFF, `unref?.()`, single-flight running flag, shutdown clear) enumerates `select distinct on (tenant_id, warehouse_id) … from count_policies` and drives `generateScheduledTasksInTx` in one tenant transaction per scope — direct domain writes + outbox events, no HTTP command layer (the reaper precedent).
 
 ---
 
@@ -84,6 +90,24 @@ sequenceDiagram
     Note over SRC,DST: any refusal mid-confirm rolls back BOTH chains
 ```
 
+### Cycle count (5-3)
+
+```mermaid
+sequenceDiagram
+    participant W as Worker (CountSchedulerWorker)
+    participant C as CountService
+    participant I as InventoryFacade (PROJECTION_OWNER)
+    participant D as Device (counts.execute, badge-in)
+    W->>C: generateScheduledTasksInTx (per tenant+warehouse scope)
+    C->>I: stockedBinIdsForAbcClassInTx (per-class candidates)
+    C->>I: stockArmsInBinsInTx + binStateEpochsInTx (expected FROZEN)
+    Note over C: storage bins only — system bins post-filtered; open-task recheck under locks
+    D->>C: submitCount (one op per task)
+    C->>C: epoch compare EQUALITY under locks (null matches)
+    Note over C: differing lines → variance rows (open); mismatch → epochConflict + fresh recount task, same tx
+    Note over C: NEVER a stock/ledger write — resolution is 5-4
+```
+
 ---
 
 ## Commands
@@ -110,6 +134,22 @@ Gate refusals answer **409** with the gate's own machine code (order stays in_tr
 
 Draft-only: `.for('update')` + status check → `409 transfer-wrong-state` for anything else. No stock effect, no ledger events — a draft moves nothing. Outbox `transfer.cancelled` + audit.
 
+### `createCount` (counts.manage — 5-3)
+
+Guards, in order: body shape → warehouse exists (404) → bin read (404 unknown bin) → **system-owned bin refused 400 `validation-failed`** (Receiving/QC-hold/In-Transit are moved by their own commands — counts target storage bins only; the transfer command's source-bin gate, mirrored) → warehouse advisory lock LAST → open-task-per-bin probe under the lock (409 `count-task-open`) → expected arms read through `InventoryFacade.stockArmsInBinsInTx` (positive rows only, the PROJECTION_OWNER seam — movements never projects stock tables) + `binStateEpochInTx` frozen verbatim (`null` freezes null) → task `pending` + per-SKU lines → outbox `count.created` + audit → idempotency key last (hash mismatch → `422 idempotency-key-reuse`).
+
+### `submitCount` (counts.execute — the floor verb; `AnySessionGuard` on the route)
+
+The mobile op's transport (badge-in required on the device arm; actor = device badge session). Guard order: task `.for('update')` + wrong-state → 409 `count-task-completed` → duplicate skuId on two lines → 400; unknown/foreign skuId → 404 (no phantom line written); any line without `countedQuantity` → 400 `count-incomplete` (0 is valid only explicitly entered) → bin row + warehouse advisory locks (canonical order) → **epoch compare under the locks, EQUALITY, `null` matches** → beyond-task SKUs append lines with expected 0 → differing lines write one `open` variance row per SKU (delta = counted − expected); mismatch rows carry `epochConflict: true` AND **auto-create a fresh recount task for the bin in the same tx** (origin `recount`, `createdBy` null, bounded by the open-task-per-bin rule) → task `completed` + stamps → audit → idempotency key last. **Counts NEVER write stock or ledger** — the variance record is the only output; resolution is 5-4.
+
+### `upsertCountPolicies` (counts.manage — 5-3)
+
+Takes the same tenant-scoped warehouse advisory lock the count commands take (a policy write serializes against in-flight ticks). UPDATE-then-INSERT per named row: a class written twice in one body is upsert semantics (the second UPDATE sees the first INSERT — last interval wins, no deterministic 409); the 409 arm is reserved for the unique-violation race loser. No delete verb yet (unschedule is deferred admin surface). Idempotency-aware like every mutating endpoint.
+
+### `generateScheduledTasksInTx` (the scheduler worker — 5-3)
+
+Per (tenant, warehouse) scope, one tenant transaction: policy rows read PRE-lock (policy writes serialize on the same warehouse advisory lock, so a flip lands before or after the whole tick, never inside it) → per-class candidate scan through `InventoryFacade.stockedBinIdsForAbcClassInTx` (distinct positive-quantity bins holding SKUs of the class) → due-bins probe (no open task, not counted within the interval — a bin holding a mix of classes counts under the SHORTEST effective interval) → bin rows `.for('update')` + **system-owned bins post-filtered out** (system bins hold classed SKUs' on-hand rows; without the filter every tick mints a recurring task for a bin mid-way through its own movement) → warehouse advisory lock → open-task recheck under the lock → mint `scheduled` tasks (`createdBy` null = system actor) with frozen expecteds + epochs → outbox `count.created` per task. Whole tick rolls back on partial failure and retries next interval.
+
 ---
 
 ## Invariants
@@ -120,6 +160,9 @@ Draft-only: `.for('update')` + status check → `409 transfer-wrong-state` for a
 4. **Cross-warehouse inbound is atomic across chains** — one tx, drain + intake, lock order sorted; a refusal rolls back both.
 5. **Lines are immutable after create** — corrections are new compensating orders (Decision 3: no in-transit cancellation; draft-only cancel).
 6. **The IN-TRANSIT bin has exactly one writer** — the transfer legs; every other writer (adjust, placement intake) is refused on system bins.
+7. **A count never writes stock or ledger** (5-3) — the variance row is the only output; `open` is the whole variance vocabulary in 5-3, and no code path updates a variance row afterwards (5-4 owns resolution).
+8. **A system-owned bin is never countable** (5-3) — refused on demand, post-filtered in the scheduler. In-transit/QC-hold bins hold classed SKUs' on-hand rows by design, so the candidate scan WOULD shortlist them every tick; the exclusion is the difference between counting the shelf and counting traffic.
+9. **Expected is frozen at task start; the epoch compare is EQUALITY under the locks, `null` matches `null`** (5-3) — a pristine bin's null epoch freezes null verbatim and matches null at submit; a live non-null epoch against a frozen null is a conflict (OQ-2), not a pass.
 
 ---
 
@@ -128,6 +171,7 @@ Draft-only: `.for('update')` + status check → `409 transfer-wrong-state` for a
 - **Ledger chain events**: `transfer.outbound` (source chain, per arm), `transfer.inbound` (dest chain, per arm; cross-warehouse also writes the drain arm on the SOURCE chain with `toBinId` null). Additive registration in `ledger-registry.ts` with the `transfer` reference-doc arm.
 - **Outbox lifecycle events**: `transfer.created`, `transfer.outbound-confirmed`, `transfer.inbound-confirmed`, `transfer.cancelled`.
 - **Vocabulary cost**: the story grew the capability vocabulary 25 → 27 (`transfers.manage`, `transfers.execute`) and the RLS policy count 46 → 48 — the pinned counts in `test/users.spec.ts` / `test/client-isolation.spec.ts` carry the story reference.
+- **5-3's count events**: outbox lifecycle events `count.created` (all three origins); the ledger has NO count events — counts are observational. Vocabulary cost 28 → 30 (`counts.manage`, `counts.execute`) and RLS policy count 50 → 54 (the four count tables).
 
 ---
 
@@ -141,4 +185,7 @@ Each of these caused or nearly caused a real defect in 5-1's review; they are th
 4. **The placement gates repeat create/outbound-time guards at inbound confirm.** SKU facts (kit, catch-weight) can flip between the confirms; the inbound write is the one that lands unrepresentable stock.
 5. **Both system bins are lazy-ensured at first use — nothing is seeded at warehouse creation.** Do not "fix" this by adding call sites; the QC-hold precedent is the pattern, and a user bin squatting the `IN-TRANSIT` code throws typed `409 transfer-in-transit-bin-conflict` with the remediation in the message.
 6. **Gate refusals are 409 here, 400 on putaway's surface — deliberately.** Same codes, different surface semantics: a placement refusal during a confirm is a conflict with another writer's state, not a malformed request.
+7. **The scheduler's candidate scan reads the stock projection — so it shortlists system bins unless explicitly excluded** (5-3's review round 1, a real defect caught before merge): in-transit/QC-hold bins hold classed SKUs' on-hand rows by design (gotcha 8's reason), and without the `systemOwned` post-filter every tick minted a recurring count task for a bin whose own commands were mid-way through moving that stock. Any future "derive work from stock rows" worker must exclude system bins at the source.
+8. **The truncation signal must be surfaced, not computed-then-dropped** (5-3: the `getCountTasksInTx` over-read emits `logger.warn` naming tenant + warehouse) — 5-1's shape (compute the boolean, drop it) is the anti-pattern the spec's Code Map names.
+9. **Count policies are UPSERT, not replace** (5-3): the PUT names rows to write, never the full set — a class written twice is last-write-wins, and an absent class is untouched (no delete verb yet; deferred admin surface).
 7. **Parked units are subtracted in `committedCeiling`, not just reported in `atp()`** — a grant validates against the ceiling; an exclusion that lives only in the read model oversells the source warehouse.
