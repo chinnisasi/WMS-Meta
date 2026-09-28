@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-28-2026 15:15
+last_updated: 09-28-2026 15:45
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -120,7 +120,7 @@ development_status:
   # registry names Delhivery, Blue Dart and Ecom Express; Shiprocket is
   # excluded as an aggregator whose shape differs in kind.
   4-6b-carrier-substrate-credentials-and-adapter-port: done
-  4-6c-labels-manifests-and-tracking-writeback: review
+  4-6c-labels-manifests-and-tracking-writeback: done
   # Split out of 4-6b (2026-09-16). Blocked on an address model, not
   # merely sequenced after the substrate — see deferred-work.md.
   4-6d-carrier-rate-shopping: backlog
