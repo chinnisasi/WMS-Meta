@@ -420,3 +420,30 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-2d-outbound-pack-and-dispatch-surface.md`
   summary: The FE pack-bench bound constants (`MAX_WEIGHT_GRAMS`, `MAX_DIMENSION_MM`, `MIN_SCAN_QTY`) mirror backend decorators by comment only — no check fails when the backend's bounds change.
   evidence: Verified first-hand that the values match today (pack.command.ts:72/74, outbound.dto.ts:978) and that the generated client carries no min/max metadata; a backend tightening or loosening diverges silently (operators falsely refused, or guaranteed-400 round trips). Settled by a drift-guard script comparing the FE constants against the BE decorators, same shape as `check-capability-mirror.ts`.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: The sandbox adapter registers unconditionally — production tenants see "Sandbox Express" in the carriers catalogue and connection picker with no flag or gate distinguishing hash-issued tracking from a real carrier's (triage #2).
+  evidence: Verified at carrier-registry.ts:174. The frozen spec deliberately classes the sandbox with envelope.ts/LoggingEventBus as a documented stand-in; whether it is env-gated for production is a product decision for 4-6d's design, where real API credentials arrive.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: The adapter label call runs inside the held transaction while the order row is locked — safe for the in-process sandbox arm, but 4-6d's real HTTP transports must not inherit a network round-trip inside a lock-holding transaction (triage #3/#18).
+  evidence: Verified at shipment.command.ts:248. Deliberate for the sandbox arm (no I/O); 4-6d's design needs the label arm pulled out of the held tx (or a Promise.race timeout guard) before real carriers land.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: Auto-stamped carrier/tracking bypass the MAX_*_LENGTH assertText checks free text is subject to — a real-carrier adapter emitting an over-long tracking enters the ledger where free text is refused (triage #15).
+  evidence: Verified — stamped values consumed at dispatch.command.ts:368-369/:460-461 with no length check. Unreachable with the sandbox (bounded deterministic values); clamp at stamp time in 4-6d.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: The dispatch auto-stamp shipment read is unlocked — a concurrent manifest flipping the shipment to manifested between read and ledger append double-records the hand-over (triage #17).
+  evidence: Verified shape at dispatch.command.ts:275-288. Narrow race (dispatch and manifest on one order concurrently, different capabilities), harmless with the sandbox; lock the read (for('update')) in 4-6d when real transports land.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: `createdBy`/`labelledBy` render as raw uuids on the pack & dispatch surface; the fixtures hide it by using email-like strings (triage #7).
+  evidence: Verified — bare uuid columns, no user join anywhere in the BE, and real renders will show uuid strings. Same already-shipped 4-2d pattern for actor fields; user-name resolution is a system-wide concern, its own change.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: `useLabelledShipments` issues one GET per ready_to_dispatch order per render (25+ at default page size), ungated by canLabel, refiring on every OUTBOUND_CHANGED_EVENT; each expanded row re-reads its own shipment (triage #9/#24).
+  evidence: Verified. Correctness holds (allSettled absorbs failures; point lookups are cheap); the per-order-read choice is the spec's stated rationale for not shipping a list-shipments route. A batched shipments-by-orders route or capability gating is follow-up work.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: The manifests pager is one-way — no UI path back to the newest page after paging older, and OUTBOUND_CHANGED refetches re-run against the stale active cursor, so a manifest created after paging is invisible until reload (triage #14).
+  evidence: Verified at use-outbound-labels.ts:207-259. UX hardening (head-reset on refetch / a "back to newest" affordance); the list is page-scoped and short in practice.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: `useCarrierConnections` walks keyset pages in an unbounded `for(;;)` — a server that keeps returning a non-null cursor hangs the picker indefinitely (triage #23/#31).
+  evidence: Verified at use-outbound-labels.ts:74-86. Backend keyset cursors terminate by construction, so the loop is unreachable today; a page cap is defensive hardening, pre-existing in shape across the repo's walkers.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
+  summary: The manifest command validates/normalizes shipmentIds BEFORE the transaction and replay — a same-key retry with a malformed body 400s instead of replaying, unlike shipment.command's deliberate validation-after-replay for measurements (triage #19).
+  evidence: Verified: manifest.command.ts:111 normalizes before the tx, shipment.command.ts:177-180 validates after replay with the stated rationale. Structurally required today (the sorted collapsed set IS the payload-hash input, unlike label's raw measurements); harm needs a direct API caller retrying a committed manifest with a malformed body. Document the divergence or align in a consistency pass.
