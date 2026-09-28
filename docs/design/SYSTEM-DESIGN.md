@@ -53,13 +53,14 @@ HTTP → Controller (api shell)  ── thin: auth guard, tenant match, DTO vali
 
 ## Modules (AD-6)
 
-Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.**
+Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.** The 3PL client dimension (Epic 21, story 21-1) adds the fourteenth: `clients`, whose table is written by the other stamping modules only through `ensureSelfClientInTx`.
 
-`test/architecture.spec.ts` scans source for writes and past-the-facade imports, but **it covers three module table-sets, not thirteen**: stock/ledger, order/wave/pick, and carrier — plus one `int4` guard. **`tenancy`, `catalog`, `inbound` and `putaway` table ownership is unenforced**, and `bins` — the one table deliberately shared by column between tenancy and putaway — is the least-guarded case of all. Adding a module block when you add a module is the standing rule; four modules predate it.
+`test/architecture.spec.ts` scans source for writes and past-the-facade imports, but **it covers four module table-sets, not fourteen**: stock/ledger, order/wave/pick, carrier, and (21-1) clients — plus one `int4` guard. **`tenancy`, `catalog`, `inbound` and `putaway` table ownership is unenforced**, and `bins` — the one table deliberately shared by column between tenancy and putaway — is the least-guarded case of all. Adding a module block when you add a module is the standing rule; four modules predate it.
 
 | Module | Owns |
 |---|---|
 | `tenancy` | tenants, users, roles, warehouses, zones, bins, devices |
+| `clients` | the client dimension (AD-23): the `self` client per tenant, `client_id` on `skus`/`orders`/`purchase_orders`/`ledger_events` — 21-1 |
 | `catalog` | SKUs, batches, serials, UoM vocabulary |
 | `inventory` | **the ledger**, projections, reservations, ATP, reconciliation |
 | `inbound` | purchase orders, receiving, GRNs, QC holds |
