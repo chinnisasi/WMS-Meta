@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-28-2026
+last_updated: 09-28-2026 08:53
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -233,7 +233,7 @@ development_status:
   # The sub-500ms on-device conformance refusal — a refusal the floor never
   # sees is a cold-chain break the backend correctly prevented.
   12-8-mobile-conformance-refusal-and-excursions: done
-  epic-12-retrospective: optional
+  epic-12-retrospective: done
 
   epic-13: backlog
   13-1-return-authorization: backlog
@@ -669,7 +669,7 @@ action_items:
     action: "Keep the retrospective at every epic boundary — epics 4-10 ran none;
       record and resume here"
     owner: ""
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
   - id: "epic-11-retro-a9-fe-shared-catalog-fetch"
     epic: 11
@@ -685,3 +685,79 @@ action_items:
     owner: ""
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-11-retro-2026-09-22.md"
+  - id: "epic-12-retro-a1-record-refused-secure-excursions"
+    epic: 12
+    action: "H1: when the hold core refuses an excursion (secure gate or any hold
+      failure), leave a compliance trace — record the excursion + refused-hold marker
+      or a compensating audit row instead of rolling back to nothing; add the replay-side
+      UX arm"
+    owner: "wms-be"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a2-cold-chain-dwell-and-tests"
+    epic: 12
+    action: "Fix dwell-window merge across visit gaps (cold-chain.facade.ts) and add
+      the untested dedup and inverted-dwell clamp branches"
+    owner: "wms-be"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a3-occurred-at-bound-and-hold-snapshot"
+    epic: 12
+    action: "Bound occurredAt plausibility vs server time; document the hold-quantity-snapshot
+      gap for stock arriving into held scopes as a PENDING compliance entry beside
+      the stock.adjust bypass"
+    owner: "wms-be"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a4-mobile-compliance-smalls"
+    epic: 12
+    action: "Comma normalization corrupts decimal-comma readings (compliance/draft.ts),
+      excursion-capture tenantId ??  unroutable op, revoked-device-replay arm + test"
+    owner: "wms-mobile"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a5-fe-quarantine-badge-and-picker"
+    epic: 12
+    action: "Record (or ship) the UX-DR30 quarantine-badge narrowing in PENDING; drift-guard
+      the hardcoded hazard picker against the matrix endpoint"
+    owner: "wms-fe"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a6-mechanical-mirror-guard-epic12"
+    epic: 12
+    action: "Extend the architecture.spec mirror-reflection pattern to compliance
+      (snapshot/api.ts/vocabulary mirrors) so a cross-repo field addition fails a
+      test instead of costing 5 BE files + 3 repos by hand"
+    owner: "wms-be"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a7-test-infra-compliance-coverage"
+    epic: 12
+    action: "architecture.spec compliance coverage (currently zero); mobile component/screen
+      test convention (the instrument 12-8 T8 lacked)"
+    owner: "wms-mobile"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a8-epic12-docs-batch"
+    epic: 12
+    action: "Docs batch: stale PENDING compliance entry + header counts, spec-12-8
+      frontmatter, epics.md blurb wording (D4/D5), frozen-text contradictions D6/D7/D8,
+      use-cold-chain ULID/UUID comment, process lessons into IMPLEMENTATION-GUIDE"
+    owner: "meta docs"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a9-extract-device-reauth-and-constants"
+    epic: 12
+    action: "Extract the 5x copy-pasted device re-auth block into one helper; move
+      MIN/MAX_READING_C out of compliance.dtos command import; promote epic-11 a10
+      now that bin.command.ts hit 1,836"
+    owner: "wms-be"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-12-retro-a10-catalog-audit-events"
+    epic: 12
+    action: "Catalog class/hazard edits emit no audit events — decide: add events
+      or document the exemption"
+    owner: "wms-be"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
