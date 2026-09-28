@@ -142,8 +142,8 @@ Items 4–6 need checking before they are either fixed or dismissed; they are re
 
 | Item | Blocked on |
 |---|---|
-| **Story 4-6d — rate shopping** | ~~There is no address model anywhere~~ **resolved by story 11-1** (`0030_shipment_addresses.sql`): `orders` carries the `destination_*` columns, `warehouses` the `origin_*` columns — both required at create, pincode TEXT. ~~SKUs carry no weight or dimensions~~ **resolved by story 11-2** (`0031_sku_physical_attributes.sql`): `skus` carries nullable `weight_grams` (≤ 1,000,000), `length_mm`/`width_mm`/`height_mm` (≤ 10,000) and `country_of_origin` (ISO alpha-2) — the static catalog attributes carriers rate from, settable via the SKU edit PATCH and the import's five new optional columns. The remaining work is the carrier surface itself (rating, labels, manifest) |
-| **Retryable inline label error** (Outbound surface) | Labels live in 4-6c, which is backlog |
+| **Real carrier transports** (labels, rates, tracking) | The sandbox and the typed DIRECT 501 stand in for all three adapter arms (4-6c/4-6d); real carriers need the timeout guard and the adapter call pulled out of the held transaction (the 4-6c defers), carrier error shaping (the uncapped refusal-detail defer), and credential/address validation per carrier. Tracked in `deferred-work.md` |
+| **Retryable inline label error** (Outbound surface) | ~~Labels live in 4-6c, which is backlog~~ **labels shipped in 4-6c** — the strip's failed-read arms carry Retry (4-6c/4-6d); what remains is the real-transport retry semantics, not the UI |
 | **Subscription billing** | No epic covers it, and PRD open question 4 on the pricing axis is unresolved. **The product cannot charge anyone for itself** |
 | **Production operations** | The architecture spine defers IaC, CI/CD shape, dashboards and on-call. Not a feature gap — a can't-run-a-SaaS gap |
 | **Customer data onboarding** | Catalog import exists; opening stock balances and migration off an incumbent system appear nowhere |

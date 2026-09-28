@@ -4,7 +4,7 @@
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton is followed closely here and is not repeated.
 
-**Scope, deliberately:** this module makes **no network calls** and the backend has no HTTP client. `rate()`, `label()` and `track()` are not declared anywhere — a method signature guessed before its first caller is a shipped interface to unpick. The port grows those arms in the story that consumes them (labels: 4-6c; rating: deferred). `CarriersFacade` is the seam they grow from.
+**Scope, deliberately:** this module makes **no network calls** and the backend has no HTTP client. `rate()` and `label()` are now declared (labels: 4-6c; rating: 4-6d) — a method signature guessed before its first caller is a shipped interface to unpick, so the port grows those arms in the story that consumes them. `track()` remains undeclared until tracking writeback's real-carrier story consumes it. `CarriersFacade` is the seam they grow from.
 
 The module exists for one invariant: **secret material leaves the system exactly never.**
 

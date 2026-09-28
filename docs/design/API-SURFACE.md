@@ -106,7 +106,12 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `/tenants/{t}/outbound/orders` | `orders.manage` | Body carries the required `destination` address (story 11-1); over-ATP is **accepted and backordered**, never refused |
 | POST | `.../orders/{orderId}/cancel` | `orders.manage` | Releases holds atomically. Only from `accepted` |
 | POST | `.../orders/{orderId}/pack` | `pack.execute` | Scan mismatch → `422 pack-mismatch` naming **both** quantities |
-| POST | `.../orders/{orderId}/dispatch` | `dispatch.execute` | **Terminal.** Retires committed holds — the transition that corrects ATP |
+| POST | `.../orders/{orderId}/dispatch` | `dispatch.execute` | **Terminal.** Retires committed holds — the transition that corrects ATP. Auto-stamps the labelled shipment's `carrierCode`/`trackingNumber` (4.6c) |
+| POST | `.../orders/{orderId}/label` | `labels.execute` | **One label per order** (4.6c): connection resolved + credential opened in-tx, the label arm synchronous. DIRECT carriers → verbatim `501 carrier-transport-unconfigured`; deployment key faults → `503 carrier-encryption-unavailable` / `carrier-credential-unreadable` |
+| GET | `.../orders/{orderId}/shipment` | — | The order's label (4.6c); 404 = "no label yet" |
+| GET | `.../orders/{orderId}/rates` | — | **The rate-shopping READ (4.6d)** — one quoted-or-refused item per live carrier connection, sorted by carrierCode; no Idempotency-Key, nothing stored. `409 missing-sku-weight` names the unweighted SKUs (cap 20) / `conflict` the not-ratable state or an over-2^53-gram aggregate; `503` credential arms — never an item |
+| POST | `/tenants/{t}/outbound/manifests` | `labels.execute` | **All-or-nothing** (4.6c): ≤ 500 shipments, one connection, one tx |
+| GET | `/tenants/{t}/warehouses/{w}/outbound/manifests` | — | Keyset, newest first |
 | GET | `.../orders/{orderId}` | — | Echoes the `destination` (story 11-1); null on pre-11.1 rows |
 | GET | `/tenants/{t}/warehouses/{w}/outbound/orders` | — | Keyset; `cursor`+`limit` only, so status filtering is page-scoped |
 | POST | `/tenants/{t}/outbound/wave-policies` | `waves.manage` | A policy **is** the wave rule |
@@ -151,7 +156,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 ## Capabilities
 
-Twenty-four, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 24th is `excursion.record` (12-5, FR-44): owner, Ops Manager and Operator — recording what the floor observes is a floor verb (`putaway.execute`'s rationale); it does **not** gate a resolve (`review.decide`'s).
+Twenty-five, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 24th is `excursion.record` (12-5, FR-44): owner, Ops Manager and Operator — recording what the floor observes is a floor verb (`putaway.execute`'s rationale); it does **not** gate a resolve (`review.decide`'s). The 25th is `labels.execute` (4.6c): Owner, Ops Manager and Operator — label and manifest are floor verbs beside `pack.execute`/`dispatch.execute`.
 
 | Role | Holds |
 |---|---|

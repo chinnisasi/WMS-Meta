@@ -8,7 +8,7 @@ Source: `workspace/core/backend/wms-be/src/modules/outbound/`. Every `file:line`
 
 ## Owns
 
-Seven tables, module-exclusive (AD-6, enforced by `test/architecture.spec.ts`). All quantities are **milli-units** (`base × 10³`) in the columns and **base units** at every read shape.
+Nine tables, module-exclusive (AD-6, enforced by `test/architecture.spec.ts`). All quantities are **milli-units** (`base × 10³`) in the columns and **base units** at every read shape.
 
 | Table | Holds | Key invariants / CHECKs |
 |---|---|---|
@@ -19,6 +19,8 @@ Seven tables, module-exclusive (AD-6, enforced by `test/architecture.spec.ts`). 
 | `picklists` (`schema.ts:1609`) | One unit of floor work. `order_id` set on a `single` picklist, **null on a `batch` picklist** | `picklists_status_check` = `planned, ready, cancelled`. `picklists_tenant_warehouse_status_idx` is the driving index of the device snapshot read — without it that read seq-scans every picklist the tenant ever had, on the one endpoint every device hits every refresh (`schema.ts:1626-1634`) |
 | `picklist_lines` (`schema.ts:1671`) | **One slice of one order line**: the bin/batch *suggestion*, `qty` to draw, `shortfall_qty`, `reason_code`, `slice_seq` (per order line), `walk_seq` (per picklist), `status` | `picklist_lines_open_order_line_unique` — partial unique on `(tenant_id, order_line_id, slice_seq) WHERE status <> 'cancelled'` (`schema.ts:1731`) **is the one-open-wave-per-order invariant**. `picklist_lines_slice_shape`, `_short_pairing`, `_reason_code_check` (`0022_steep_morbius.sql:28-57`). `picklist_lines_pickable_walk_idx` is partial on `status = 'planned' and bin_id is not null`, so it holds open floor work only and does not grow with picking history |
 | `picks` (`schema.ts:1771`) | The settlement record of one drawn slice: scanned `bin_id` vs `suggested_bin_id`, re-derived `batch_id` vs `suggested_batch_id`, `reservation_committed`, `conflict_class`, `qty`, device time `picked_at` | `picks_line_unique` on `(tenant_id, picklist_line_id)` — one pick per line, the diverged-replay backstop. `picks_qty_positive` (`0019_flippant_komodo.sql:44`) is why **a zero-unit short pick writes no `picks` row at all**. `picks_reservation_pairing` (`0019:50`). `picks_conflict_class_check` = `none, applied, settled` (`0021_lean_george_stacy.sql:43`) |
+| `shipments` (4.6c, `schema.ts:2426`) | One label per order: `status` (`labelled`\|`manifested`), `carrier_connection_id`, point-in-time `carrier_code`/`carrier_name`, the adapter's `tracking_number`, opaque `label_document_ref` (never the bytes), the label's optional `weight_grams`/`length_mm`/`width_mm`/`height_mm`, `labelled_by`/`labelled_at`, and `manifest_id` once closed | **One labelled shipment per order** — partial unique on `(tenant_id, order_id) WHERE status = 'labelled'` (`0027_*.sql`): the race backstop behind the command's already-labelled 409; a manifested shipment stops covering it. The label itself is synchronous in the command (the sandbox arm) — **no ledger event**; the write record is the `shipment.label-created` outbox + audit |
+| `manifests` (4.6c, `schema.ts:2497`) | One courier hand-over: `carrier_connection_id` (the one connection every member shipment labelled through), mirrored `carrier_code`, `shipment_count` (CHECK ≥ 1), `created_by` | All-or-nothing: the ≤ 500 shipment flip and the manifest row commit in ONE transaction — a partial failure leaves nothing half-manifested. `manifests_tenant_warehouse_created_at_id_idx` is the list's keyset index from day one (UX-DR25) |
 
 **Not owned, and never written directly:** `reservations`, `ledger_events`, `stock_on_hand`, `batch_on_hand`, `bin_state_epochs` (inventory); `bins`, `devices` (tenancy); `skus`, `batches`, `serials` (catalog). Every touch goes through `InventoryFacade` / `CatalogFacade`, and the stock-moving ones go through the **in-transaction passthroughs** (`appendLedgerEventInTx`, `lockSerialsInTx`, `lockWarehouseInTx`, `commitReservationInTx`, `releaseReservationInTx`, `grantReservationInTx`, `retireCommittedReservationInTx`) so they commit with this module's own writes.
 
@@ -131,6 +133,11 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 | `recordPick` `:353` | `(RecordPickCommand, key) → PickSnapshot` | One scan-verified pick: ledger draw + hold settlement in one tx | `POST .../outbound/picks`, **device-gated** (`outbound.controller.ts:512`) |
 | `packOrder` `:366` | `(PackOrderCommand, key) → PackSnapshot` | Verifies the parcel against what was PICKED, flips `ready_to_dispatch` | `outbound.controller.ts:156` |
 | `dispatchOrder` `:381` | `(DispatchOrderCommand, key) → DispatchSnapshot` | Terminal flip + hold retirement (the ATP correction) | `outbound.controller.ts:207` |
+| `createShipmentLabel` `:275` | `(CreateShipmentLabelCommand, key) → ShipmentSnapshot` | One label per order (4.6c): connection resolved + credential opened in-tx, the label arm called synchronously; the DIRECT carriers' typed 501 is the verbatim refusal | `POST .../orders/:orderId/label` (`outbound.controller.ts:287`), `labels.execute` |
+| `getShipmentForOrder` `:296` | `(tenantId, orderId) → shipment \| null` | The order's label read; null → the shell 404s ("no label yet") | `outbound.controller.ts:339` |
+| `getOrderRates` `:317` | `(tenantId, orderId) → OrderRatesSnapshot \| null` | **The rate-shopping READ (4.6d)** — one quoted-or-refused item per live connection; null → 404 | `GET .../orders/:orderId/rates` (`outbound.controller.ts:367`) |
+| `createManifest` `:283` | `(CreateManifestCommand, key) → ManifestSnapshot` | All-or-nothing manifest (4.6c): ≤ 500 shipments, one connection, one tx | `POST .../outbound/manifests` (`outbound.controller.ts:467`), `labels.execute` |
+| `listManifests` `:541` | `(tenantId, warehouseId, query) → Page<manifest>` | Keyset page, newest first | `outbound.controller.ts:517` |
 | `getPickTasksInTx` `:402` | `(tx, tenantId, warehouseId) → PickTask[]` | The device's walk, **in the caller's transaction** | in-module composition |
 | `getPickTasks` `:417` | `(tenantId, warehouseId) → PickTask[]` | The same read in its own transaction | `src/api/receiving.controller.ts:160`, which joins it onto the device catalog snapshot |
 
@@ -166,7 +173,7 @@ Every status guard in this module is an **allow-list**, never a deny-list, so a 
 
 The one place a new arm *must* be classified by hand is `orderNotAcceptedRefusal` (`pick.command.ts:1876`), and that is a `switch` with a `never` default: adding an `ORDER_STATUSES` arm fails `tsc` rather than silently falling into the retryable branch.
 
-Sub-machines this module also owns: **wave** `planned → released`, `planned|released → cancelled` (`wave.command.ts:38`); **picklist** `planned → ready|cancelled` (`:42`); **pick line** `planned → picked|short|cancelled`, with `unfulfillable` created rather than transitioned (`:60`). `picked` and `short` are terminal and sit **outside** `'cancelled'` on purpose — see Invariants.
+Sub-machines this module also owns: **wave** `planned → released`, `planned|released → cancelled` (`wave.command.ts:38`); **picklist** `planned → ready|cancelled` (`:42`); **pick line** `planned → picked|short|cancelled`, with `unfulfillable` created rather than transitioned (`:60`); **shipment** `labelled → manifested` (4.6c, `manifest.command.ts`) with `labelled` the only state the one-per-order index covers. `picked` and `short` are terminal and sit **outside** `'cancelled'` on purpose — see Invariants.
 
 ---
 
@@ -332,6 +339,18 @@ Then, in one commit: the flip, one zero-quantity `pack.packed` event per **order
 ### `dispatchOrder` — `dispatch.command.ts:169`
 
 Flip, one zero-quantity `dispatch.dispatched` event per order line carrying the optional carrier/tracking text, then **retire every `committed` hold the order owns** (`:389-410`) — the point of the command. `order.dispatched` outbox, audit, key. Counter restores after the commit, each isolated in its own `try` (`:479-492`).
+
+### `createShipmentLabel` — `shipment.command.ts:161+` (4.6c)
+
+`labels.execute` → replay → order locked → already-labelled: re-read under the lock, else 409 (the partial unique index is the race backstop) → not `ready_to_dispatch` → 409 → the connection resolved in-tx and its credential opened in-tx (`openCredentialForAdapterUseInTx` — request-scoped plaintext, never logged/persisted/responded) → the label arm called through `labelThroughAdapter`. The sandbox arm is synchronous and deterministic (`SBX-<12hex>` from a sha256) so the label document lands in the same commit; the three DIRECT carriers throw the typed verbatim 501 `carrier-transport-unconfigured`. Then: the shipment row, `shipment.label-created` outbox, audit, key — **no ledger event** (a label moves nothing). Dispatch later auto-stamps `carrierCode`/`trackingNumber` from the labelled shipment.
+
+### `createManifest` — `manifest.command.ts` (4.6c)
+
+`labels.execute` → replay → every named shipment's connection id must agree (one manifest is one connection) → count ≤ 500 → the whole thing in one transaction: every member shipment flips `labelled → manifested` with `manifest_id` set, the manifest row written, `manifest.created` outbox, audit, key. Any failure rolls back the entire set — a manifest is never partially closed. Tracked writeback (dispatch's auto-stamp) rides the label, not the manifest.
+
+### the rate-shopping read — `rate.service.ts` (4.6d)
+
+`GET .../orders/:orderId/rates` is a **READ**: no Idempotency-Key, no outbox, no ledger, no audit, no idempotency row, no capability (reads are never gated), nothing stored — quotes are recomputed per request. The tenant's live connections are enumerated BEFORE the one `withTenantTransaction` opens (the pool-nesting rule — `listConnections` opens its own tx). Inside: order read (null → 404) → the state allow-list of exactly `ready_to_dispatch` (else 409 `conflict`) → the weight aggregate Σ(`qty_milli × weight_grams`)/1000 in SQL over `numeric` — kit component lines counted, kit parent lines excluded by the "does any child point at me" marker — then a missing `weight_grams` refuses the WHOLE quote (409 `missing-sku-weight` naming the SKUs, `namedSample` cap 20), a `Number.isSafeInteger` guard refuses an aggregate past 2^53 grams (409, never a silently-wrong quote), and per connection the credential opens in-tx and `rateThroughAdapter` runs: the sandbox quotes the deterministic formula (base + per-kg + pincode-pair jitter, integer paise), the DIRECT carriers' typed 501 becomes that connection's refused item, and ANY other throw fails the whole read (deployment faults are not quotes). Items sort by `carrierCode` with a byte comparator. The route also answers 503 (`carrier-credential-unreadable` / `carrier-encryption-unavailable`) — documented, never an item.
 
 ---
 

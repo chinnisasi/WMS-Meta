@@ -2,7 +2,7 @@
 title: 'Story 4.6d: Carrier rate shopping'
 type: 'feature'
 created: '2026-09-28'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '88b6f35' # wms-be main (wms-fe main: b2919a7)
@@ -80,17 +80,17 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be src/modules/carriers/carrier-label-port.ts` -- declare `CarrierRateArm` + `CarrierRateRequest {orderRef, originPincode, destinationPincode, weightGrams|null}` + `CarrierRateResult {amountPaise}`; implement `sandboxRateArm` (deterministic formula in Design Notes) and `unconfiguredRateArm` (the same typed 501) -- the port grows its second arm in the story that consumes it.
-- [ ] `wms-be src/modules/carriers/carrier-registry.ts` -- wire the rate arm into all four `registerCarrierAdapter` entries -- every carrier answers rate requests, quoted or refused.
-- [ ] `wms-be src/modules/carriers/carriers.facade.ts` -- add `rateThroughAdapter(carrierCode, credential, request)` beside `labelThroughAdapter` -- outbound's single glue seam, no registry internals.
-- [ ] `wms-be src/modules/outbound/rate.service.ts` (new) -- the rate-shopping read: order + destination pincode, warehouse origin pincode, line×SKU weight aggregate (kit components counted, kit parents excluded), then per live connection: open credential in-tx and call the glue; DIRECT refusals and sandbox quotes each land as their item -- the module owns the order-side aggregation; carriers stays order-blind.
-- [ ] `wms-be src/modules/outbound/outbound.facade.ts` + `src/api/outbound.controller.ts` + `outbound.dto.ts` -- `GET :tenantId/outbound/orders/:orderId/rates` read route + `OrderRatesDto`/`RateItemDto` (connectionId, carrierCode, carrierName, quote|refusal), `bun run openapi:export` -- the route is a read: `assertOwnTenant`, no Idempotency-Key, no capability.
-- [ ] `wms-be test/rate.spec.ts` -- e2e per the matrix: deterministic sandbox quote from seeded weighted SKUs, DIRECT 501 item, missing-weight 409 naming SKUs, not-ready 409, no-connections 200-empty, foreign-tenant 404 -- every refused-closure arm pinned.
-- [ ] `wms-fe src/lib/api/client.ts` (+ regen via `bun run api:generate`) -- `fetchApiGetOrderRates` -- typed wire function.
-- [ ] `wms-fe src/lib/use-outbound-labels.ts` -- `useOrderRates(orderId)`: ResourceState read, OUTBOUND_CHANGED refetch, 404→null (no order) -- the read hook beside its siblings.
-- [ ] `wms-fe src/lib/outbound-pack-dispatch.ts` -- `ratesReason` verbatim mapper (409/404 arms) -- refusal parity with label/manifest.
-- [ ] `wms-fe src/components/outbound/pack-dispatch.tsx` -- rates strip inside `LabelSection` between the picker and the measurements fieldset: quoted items show the INR-formatted amount, DIRECT items show the verbatim refusal chip; read failure shows the `ReadFailure` retry arm -- the operator picks a carrier with prices in view.
-- [ ] `wms-fe pack-dispatch.test.tsx` -- strip renders quotes + refusal + read-failure retry; hidden when `canLabel` is false -- matrix coverage.
+- [x] `wms-be src/modules/carriers/carrier-label-port.ts` -- declare `CarrierRateArm` + `CarrierRateRequest {orderRef, originPincode, destinationPincode, weightGrams|null}` + `CarrierRateResult {amountPaise}`; implement `sandboxRateArm` (deterministic formula in Design Notes) and `unconfiguredRateArm` (the same typed 501) -- the port grows its second arm in the story that consumes it.
+- [x] `wms-be src/modules/carriers/carrier-registry.ts` -- wire the rate arm into all four `registerCarrierAdapter` entries -- every carrier answers rate requests, quoted or refused.
+- [x] `wms-be src/modules/carriers/carriers.facade.ts` -- add `rateThroughAdapter(carrierCode, credential, request)` beside `labelThroughAdapter` -- outbound's single glue seam, no registry internals.
+- [x] `wms-be src/modules/outbound/rate.service.ts` (new) -- the rate-shopping read: order + destination pincode, warehouse origin pincode, line×SKU weight aggregate (kit components counted, kit parents excluded), then per live connection: open credential in-tx and call the glue; DIRECT refusals and sandbox quotes each land as their item -- the module owns the order-side aggregation; carriers stays order-blind.
+- [x] `wms-be src/modules/outbound/outbound.facade.ts` + `src/api/outbound.controller.ts` + `outbound.dto.ts` -- `GET :tenantId/outbound/orders/:orderId/rates` read route + `OrderRatesDto`/`RateItemDto` (connectionId, carrierCode, carrierName, quote|refusal), `bun run openapi:export` -- the route is a read: `assertOwnTenant`, no Idempotency-Key, no capability.
+- [x] `wms-be test/rate.spec.ts` -- e2e per the matrix: deterministic sandbox quote from seeded weighted SKUs, DIRECT 501 item, missing-weight 409 naming SKUs, not-ready 409, no-connections 200-empty, foreign-tenant 404 -- every refused-closure arm pinned.
+- [x] `wms-fe src/lib/api/client.ts` (+ regen via `bun run api:generate`) -- `fetchApiGetOrderRates` -- typed wire function.
+- [x] `wms-fe src/lib/use-outbound-labels.ts` -- `useOrderRates(orderId)`: ResourceState read, OUTBOUND_CHANGED refetch, 404→null (no order) -- the read hook beside its siblings.
+- [x] `wms-fe src/lib/outbound-pack-dispatch.ts` -- `ratesReason` verbatim mapper (409/404 arms) -- refusal parity with label/manifest.
+- [x] `wms-fe src/components/outbound/pack-dispatch.tsx` -- rates strip inside `LabelSection` between the picker and the measurements fieldset: quoted items show the INR-formatted amount, DIRECT items show the verbatim refusal chip; read failure shows the `ReadFailure` retry arm -- the operator picks a carrier with prices in view.
+- [x] `wms-fe pack-dispatch.test.tsx` -- strip renders quotes + refusal + read-failure retry; hidden when `canLabel` is false -- matrix coverage.
 
 **Acceptance Criteria:**
 - Given a ready_to_dispatch order whose lines' SKUs all carry weights and one live sandbox connection, when the rates are read, then exactly one quoted item answers with the formula's deterministic amount in paise.
@@ -103,6 +103,43 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+Three layers (adversarial, edge-case-hunter, verification-gap) over the combined diff (BE 88b6f35→330e497, FE b2919a7→ba2b62d): 25 raw findings, verified first-hand, grouped by root cause into 10 patches, 2 defers, 8 refuted. Lens line numbers were diff-file offsets; every location below was re-anchored to source.
+
+**Patches (routed to the implementation agent, one message):**
+
+| # | Findings | What | Why real (verified) |
+|---|----------|------|---------------------|
+| 1 | ADV#10, ECH#3 | `items.sort` uses `localeCompare` (rate.service.ts:262-264) | The frozen "sorted by carrierCode" is a determinism contract; `localeCompare` delegates order to the runtime's ICU build. Byte comparator + connectionId tie-break (the FE's own `formatInrPaise` no-ICU stance is the precedent). |
+| 2 | ADV#2, ECH#2, ECH#5 | `Number(weightRow.totalGrams)` re-opens the JS-number boundary the numeric/text cast was bought to close (rate.service.ts:217) | MAX_QUANTITY_MILLI (= MAX_SAFE_INTEGER milli) × MAX_SKU_WEIGHT_GRAMS (1e6) is accepted by the DTO gates and crosses 2^53 grams → silently-rounded weight → silently-wrong quote. Infinity unreachable (max ≈ 9e18 ≪ 1.8e308). Fix: `Number.isSafeInteger` guard → 409 conflict; docstring sentence amended. |
+| 3 | ADV#5 | Rates route documents 400-409 only; the read can 503 | The credential open throws `carrier-credential-unreadable`/`carrier-encryption-unavailable` (503); the label route documents its 503 at outbound.controller.ts:311 — the rates read must too. 501 never escapes (it becomes an item), so no 501 arm. |
+| 4 | VG#2 | No test crosses session-vs-path tenant on the rates route | `getRates` always pairs ctx.tenantId with ctx's own token; `assertOwnTenant` is the route's 403 predicate (RLS only covers the foreign-order 404 the suite already pins). |
+| 5 | VG#3, ADV#6 (test half) | `namedSample` >20 branch untested | The only namedSample test seeds two offenders; the frozen matrix row says "capped sample, the namedSample rule". Query-half refuted: bounded by the order's own lines (manifest precedent, same shape). |
+| 6 | ADV#2/ECH#2 test arm | No test proves the new safe-integer guard | SQL-update a line to MAX_QUANTITY_MILLI × MAX_SKU_WEIGHT_GRAMS → 409 conflict, nothing quoted. |
+| 7 | ADV#12 | `cleanupRows` omits `ledger_events` (rate.spec.ts:181-214) | `writeCounts` counts it (rate.spec.ts:494) — a partial cleanup leaves tenant-keyed ledger rows that shift the "nothing was written" baseline. |
+| 8 | VG#1, ADV#8 | The whole-read failure arm (`throw err` rethrow) untested | No test makes any connection throw non-501; a broadened catch would pass the full matrix. Fix: SQL-corrupt one sealed credential → whole read 503, nothing rendered as an item (also pins patch 3's arm). |
+| 9 | VG#6 | `ratesReason`'s verbatim-501 arm untested | The lib tests cover 409×2/503/401/400/500/404 but no 501; `labelReason` pins its 501 (outbound-pack-dispatch.test.ts:651-660) — same contract, same file. |
+| 10 | VG#5 | OUTBOUND_CHANGED refetch untested for rates | No FE test dispatches the event against an expanded order; the staleness the strip's own copy promises against would regress green. Precedent: outbound-waves.test.tsx:515-519. |
+
+**Defers (→ deferred-work.md):**
+
+| # | Findings | What | Why deferred |
+|---|----------|------|--------------|
+| D1 | ECH#1, ECH#4 | Mid-read `disconnect` (hard DELETE, AD-15) between the walk and the in-tx credential open → `carrierConnectionNotFound` 404 → whole read 404 → FE maps 404→null → strip silently vanishes | Window is sub-second and self-healing (the picker drops the connection on its own refetch, so the surface is coherent); but the 404 arm is not order-scoped as `fetchApiGetOrderRates`'s docstring claims. When the read is next touched (real transports), give the credential-open miss its own problem code. |
+| D2 | ADV#9 | `refusalOf` copies the carrier problem's `detail` uncapped into the item; the FE chip renders it raw | Today only the typed fixed-prose 501 flows through (no untrusted detail exists); carrier error shaping/capping belongs to the real-transports story, beside the 4-6c adapter-call defers. |
+
+**Refuted (claims checked against the code):**
+
+| # | Finding | Refutation |
+|---|---------|------------|
+| R1 | ADV#1 — unknown-adapter connection row bricks the whole read (500) | Unreachable via the API: `connect` resolves `getCarrierAdapter` and 400s unknown codes (carrier.command.ts:200), so a row exists only if a carrier is de-registered after deploy — the documented posture (carrier.command.ts:118 "a row whose adapter was de-registered still lists") and the label path fails identically (`labelThroughAdapter` throws the same plain Error). Per the frozen contract a deployment fault fails the read; not a new hazard. |
+| R2 | ADV#3 — null pincodes jitter-hashed as `''` | The frozen request shape is `originPincode\|null, destinationPincode\|null` (spec task 1, frozen block) — the null tolerance is the design; the arm's docstring documents the substitution and the sandbox quote is a placeholder fare, not a real price; real transports own address validation. |
+| R3 | ADV#4 — post-dispatch permanent 409 failure chip | `LabelSection` renders only when `status === 'ready_to_dispatch'` (pack-dispatch.tsx:376-378); dispatch flips to `dispatched` and the detail refetch unmounts the panel. The 409 can at most flash during the refetch window; the terminal dispatched row renders the terminal note with no strip. |
+| R4 | ADV#7 — zero-contributor `missingWeight([])` mislabels a data fault | Unreachable for real data: `qty > 0` is a DB CHECK; a kit parent always explodes (order create); a component-less kit SKU is not a kit parent by the marker (no child points at it → it contributes and gets named). The arm is defensive and its empty-list detail is deliberate. |
+| R5 | ADV#11 — hook passes no AbortSignal | Every sibling hook in use-outbound-labels.ts (including 4-6c's shipment hook) uses the identical cancelled-flag pattern with no signal — a pre-existing hook-family posture, not this story's defect. |
+| R6 | ADV#13 — 404s pay the connection walk | The walk is one `listConnections` call: the (tenant, carrierCode) unique index caps a tenant at one row per registered carrier (4 today) against page size 50 — one bounded query, and the walk-first order is the frozen pool-nesting rule. |
+| R7 | ADV#14 — gram-ceil deviates from the frozen weight formula | Provably a no-op for today's output: the arm immediately applies `ceil(weight/1000)`, and `ceil(ceil(x)/1000) = ceil(x/1000)` because n·1000 is an integer (n·1000 ≥ x ⟺ n·1000 ≥ ceil(x)). The convention is documented in the SQL comment. |
+| R8 | VG#4 — multi-page connection walk untested | Structurally unreachable: one connection per (tenant, carrierCode), 4 registered carriers, page size 50 — the walk can never see a second page until the registry holds >50 carriers. The loop is 10 lines reviewed directly. |
 
 ## Design Notes
 
