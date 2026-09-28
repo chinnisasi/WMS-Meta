@@ -61,6 +61,8 @@ async doThing(command: DoThingCommand, idempotencyKey: string): Promise<Snapshot
 - **Idempotency key last.** It is the commit marker. Written earlier, a later failure leaves a key with no work behind it.
 - **Post-commit work returns from the callback.** Valkey counter mirrors run after the transaction commits (journal-first). A decrement that outlived a rollback reads as ATP the journal still holds.
 
+**Lock ordering across lock families (story 5-1's review defect).** When a command needs more than one lock family — bin-row `.for('update')`, the serial advisory locks, the per-warehouse advisory — derive the order from the codebase's canonical acyclic chain, **bin-row → serial advisory → warehouse advisory** (documented at `inventory.facade.ts`'s `lockWarehouseInTx` doc and restated at `pick.command.ts`; sorted by uuid within a family when there are several). Do NOT invent a per-command order from what "feels safe": the ledger's `appendMovement` re-acquires the warehouse advisory inside the append, so any writer that takes the advisory before its bin rows deadlocks against putaway/pick, which hold the bin row and block on the advisory inside their own append. And any **staleness gate (an epoch compare, a re-read-then-assert) runs UNDER the locks**, never before them — a pre-lock read races the concurrent write it is guarding against and lets genuinely-moved state slip past the refusal (read → lock → compare).
+
 ### Post-commit side effects must not throw
 
 ```ts

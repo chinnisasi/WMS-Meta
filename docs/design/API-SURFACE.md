@@ -82,7 +82,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | PATCH | `.../purchase-orders/{poId}` | `po.manage` | Amend |
 | POST | `.../purchase-orders/{poId}/close` | `po.manage` | Carries open quantity to a successor |
 | POST | `/tenants/{t}/receiving/goods-receipts` | **device** | Partial, blind and over-receipt in one flow. Budget: ≤ 4 scans + 1 confirm for a single-SKU single-lot GRN |
-| GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision (10.2), catchWeightTracked (10.3/10.6), variantValues + axes (11.7) — null when unattached, storageClass (12.8)), bins (+ storageClass, 12.8), putawayTasks, pickTasks (+ kitParentSkuCode, 11.7 — display-only, null off-kit), packTasks (+ handlingUnits, 10.7), open POs. Composed at the api shell across modules |
+| GET | `/tenants/{t}/devices/catalog-snapshot` | **device** | **The offline brain.** SKUs (+ uom, uomPrecision (10.2), catchWeightTracked (10.3/10.6), variantValues + axes (11.7) — null when unattached, storageClass (12.8)), bins (+ storageClass, 12.8), putawayTasks, pickTasks (+ kitParentSkuCode, 11.7 — display-only, null off-kit), packTasks (+ handlingUnits, 10.7), open POs, **transferTasks (5-1** — in-transit transfers to this warehouse, per line with the planned dest bin's `binStateEpoch` quote**)**. Composed at the api shell across modules |
 | GET | `/tenants/{t}/receiving/goods-receipts` | — | Keyset |
 | GET | `/tenants/{t}/receiving/over-receipts` | — | The review queue |
 | POST | `.../over-receipts/{id}/approve` | `review.decide` | Bumps the PO line ceiling. A SKU that became a kit since the GRN → `409 kit-cannot-hold-stock` (11.4); the row stays `pending` for a reject |
@@ -124,6 +124,17 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | GET | `.../waves/{waveId}` | — | With picklists in walk order |
 | GET | `/tenants/{t}/warehouses/{w}/outbound/waves` | — | Keyset |
 
+## movements — `movements.controller.ts`
+
+| Method | Path | Capability | Notes |
+|---|---|---|---|
+| POST | `/tenants/{t}/movements/transfers` | `transfers.manage` | **5-1.** Creates the draft two-leg plan. Refusals: `400 validation-failed` (catch-weight SKU fail-closed; batch- AND serial-tracked SKU; a serial-tracked line with fractional or >200-unit quantity — scannability guards; system bin on either end; sub-precision quantity), `409 kit-cannot-hold-stock`, `404` foreign ids. `Idempotency-Key` required |
+| POST | `.../transfers/{transferId}/outbound-confirm` | `transfers.manage` | **5-1.** Per line-arm `transfer.outbound` events on the SOURCE chain (source bin → source IN-TRANSIT bin); status → `in_transit`; serials locked + moved. Source short → `409 transfer-source-short` (order stays draft). Optional per-line serial scans |
+| POST | `.../transfers/{transferId}/inbound-confirm` | `transfers.execute` **(device)** | **5-1.** Accepts EITHER session family on the one route — `AnySessionGuard` branches on the `device_id` claim (badge-in required on the device arm; a bare enrollment credential → `401 unauthenticated`). Lands every line whole (no partial arm) in one tx: same-warehouse = relocation IN-TRANSIT→dest bin on one chain; cross-warehouse = drain (toBinId null) on the source chain + intake on the dest chain, ONE transaction. Runs the destination placement gates (`bin-blocked`/`bin-retired`/`bin-storage-mismatch`/`bin-segregation-conflict`/`bin-occupancy-conflict`/load gates → **409** with the gate's own code, order stays in_transit — unlike putaway's 400s, these are a conflict-class answer on a different surface); secure dest bin without `secure.move` → `403 role-denied`. Op payload's `binStateEpoch` compared under the locks → `409 transfer-bin-changed` (mobile classifies re-plannable). Epoch mismatch is the only staleness arm; a re-planned dest bin (scanned authoritative, epoch omitted) is a match |
+| POST | `.../transfers/{transferId}/cancel` | `transfers.manage` | **5-1. Draft-only** — non-draft → `409 transfer-wrong-state`; no stock effect |
+| GET | `/tenants/{t}/movements/transfers` | — | **5-1.** Keyset on `(createdAt, id)`; `status` + warehouse filters |
+| GET | `/tenants/{t}/movements/transfers/{transferId}` | — | **5-1.** Both legs' ledger events in `(warehouseId uuid, seq)` order, each carrying `referenceDoc {kind:'transfer', transferId, lineId?}` |
+
 ## carriers — `carriers.controller.ts`
 
 | Method | Path | Capability | Notes |
@@ -156,13 +167,13 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 
 ## Capabilities
 
-Twenty-five, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 24th is `excursion.record` (12-5, FR-44): owner, Ops Manager and Operator — recording what the floor observes is a floor verb (`putaway.execute`'s rationale); it does **not** gate a resolve (`review.decide`'s). The 25th is `labels.execute` (4.6c): Owner, Ops Manager and Operator — label and manifest are floor verbs beside `pack.execute`/`dispatch.execute`.
+Twenty-seven, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` and checked by `check:capability-mirror` in CI. The 24th is `excursion.record` (12-5, FR-44): owner, Ops Manager and Operator — recording what the floor observes is a floor verb (`putaway.execute`'s rationale); it does **not** gate a resolve (`review.decide`'s). The 25th is `labels.execute` (4.6c): Owner, Ops Manager and Operator — label and manifest are floor verbs beside `pack.execute`/`dispatch.execute`. The 26th and 27th are 5-1's: `transfers.manage` (Owner, Ops Manager — planning the two-leg order, confirming outbound, cancelling) and `transfers.execute` (Owner, Ops Manager, Operator — the inbound confirm is the floor verb beside `putaway.execute`/`picks.execute`).
 
 | Role | Holds |
 |---|---|
 | **Owner** | everything |
 | **Ops Manager** | everything except `users.invite`, `users.role_change` |
-| **Operator** | `putaway.execute`, `picks.execute`, `pack.execute`, `dispatch.execute`, `excursion.record` — the floor verbs only |
+| **Operator** | `putaway.execute`, `picks.execute`, `pack.execute`, `dispatch.execute`, `excursion.record`, `labels.execute`, `transfers.execute` — the floor verbs only |
 | **Accountant** | nothing (read-only) |
 
 ## Device-authenticated routes

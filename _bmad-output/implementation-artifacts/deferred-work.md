@@ -453,3 +453,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-6d-carrier-rate-shopping.md`
   summary: `refusalOf` copies the carrier problem's `detail` uncapped into the rate item and the FE chip renders it raw — when real transports land, a carrier SDK error page pasted into detail flows verbatim into the strip chip (triage D2).
   evidence: Verified at rate.service.ts:302-315 (no cap) and pack-dispatch.tsx's refusal chip (raw `item.refusal.detail`). Unreachable today — only the typed fixed-prose 501 flows through; carrier error shaping/capping belongs to the real-transports story beside the 4-6c adapter-call defers.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1-transfer-orders.md`
+  summary: Web `/moves` transfers surface (list + create + detail + confirm) deferred from story 5-1 to a follow-up FE story.
+  evidence: 5-1's epic ACs name no web surface; the backend-first ordering (4-6b→4-6d precedent) lands BE + mobile first. The FE surface needs the capability mirror, a referenceDoc-filtered or detail-embedded ledger-legs view, and regen after the BE routes exist.

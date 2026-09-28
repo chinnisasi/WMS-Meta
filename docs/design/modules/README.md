@@ -18,12 +18,12 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **catalog** | [`catalog.md`](catalog.md) | SKUs, CSV import, batches, serials, the UoM vocabulary |
 | **carriers** | [`carriers.md`](carriers.md) | The carrier adapter registry and the tenant credential vault |
 | **compliance** | [`compliance.md`](compliance.md) | Temperature excursions (FR-44/45): record → per-scope QC holds + zero-delta ledger events, resolve (the review flip) |
+| **movements** | [`movements.md`](movements.md) | Planned stock movement — transfer orders (5-1): two-leg ledger legs, the IN-TRANSIT system bin, in-transit ATP exclusion, the device inbound confirm. Adjustments, counts and variance review grow here |
 
 ## Planned
 
 | Module | Epic | Will own |
 |---|---|---|
-| `movements` | 5 | Transfer orders, stock adjustments with approval thresholds, cycle counts, variance review |
 | `replenishment` | 6 | Reorder points, breach alerts, suggested POs, expiry and aging |
 | `channels` | 7 | Channel connections, standing availability buffers, order ingestion, fulfilment writeback |
 | `compliance` (remaining) | 8 | GST invoicing, e-way bills, HSN summary — and later customs, excise and controlled-substance registers (epics 16–18). Temperature excursions is built above |
