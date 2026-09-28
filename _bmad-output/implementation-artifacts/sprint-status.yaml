@@ -318,6 +318,7 @@ development_status:
   # Building it first would mean rewriting transfers, adjustments and
   # counts on the new quantity model.
   epic-5: in-progress
+  # merged 2026-09-28 — BE PR #59 (squash 22ec29a), mobile PR #12 (f821745)
   5-1-transfer-orders: done
   5-2-stock-adjustments-with-approval-thresholds: backlog
   5-3-cycle-count-scheduling-and-execution: backlog
