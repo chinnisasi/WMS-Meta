@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-28-2026 11:20
+last_updated: 09-28-2026 12:55
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -211,7 +211,7 @@ development_status:
   # story (floor work stays client-agnostic — cross-client waves untouched).
   epic-21: in-progress
   21-1-client-dimension-migration: done
-  21-2-client-isolation-rls: backlog
+  21-2-client-isolation-rls: review
   21-3-rate-cards: backlog
   21-4-metering-and-storage-snapshots: backlog
   21-5-client-invoices: backlog

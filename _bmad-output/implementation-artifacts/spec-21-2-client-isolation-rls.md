@@ -2,7 +2,7 @@
 title: 'Story 21-2 — client isolation RLS (app.client_id, policies, DB-level probe)'
 type: 'feature'
 created: '2026-09-28'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '30aba7a (main, post-21-1 merge #55)'
@@ -56,10 +56,10 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `drizzle/0041_client_isolation_rls.sql` (+ journal idx 41 + snapshot copy, git-added) -- policy-only migration: recreate the four stamped tables' `*_tenant_isolation` policies with the extended predicate (DROP + CREATE, USING + identical WITH CHECK), plus the decided `clients_tenant_isolation` client clause; light fail-fast guard asserting the stamped tables carry `client_id`; header comment naming the probe file -- the story's core deliverable.
-- [ ] `src/shared/db/tenant-scope.ts` -- optional `clientId` on `withTenantTransaction`'s options that stamps `app.client_id` transaction-local via the same `set_config` idiom -- the session-variable plumbing 21-7 will consume; operator call sites unchanged.
-- [ ] `test/client-isolation.spec.ts` -- the DB-level probe (wms_rls_probe, advisory key 742105): portal-shaped session sees own rows and zero rows for the sibling client's skus/orders/POs/ledger events; WITH CHECK rejects foreign-client inserts with 42501 and allows own; operator-shaped session (client unset) still sees both clients; unscoped session sees zero rows; batches/stock rows ride their SKU join to the same isolation; the `clients`-table tenant policy probe (21-1 deferred-work carry-forward).
-- [ ] `test/tenant-scope`-level coverage -- the primitive sets both variables when clientId is given and leaves `app.client_id` untouched when omitted (operator shape preserved).
+- [x] `drizzle/0041_client_isolation_rls.sql` (+ journal idx 41 + snapshot copy, git-added) -- policy-only migration: recreate the four stamped tables' `*_tenant_isolation` policies with the extended predicate (DROP + CREATE, USING + identical WITH CHECK), plus the decided `clients_tenant_isolation` client clause; light fail-fast guard asserting the stamped tables carry `client_id`; header comment naming the probe file -- the story's core deliverable.
+- [x] `src/shared/db/tenant-scope.ts` -- optional `clientId` on `withTenantTransaction`'s options that stamps `app.client_id` transaction-local via the same `set_config` idiom -- the session-variable plumbing 21-7 will consume; operator call sites unchanged.
+- [x] `test/client-isolation.spec.ts` -- the DB-level probe (wms_rls_probe, advisory key 742105): portal-shaped session sees own rows and zero rows for the sibling client's skus/orders/POs/ledger events; WITH CHECK rejects foreign-client inserts with 42501 and allows own; operator-shaped session (client unset) still sees both clients; unscoped session sees zero rows; batches/stock rows ride their SKU join to the same isolation; the `clients`-table tenant policy probe (21-1 deferred-work carry-forward).
+- [x] `test/tenant-scope`-level coverage -- the primitive sets both variables when clientId is given and leaves `app.client_id` untouched when omitted (operator shape preserved).
 
 **Acceptance Criteria:**
 - Given a portal session scoped to client A, when it queries skus/orders/POs/ledger events, then client B's rows are zero at the database level and B's client_id is rejected on write with 42501.
@@ -76,6 +76,29 @@ context:
 
 ## Review Triage Log
 
+*Step-04, iteration 1. Layers: blind-hunter (15), edge-case-hunter (5), verification-gap (1 + 1 contrast note). All claims verified first-hand against the diff, the test file, the migration and the surrounding code before verdicts.*
+
+| # | Finding (source) | Verdict | Evidence & route |
+|---|---|---|---|
+| 1 | `clientId: ''` slips past `!== undefined` and stamps the operator shape — the fail-closed primitive's one silent fail-open input, unpinned by any test (VG primary + BH-3 + EC-1, same root cause) | medium | Verified TRUE: the branch admits `''`, `set_config('app.client_id','',true)` → `NULLIF('','')` → NULL → the clause passes for every row. No production consumer exists (21-7 is the first), but the portal is the leak-risk concentration the design names. **patch**: throw on `''` in the clientId branch + Part-1 test; plus one policy-level probe documenting raw `''` = operator shape (the deliberate `NULLIF` contract). |
+| 2 | No UPDATE or DELETE probes — WITH CHECK also governs UPDATE (a portal session rewriting its own row's `client_id` to the sibling's must refuse) and USING governs DELETE (cross-client DELETE silently deletes nothing) (BH-2) | medium | Verified TRUE — the suite proves INSERT + SELECT only, on the story whose deliverable IS the DB-level proof. **patch**: add the two arms (own-row `client_id` rewrite → 42501; sibling DELETE → 0 deleted). |
+| 3 | The `clients` binding-column check is vacuous: `toContain('id')` is satisfied by `tenant_id` (BH-7) | medium | Verified TRUE — `id` is a substring of `tenant_id`, so the structural assertion proves nothing about the clients policy's binding column. **patch**: assert the full `"id" = NULLIF(current_setting('app.client_id'` expression. |
+| 4 | The fail-fast guard checks only the four stamped tables, but section 2 also DROPs/CREATEs `clients_tenant_isolation` — a drifted DB fails mid-migration with 42704 instead of the guard's named diagnosis (BH-9 + EC-4) | low | Verified TRUE (guard VALUES list lacks 'clients'). Unreachable in the normal journal-ordered path, but the guard's own promise is incomplete for one line's cost. **patch**: add `('clients')` to the VALUES list. |
+| 5 | `expectCount` builds SQL via `sql.unsafe` with string-interpolated table/predicate — an injection-shaped pattern inside the security-verification suite (BH-13) | low | Verified TRUE (`test/client-isolation.spec.ts:144-153`). Inputs are internal constants today; the pattern is still the wrong one to ship here. **patch**: interpolate the table through the postgres tagged template like every other probe. |
+| 6 | Snapshot 0041 is 4-space JSON (0040/drizzle-kit is 2-space) and three new files lack trailing newlines — the next `db:generate` rewrites the whole snapshot (BH-11) | low | Verified TRUE first-hand (0041 4-space, 0040 2-space; `endswith('\n')` false). **patch**: reformat to 2-space + trailing newlines. |
+| 7 | Direct un-joined reads on inherited tables (stock/batch, order/PO lines, bins, users, vendors…) return the sibling client's rows — only the join-shaped read is proven (BH-1 + EC-5) | low, by design | Verified TRUE at the DB level — and it is the ratified AD-24 placement decision ("tables referencing a SKU get no column — four more places for the value to disagree with itself", spec-3pl schema.md), documented in the spec's Design Notes, the 0041 header and clients.md. App-layer filters stay authoritative; the first portal consumer must route reads through the stamped tables. **defer** → deferred-work.md: 21-7's read paths must join through the stamped tables (or add EXISTS arms). |
+| 8 | A portal session can UPDATE/DELETE its OWN `clients` row (name, status, system_owned), not merely read it — the policy grants write power the header doesn't state (BH-5) | low | Verified TRUE (one-policy-per-table shape; the insert arm is deliberately pinned by the probe). Unreachable: no app query mutates `clients` outside `ensureSelfClientInTx` (operator-shaped, registration-time), and 21-7 is read-mostly. Restricting arms adds policy complexity for an unreachable path. **reject**. |
+| 9 | `clientId` non-empty non-uuid string should be regex-validated at the primitive (EC-2) | false | Verified: `setTenantScope` validates nothing either — the house idiom; a malformed non-empty value fails closed LOUDLY (22P02 from the policy cast on the first query — no leak, a hard error). Adding uuid validation would diverge from the tenant arm's contract for no reachable leak. |
+| 10 | Wrap the policy's `::uuid` cast in a regex CASE so a malformed `app.client_id` binds to nothing instead of erroring 22P02 (EC-3) | false | Verified: the existing tenant arm behaves identically (malformed `app.tenant_id` → 22P02) — this is the house idiom, not a new hazard class. An error is fail-closed (no rows returned); changing it would make 0041's policies diverge from all 44 existing ones. |
+| 11 | The guard has no biting test, unlike 0040's guard which client-dimension.spec.ts exercises (VG other-findings) | low | Verified TRUE. Reachable only by applying 0041 to a pre-0040 database — impossible in every normal path (journal order, CI migrations job). The biting test requires the optional Part-A harness the spec deliberately skipped for a policy-only migration. **reject** (cost exceeds value; contrast recorded here). |
+| 12 | The STAMPED_TABLES comment claims a drift guard that doesn't exist — add an `information_schema` cross-check (BH-6) | low | Verified the comment; it states a caution about the future, not a claim of enforcement. Consistent with 21-1 triage #8: the list tests a frozen-at-birth migration; a fifth stamped table arrives with its own migration and suite, and cross-check machinery adds cost for no reachable drift. **reject**. |
+| 13 | The 44-policy global count is brittle — the next legitimate policy anywhere breaks it opaquely (BH-8) | low | Verified present. The next story updates the count in the same commit that adds its policy — a one-line, locally-visible edit in a suite whose subject is the policy inventory. Cosmetic. **reject**. |
+| 14 | The probe-role helper is the fourth copy (batch-serial, bin-admin precedents) — extract to test/support (BH-14) | low | Verified duplication exists; same class as 21-1 triage #9 (cosmetic duplication of a frozen pattern). Extraction is a test-infra refactor beyond this story's diff. **reject**. |
+| 15 | Header never enumerates `users.client_id`/`bins.dedicated_client_id` as deliberately clause-free (BH-10) | low | Cosmetic doc nit; `docs/design/modules/clients.md` documents both ("nullable by design, inert until 21-7") and the spec's Boundaries record the decision. **reject**. |
+| 16 | Header should state the owner-bypass assumption (no FORCE RLS; the guard applies to non-owner sessions) (BH-15) | low | Cosmetic doc nit; the assumption is documented in clients.md and the probe's existence encodes it. **reject**. |
+| 17 | No interface-contract/module-doc update accompanies the new seam (BH-12) | not a code defect | Meta docs land last per the ordering rules — step-05 updates clients.md (the seam) and the wms-be contract. Recorded, not a diff finding. |
+| 18 | Guard coverage note: 0041's guard can only trigger on out-of-order manual application (VG, folded into #11) | — | Same finding as #11; recorded once. |
+
 ## Design Notes
 
 - **Why null-tolerant, not bare equality:** a bare `client_id = NULLIF(...)` clause would hide EVERY row from operator sessions (unset → NULL → no match), breaking cross-client waves and all existing operator flows. The ratified shape makes unset = the operator shape; the leak the design guards is a portal session with a wrong/empty client context binding to nothing rather than seeing everything. The residual exposure — a portal session that never sets the variable sees the whole tenant — is closed by 21-7, whose session layer is the only thing that creates portal sessions; this story lands the enforcement, the primitive and the proof.
@@ -85,4 +108,17 @@ context:
 
 ## Verification
 
-*(filled at step-03/step-05)*
+**Commands (all re-run first-hand at step-03/step-04, wms-be on `feat/21-2-client-isolation-rls`):**
+- `bun run test -- test/client-isolation.spec.ts` -- **17/17 passed** (jest; 14 pre-patch, 17 after the review patch). Never the bare `bun test` CLI (hangs on `.rejects` + postgres.js).
+- `bun run test` (full suite) -- **796/796, 44/44 suites, exit 0 post-patch, verified first-hand** (793/793 pre-patch, implementer-run).
+- `bun run db:generate` -- **"No schema changes, nothing to migrate 😴"** (policies are snapshot-invisible).
+- `bun run typecheck` / `bun run lint` -- both exit 0.
+- `db:migrate` + `db:verify` on the dev DB -- 0041 applied cleanly, round-trip clean (implementer-run).
+
+**Manual checks:**
+- `drizzle/meta/0041_snapshot.json` differs from `0040_snapshot.json` only in `id`/`prevId` (verified programmatically); post-patch it is a 2-space byte-style copy with a trailing newline.
+- The five recreated policies carry the client clause on the correct binding column (`client_id` ×4, `id` on `clients`) — asserted non-vacuously by the structural test, re-verified by reading the migration.
+- Bite-proofs (implementer-run): removing the `setClientScope` call fails exactly the 2 primitive tests; reverting the `skus` policy to tenant-only fails 5 probe tests.
+- The patch's one deliberate deviation from the triage instruction: the 0041 guard's VALUES list became `(table, binding_column)` pairs — `clients` binds on `id`, so a literal `column_name='client_id'` row for it would have failed every database. Verified correct against the guard's actual mechanism.
+
+**Review:** three layers (blind-hunter 15, edge-case 5, verification-gap 1), 18 triage rows, 6 patches applied and re-verified, 1 defer (inherited tables' join-riding read constraint → 21-7), 11 rejects with refutations. No loopbacks.
