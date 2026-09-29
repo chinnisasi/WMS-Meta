@@ -488,3 +488,7 @@
 - source_spec: `spec-5-4-variance-review-and-resolution.md`
   summary: The ledger timeline's new binId filter (fromBin = bin OR toBin = bin) has no supporting index; a rejected low finding worth revisiting when 5-5 defines the ledger-history read pattern.
   evidence: Verified real (both reviews); the read is brand new with no consumers yet — adding `(tenant_id, from_bin_id)`/`(tenant_id, to_bin_id)` indexes is a small next-migration candidate against 5-5's measured usage.
+
+- source_spec: `spec-5-5-conflicts-reviews-the-human-review-queue.md`
+  summary: The quarantined-replay-conflict residents (AD-14 case 4) are split out of 5-5 as their own cross-repo story — a mobile sync-summary report upload, a rejected-ops table + read endpoint + resolve arms (apply/recount/discard-to-audit) on wms-be, and a web queue tab.
+  evidence: Investigated 2026-09-29 — mobile-rejected ops exist nowhere server-side (`engine.ts` deletes terminal ops, `lastSummary` is in-memory only, no rejected-op endpoint or table); the split keeps 5-5 FE-only (its spec, human split decision 2026-09-29) while the residents slice is independently shippable.
