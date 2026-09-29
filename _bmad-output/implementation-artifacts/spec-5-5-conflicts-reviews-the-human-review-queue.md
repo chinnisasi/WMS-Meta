@@ -62,13 +62,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/lib/api/` -- regen (`bun run api:generate`) + wrappers -- the stale client predates 5-2/5-4; regen against merged BE is the cross-repo consumer step
-- [ ] `src/lib/review-queue.ts` -- listReason/resolveReason mappers for the variance and adjustment arms -- pure-function pattern, unit-testable
-- [ ] `src/lib/use-variance-queue.ts` + `src/lib/use-adjustment-pendings.ts` -- hooks on the excursion `ResourceState` pattern -- cursor scoped per (tenant, status), Reloadable retry
-- [ ] `src/components/conflicts/variance-queue.tsx` -- the tab: cards + ledger panel (binId keyset walk, cap the consulted-seq statement at 200) + approve_adjust/recount actions -- the AC's core
-- [ ] `src/components/conflicts/adjustment-pendings-queue.tsx` -- approve/reject cards with inline threshold context -- 5-2's queue want
-- [ ] `src/components/conflicts/queues.tsx` -- register both tabs with per-tab capability gates (variance decision = `variances.resolve`, pendings = `adjustments.approve`) -- hide, never block
-- [ ] `src/lib/*.test.ts` -- unit tests for the mappers and any extracted card/logic -- the repo's DOM-light precedent
+- [x] `src/lib/api/` -- regen (`bun run api:generate`) + wrappers -- the stale client predates 5-2/5-4; regen against merged BE is the cross-repo consumer step
+- [x] `src/lib/review-queue.ts` -- listReason/resolveReason mappers for the variance and adjustment arms -- pure-function pattern, unit-testable
+- [x] `src/lib/use-variance-queue.ts` + `src/lib/use-adjustment-pendings.ts` -- hooks on the excursion `ResourceState` pattern -- cursor scoped per (tenant, status), Reloadable retry
+- [x] `src/components/conflicts/variance-queue.tsx` -- the tab: cards + ledger panel (binId keyset walk, cap the consulted-seq statement at 200) + approve_adjust/recount actions -- the AC's core
+- [x] `src/components/conflicts/adjustment-pendings-queue.tsx` -- approve/reject cards with inline threshold context -- 5-2's queue want
+- [x] `src/components/conflicts/queues.tsx` -- register both tabs with per-tab capability gates (variance decision = `variances.resolve`, pendings = `adjustments.approve`) -- hide, never block
+- [x] `src/lib/*.test.ts` -- unit tests for the mappers and any extracted card/logic -- the repo's DOM-light precedent
 
 **Acceptance Criteria:**
 - Given an open variance (incl. an epochConflict one and an over-threshold one), when an owner resolves approve_adjust from the web queue with the consulted seqs selected, then the correction lands once (fresh ULID replay-safe), the card leaves the open tab, and the recounted/adjusted history is browsable.
@@ -77,7 +77,18 @@ context:
 
 ## Design Notes
 
-- The variance approve-arm's consulted-seqs requirement is the flow's backbone: the ledger panel loads the bin's events (binId filter, full-precision keyset cursors already server-side), the approver ticks what they checked, and the resolve sends those seqs — the audit then answers "why is this number what it is" with the consulted events, matching the epic's ledger-context-click-through pattern. The statement is validated server-side (each seq must be a real seq of THAT bin's warehouse ledger) — client selection cannot fabricate history.
+### Implementation Notes (step-03 verification, diff read first-hand)
+
+Implementation commit `44e19ec` on `feat/5-5-conflicts-reviews-the-human-review-queue` (branch from FE `f7f29b3`; 15 files, +4230/−113 incl. regen `sdk`/`types`/`index`; locally only, never pushed). First-hand verification 2026-09-29: lint, typecheck, build, `api:generate` reproducible (tree stays clean), capability mirror 31×4, **542/542 tests across 36 files**. Deviations and notable facts, judged against the diff:
+
+- **The spec's Always parenthetical was wrong about the mirror, and the implementation is right.** "Owner and ops_manager hold all three decision capabilities" contradicts the 5-2 merged reality: `adjustments.approve` is owner-only (segregation of duties — the role that raises an adjustment does not hold the approval pen). The implementation follows the actual mirror; `queues.test.tsx` pins it (ops_manager → three tabs, no pendings tab). The frozen matrix row 7's "direct URL shows the allowed tabs read-only" reads accordingly: accountant/operator hold no tab capability at all, so the direct URL renders the honest prose line ("No review queues are open to your role"), not a blocked screen — hide, never block, still honored. Carried to the step-04 triage as a bad-spec note, not a code defect.
+- **Matrix row 1 claims "SKU/bin/**task** joins"; the impl joins SKU and bin** (via `useSkuMap`/`useBinCodeMaps`) but never renders the originating count `taskId` on a card — it surfaces only on recounted history (`recountTaskId`, sliced). Step-04 triage candidate: render the task id on the card (audit context, one line) or accept the narrowed reading.
+- **The Always bullet "a 409 always ends in a queue reload" applies to the already-decided family** (`variance-resolved`, `adjustment-pending-decided`, `conflict` → reload). The `variance-basis-moved` 409 deliberately keeps the card and names the sibling recount arm — exactly what the frozen matrix row itself prescribes; the pendings' guard-class 409s (a moved world) leave the row pending with the server's words verbatim. The stricter bullet wording loses to the matrix's per-row semantics.
+- `binCodeOf`/`binCodeLabel` is the same pure function three times (`adjustment-pendings-queue.tsx`, `variance-queue.tsx`, exported from `use-bin-code-maps.ts`) — dedupe candidate for step-04 triage.
+- The generated client keeps the hey-api 0.99.0 dropped-`| null` family: `abcClass` regen as `'a'|'b'|'c'` though the BE marks it nullable; `catalog-kits.test.ts`'s fixture gained `abcClass: 'a'` to satisfy the type (same known-bad family as `hazardClass`). Step-05 duty: extend the PENDING hey-api nullable entry.
+- `useBinCodeMaps` walks every page-distinct warehouse's zones + bin pages eagerly (enrichment, capped by `fetchAllPages`' hop cap; a failed zone leaves its bins "unknown" without failing the queue). Perf note for PENDING / step-04, not a defect.
+
+## Design Notes: the ledger panel loads the bin's events (binId filter, full-precision keyset cursors already server-side), the approver ticks what they checked, and the resolve sends those seqs — the audit then answers "why is this number what it is" with the consulted events, matching the epic's ledger-context-click-through pattern. The statement is validated server-side (each seq must be a real seq of THAT bin's warehouse ledger) — client selection cannot fabricate history.
 - Per-tab gating over the switcher: `queues.tsx` learns a `capability` list per tab and filters by the session role; the surface-level nav gate (`review.decide`) is untouched. Over-threshold variances are flagged on the card (badge "owner decision"), never hidden — an ops_manager sees the card and the 403 names the gate.
 
 ## Verification
