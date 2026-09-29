@@ -2,7 +2,7 @@
 title: '5-5 Conflicts & Reviews — the human review queue'
 type: 'feature'
 created: '2026-09-29'
-status: 'in-progress'
+status: 'in-review'
 baseline_commit_fe: f7f29b3  # wms-fe HEAD (main) before implementation — FE-only story
 route: 'dispatch'
 review_loop_iteration: 0
@@ -97,3 +97,37 @@ Implementation commit `44e19ec` on `feat/5-5-conflicts-reviews-the-human-review-
 - `cd workspace/core/frontend/wms-fe && bun run api:generate && bun run lint` -- expected: regen matches `wms-be/openapi/openapi.json` (BE main already carries 5-4), lint clean
 - `bun run test` -- expected: all suites green (new mapper tests included; `users.test.ts` mirror untouched at 31)
 - `bun run build` -- expected: the `/conflicts` route builds with the two new tabs
+
+## Review Triage Log
+
+Findings from the three step-04 layers (blind-hunter, edge-case-hunter, verification-gap), each verified first-hand before verdict; cross-layer duplicates share one row with their layers named. review_loop_iteration stays 0 — no loopback (no intent_gap/bad_spec entries).
+
+- **[BH1+EC1+EC6+VG-O1] `useBinLedgerEvents` Retry is dead after a first-page failure** — **medium** — verified: `reload()` resets `requested`/`result` only (use-variance-queue.ts) with no `revision` bump; on a first-page failure every fetch effect dep is unchanged, so the refetch never runs and the panel stays behind ReadFailure indefinitely. Collapse/re-expand or a tab switch still recovers, but the Retry affordance itself is dead. → **patch E1**.
+- **[BH3,BH4,BH8,BH13+VG1,VG2,VG-O2] No component-level coverage for either new queue; the coverage claims in the comments are false** — **medium** — pre-verified by the gap layer and re-checked: `queues.test.tsx`'s swap test never renders a row; dropping the re-entry guard, the 409-reload branches, or the seq normalization breaks no test; the header comment's "component-level assertions in the wrapper pins" names verification that does not exist (wrapper pins observe fetches only). Also uncovered: the ledger-panel checkbox→body path and the zero-coverage `useBinCodeMaps`. → **patch E2**.
+- **[BH2+VG3] `binCodeLabel` exported dead; the join exists in three copies** — **low** — verified: zero importers outside the export; both components carry private `binCodeOf` clones that can drift from the hook's rule. → **patch E3**.
+- **[BH5] A single `decidingId`/`resolvingId` cannot represent two concurrent in-flight rows** — **low** — verified: with decide(A) in flight, decide(B) overwrites the slot, card A's buttons re-enable while its request is outstanding, and its re-click is silently swallowed by the guard; in the variance card the same slot also lights the recount button and the ledger panel's approve button together. → **patch E4**.
+- **[BH6] `review-queue.ts` comment claims a duplicate check that does not exist** — **low** — verified: `resolveDraftProblem` checks emptiness and the cap only; dedupe happens at send. → **patch E5**.
+- **[BH9] The QUEUES re-shape dropped the `Record<Queue,string>` compile guarantee** — **low** — verified (the panel's silent `else → ExcursionQueue`; the union not derived from the array) — **rejected**: developer-only, realized only by future edits to this exact file, and the total fix restructures the switch — unlikely everyday, fix more than a direct correction.
+- **[BH10] 404 copy names the wrong entity on both new list mappers** — **low** — verified against BE: the events route's 404 arm is "Warehouse does not exist in this tenant" (inventory.controller.ts:619) while `ledgerListReason`'s not-found copy names the bin (a query param); the variances list route has no 404 arm at all while `varianceListReason` names a warehouse. → **patch E6**.
+- **[BH11] Ledger-panel rows omit which SKU an event moved** — **medium** — verified: rows render the event's quantity at its own SKU's precision but never SKU identity; multi-SKU bins are everyday, and the consulted-seqs audit a reviewer signs cannot be read (seqs 12 and 14 moved *what*?). The panel already holds the sku map. → **patch E7**.
+- **[BH12+EC4] The outcome banner is keyed by tab, so it outlives the entries it spoke about** — **low** — verified: keyed state (`outcomeFor.tab`) survives Next-paging and a later return to the tab; after a success-reload it also briefly covers rows that did not participate. **Rejected** (lifecycle part): it matches the excursion-queue template's own keyed-by-tab banner lifecycle, the harm is a stale one-line banner, and the settling fix keys on entry ids; the `'Pend approved'` fallback word rides the E7 cosmetic round.
+- **[BH13] folded into the E2 row above (pendings wire read unasserted).**
+- **[BH14] Zero-delta sign renders differently on the two cards (+0 vs 0)** — **low** — verified from the two delta expressions. → **patch E7**.
+- **[BH15] Eight new/edited files lack a trailing newline at EOF** — **low** — verified in the diff (lint passes because nothing enforces it; repo files otherwise newline-terminated). → **patch E7**.
+- **[BH16] queues.test.tsx relative imports** — **false** — refuted: excursion-queue.test.tsx, the identical sibling in the same directory, imports with the same relative spelling; the component-test house pattern is relative.
+- **[BH7] Dead `warehouseId`/`signal` options on the new wrappers** — **false** — refuted: `fetchApiListExcursions` — the wrapper this pair is shaped on — carries the identical unused `warehouseId` + `signal` option set; exposing the route's full filter surface is the house wrapper contract.
+- **[EC2] A pendings 409 `conflict` renders reload-claiming copy but does not reload** — **low** — verified: the BE's shared `writeIdempotencyKey` throws 409 `conflict` ("Concurrent idempotent request", adjustment-approval.command.ts:582) and the mapper maps that code to "the queue has refreshed" while `decide()` reloads only on `adjustment-pending-decided`; from this UI the same-key race is rare (fresh ULID per click) but the code path is real. → **patch E8**.
+- **[EC5] A decide click after the session cleared between render and click is a silent no-op** — **low** — verified (the `session === null` early return) — **rejected**: the excursion-queue template behaves identically, the window is a cleared session against an already-rendered card (rare), and the fix adds a banner branch for a state the component's sessioned gate normally resolves.
+
+### Routed entries (cascading order — no intent_gap, no bad_spec; all patch)
+
+- **E1 (patch)** — add the `revision` counter to `useBinLedgerEvents`'s reload + effect deps, matching `useVarianceQueue`/`useAdjustmentPendings`.
+- **E2 (patch)** — add `variance-queue.test.tsx` and `adjustment-pendings-queue.test.tsx` in the `excursion-queue.test.tsx` shape: resolve/decide POST with a fresh `Idempotency-Key`, the already-decided 409s each re-read the queue, the double-click single-POST pin, the ledger-panel checkbox selection reaching the approve body, a capability-less role rendering read-only, and the pendings wire read (`/inventory/adjustment-pendings?status=pending`).
+- **E3 (patch)** — have both components import `binCodeLabel` from `use-bin-code-maps.ts` and delete their private `binCodeOf` copies.
+- **E4 (patch)** — replace the single deciding/resolving slot with a per-entry Set in state, so concurrent in-flight rows each render their own state and the variance card's recount/approve arms stop sharing.
+- **E5 (patch)** — align the comments: `review-queue.ts`'s client-side refusal wording (duplicates are normalized at send, not refused), `queues.test.tsx`'s coverage claim, and the guard comments' "checked in both arms" (true only after E2).
+- **E6 (patch)** — correct the two 404 copies to what the routes can actually 404 on (ledger → warehouse; variances list → drop its unreachable not-found arm).
+- **E7 (patch)** — cosmetic round: align the zero-delta sign rendering, append the missing EOF newlines, pick a real fallback word for the pendings success banner.
+- **E8 (patch)** — widen the pendings decide's reload condition to include the 409 `conflict` code its own copy promises.
+
+No deferred entries (nothing routed to defer; nothing carried unverified).
