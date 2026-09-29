@@ -2,7 +2,7 @@
 title: '5-5 Conflicts & Reviews — the human review queue'
 type: 'feature'
 created: '2026-09-29'
-status: 'in-review'
+status: 'done'
 baseline_commit_fe: f7f29b3  # wms-fe HEAD (main) before implementation — FE-only story
 route: 'dispatch'
 review_loop_iteration: 0
