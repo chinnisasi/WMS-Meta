@@ -478,3 +478,13 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-3-cycle-count-scheduling-and-execution.md`
   summary: No index support for the per-class scheduler scan (no `skus (tenant_id, abc_class)` index in 0045) and `count_variances` lacks a `task_id` index (review triage BH-15).
   evidence: Verified — migration 0045 adds neither index. The scheduler scan is less costly than the review claimed (the join drives off warehouse-scoped stock_on_hand rows, not full sku scans), but the `count_variances.task_id` index IS needed: 5-4's resolution surface and the submit/recount arms look variance rows up by task. Add both indexes in the next movements migration (5-4's) rather than touching the landed 0045.
+
+- source_spec: `spec-5-4-variance-review-and-resolution.md`
+  summary: An empty-string `quantityThreshold` coerces to 0 via the DTO's @Type(() => Number) — silently enabling owner-only routing — because class-transformer's Number() coercion passes @IsInt; 5-2's AdjustmentPolicyDto carries the same hole (house-wide validation-convention gap).
+  evidence: Would settle with a unit test PUTting `quantityThreshold: ""` — today it becomes a 0 threshold; the fix is a shared string-rejection transform convention applied across both policy DTOs, not a story-local guard.
+- source_spec: `spec-5-4-variance-review-and-resolution.md`
+  summary: wms-fe's generated API SDK was not regenerated for the ledger-timeline's new optional `binId` query param (InventoryControllerListEventsData still carries the pre-5-4 shape) — the capability-only drift guard cannot see it.
+  evidence: Verified first-hand (types.gen.ts ~line 4757); harmless until the consumer lands — regen with 5-5's ledger-history component; consider extending the drift guard to query shapes.
+- source_spec: `spec-5-4-variance-review-and-resolution.md`
+  summary: The ledger timeline's new binId filter (fromBin = bin OR toBin = bin) has no supporting index; a rejected low finding worth revisiting when 5-5 defines the ledger-history read pattern.
+  evidence: Verified real (both reviews); the read is brand new with no consumers yet — adding `(tenant_id, from_bin_id)`/`(tenant_id, to_bin_id)` indexes is a small next-migration candidate against 5-5's measured usage.
