@@ -2,9 +2,11 @@
 title: '5-4 Variance review and resolution'
 type: 'feature'
 created: '2026-09-29'
-status: 'draft'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: ea28fee  # wms-be HEAD before implementation
+baseline_commit_fe: dbe5157  # wms-fe HEAD (capability-mirror task)
 context:
   - '_bmad-output/implementation-artifacts/epic-5-context.md'
   - 'docs/design/SYSTEM-DESIGN.md'
