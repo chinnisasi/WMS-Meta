@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-30-2026 00:40
+last_updated: 09-30-2026 08:26
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -328,7 +328,7 @@ development_status:
   5-4-variance-review-and-resolution: done
   # merged — FE PR #48 (squash 42e906e); no mobile change
   5-5-conflicts-reviews-the-human-review-queue: done
-  epic-5-retrospective: optional
+  epic-5-retrospective: done
 
   epic-6: backlog
   6-1-reorder-points-breach-alerts-and-suggested-pos: backlog
@@ -766,3 +766,78 @@ action_items:
     owner: "wms-be"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-12-retro-2026-09-28.md"
+  - id: "epic-5-retro-item-58-mobile-epic-5-patch-batch-fold-into-the"
+    epic: 5
+    action: "Mobile epic-5 patch batch (fold into the AD-14 quarantine-residents story
+      or run standalone): count.tsx scan-step guard mirroring transfer.tsx:109; same-tick
+      enqueue guard on count/transfer onConfirm (5-5 FE E4 useRef-Set precedent);
+      replay-classification: kit-cannot-hold-stock -> quarantined and a decided disposition
+      for the confirm catch-weight validation-failed arm (never a silent durable-outbox
+      drop); wire tests for fetchApiConfirmTransferInbound + fetchApiSubmitCount per
+      the api.test.ts pack precedent"
+    owner: "next mobile story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-59-count-scheduler-verification-arm-one-sui"
+    epic: 5
+    action: "Count scheduler verification arm: one suite sets COUNT_SCHEDULER_POLL_MS
+      positive (or seeds count_policies and runs the exact enumeration SQL from jobs.module.ts:341-346)
+      and asserts the tick yields due count tasks — today that SQL is stubbed everywhere
+      it runs (stubAuthDb/stubFacade)"
+    owner: "next movements BE story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-60-server-patch-refuse-400-when-a-transfer"
+    epic: 5
+    action: "Server patch: refuse 400 when a transfer confirm line names serials whose
+      SKU is not serial-tracked (transfer.command.ts:938-940 silently discards them
+      today)"
+    owner: "next movements BE story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-61-docs-batch-for-next-movements-story-docs"
+    epic: 5
+    action: "Docs batch for next movements story docs duty: movements.md + API-SURFACE
+      gain count.completed/count.policy_updated; ratify transfer-in-transit-bin-conflict
+      and count-task-completed into the module docs (frozen-matrix errata); one threshold-unit
+      convention note (quantity_threshold base units vs quantity_threshold_milli);
+      movements.md states the scanned-bin-authoritative redirect semantics; PENDING
+      gains the recount in-place-basis note"
+    owner: "next movements story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-62-variance-basis-moved-error-arm-names-or"
+    epic: 5
+    action: "variance-basis-moved error arm names (or links) the existing open task
+      when the mandated recount remedy already exists — the epoch-mismatch auto-recount
+      is unfindable for the resolver today (409s count-task-open)"
+    owner: "next movements story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-63-process-bmad-build-step-04-triage-rule-a"
+    epic: 5
+    action: "Process: bmad-build step-04 triage rule — any spec assertion marked carried-to-triage
+      MUST appear as a triage row with an explicit disposition (spec-5-5 task-join
+      + Always-clause candidates were silently narrowed). Fold into the Review Triage
+      Log header checklist"
+    owner: "Claude (bmad-build convention)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-64-defer-pending-extract-at-next-touch-coun"
+    epic: 5
+    action: "Defer (PENDING): extract at next touch — count.command.ts (count core
+      / variance-resolve / scheduled tick, 1973 lines), MovementsFacade (two aggregates),
+      app/inbox.tsx (896 lines, 13 symbols); unify the three policy-put verbs audit+outbox
+      pair; ledger-panel off-page-selection visibility"
+    owner: "when next touched"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-5-retro-item-65-defer-pending-migration-0043-pre-flight"
+    epic: 5
+    action: "Defer (PENDING): migration 0043 pre-flight covers a user BIN coded IN-TRANSIT
+      but no user ZONE — ensureInTransitBinInTx adopts a user-owned zone of that code
+      (receiving-bin.ts); add a runtime refusal, per-line landing bins + per-bin epoch
+      map belong to the future web /moves surface"
+    owner: "when next touched"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
