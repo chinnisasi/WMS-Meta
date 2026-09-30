@@ -2,7 +2,7 @@
 title: '6.1 Reorder points, breach alerts, and suggested POs'
 type: 'feature'
 created: '2026-10-01'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 baseline_commit: '8604e03'
 review_loop_iteration: 1
