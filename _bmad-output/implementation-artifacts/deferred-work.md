@@ -495,3 +495,7 @@
 - source_spec: `spec-5-5-conflicts-reviews-the-human-review-queue.md`
   summary: `@hey-api/openapi-ts` 0.99.0 drops `| null` on enum+nullable fields — a second instance of the closed 5-3 `hazardClass` family: 5-5's regen carries `SkuResponse.abcClass` as `'a'|'b'|'c'` with no null arm though the BE marks it nullable ("or null when it is not yet classified").
   evidence: Found 2026-09-30 in the 5-5 step-03 regen — BE catalog DTO declares abcClass nullable, committed `openapi.json` carries `"nullable": true`, `types.gen.ts` emits the three-class union hard-required (`types.gen.ts:485`), and `catalog-kits.test.ts`'s fixture gained `abcClass: 'a'` to satisfy the false type. Fix is the standing one: upgrade/patch the generator (or reshape the DTOs to a oneOf) and regenerate — one fix makes `hazardClass` and `abcClass` honest together.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-6-ad14-quarantined-replay-residents.md`
+  summary: The count-screen guard's call sites are consumed by nothing testable — review triage RV3, verdict low, defer.
+  evidence: Verified 2026-09-30 (`review_loop_iteration: 1`) — the repo's verification convention pins decision logic in `draft.ts` (`countScanAccepts` deny-by-default is verified there), and the call sites are one-line consumers with no screen harness; closing it means standing up app/-screen testing beyond this change. Filed as an open item for the epic-5 retro.

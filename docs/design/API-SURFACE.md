@@ -1,6 +1,6 @@
 # API surface
 
-Every route the backend exposes, grouped by the module that owns it. **86 routes across 11 controllers.**
+Every route the backend exposes, grouped by the module that owns it. **89 routes across 11 controllers.**
 
 Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-be/README.md`](../repos/wms-be/README.md); this is the inventory — what exists, who owns it, what gates it.
 
@@ -41,6 +41,9 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | GET | `/tenants/{t}/devices` | — | Keyset |
 | POST | `/tenants/{t}/devices/{deviceId}/revoke` | `device.manage` | Status flip + wipe flag; idempotent |
 | POST | `/tenants/{t}/devices/self-test/echo` | **device credential** | Connectivity probe |
+| POST | `/tenants/{t}/devices/sync-reports` | **badge-in credential** | **5-6** (AD-14): the device's retained-report upload — rows are the dropped terminal ops (`rejected`/`quarantined` fates), each row carrying its op ULID, its sealed payload, the refusal verbatim and its own badge-in attribution. Per-row dedupe on (tenant, op_id) makes a re-post a no-op ack (at-least-once upload). `self-test.echo` is refused (not reviewable — a device diagnostic); a malformed row → 400 naming the row; bare enrollment token → 401; revoked device → 403 `device-revoked`. The 200-row cap is the report ceiling, but the **effective bound is the body limit** (~100 kB Express default; the per-row payload cap is 32 kB) — an oversized body → 413 before any row can be named, which is why the uploader slices at 50 rows and halves on 413. Audit-only (`device.sync_report.recorded`) |
+| GET | `/tenants/{t}/rejected-ops` | — | **5-6:** the Conflicts & Reviews queue's keyset read, `?status=open\|applied\|recounted\|discarded` |
+| POST | `/tenants/{t}/rejected-ops/{rejectedOpId}/resolve` | `review.decide` | **5-6:** the three arms. **apply** re-executes the stored payload through the op's own command path under the op's attributed operator with `binStateEpoch` stripped (the human judgment replaces that observation) — every guard live; any guard refusal surfaces verbatim and the row stays open. **recount** mints through the movement recount core on the payload-named bin — a pick's `binId` or a placement's `toBinId` (both served; no other field) — `409 count-task-open` on a bin with an open task; a bin-less payload → 400 backstop (the arm is hidden client-side for binId-less op types); unknown bin → 404. **discard** is audit-only (no stock write). Unknown id → 404; already resolved → 409 `rejected-op-resolved`. `Idempotency-Key`; replay re-serves the stored outcome. Apply rides the owning command facades (their own transactions — a post-commit failure self-heals on the op ULID's idempotency key) |
 
 ## catalog — `catalog.controller.ts`
 

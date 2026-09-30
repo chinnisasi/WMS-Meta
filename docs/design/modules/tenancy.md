@@ -18,6 +18,7 @@ This module is the spine every other module calls into. `assertPermission` + `ge
 | `zones` (`schema.ts:159`) | Floor areas | `zones_warehouse_id_code_unique` — scoped to the **warehouse**, not the tenant |
 | `bins` (`schema.ts:201`) | Putaway/pick locations | `bins_warehouse_id_code_unique`; `capacity` is milli-units with `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`, `drizzle/0027_uom_vocabulary.sql:360`); 11-5 adds the nullable physical capacity `length_mm`/`width_mm`/`height_mm` (`> 0 AND <= 100000`) and `max_weight_grams` (`<= 100000000`) — integer WYSIWYG, CHECKs only in migration `0034`; 12-4 replaces the loose free-text `type` with the eight-value `LocationType` vocabulary (shelf/pallet/floor/staging/floor-stack/yard/tank/silo) backstopped by `bins_type_check` (CHECK only in migration `0037`); `retired_at`/`retired_by` stamped together (`bins_retired_pairing`, `drizzle/0016_numerous_bloodscream.sql:6`) and never cleared; `system_owned` marks the Receiving/QC-hold bins |
 | `devices` (`schema.ts:1099`) | Floor handhelds: enrollment code hash, label, badge PIN hash, operator binding, revocation | `devices_enrollment_code_hash_unique` is a **partial** index (`where enrollment_code_hash is not null`) — it is what makes redemption single-shot. `devices_status_check` ∈ {`active`,`revoked`} (`drizzle/0012_lonely_the_renegades.sql:40`) |
+| `rejected_ops` (`schema.ts:3134`) — **5-6** | One row per dropped terminal op a device's replay pass reported: the op ULID, its type, the `rejected`/quarantined classification and refusal verbatim, the payload as uploaded (the apply arm's re-execution input), the badge-in attribution jsonb, and the resolution columns | `rejected_ops_tenant_id_op_id_unique` — the per-row dedupe that makes at-least-once uploads safe (a re-posted row updates nothing). CHECKs (`classification`/`status`) live **only in migration `0047`** |
 | `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with inbound, putaway, outbound and carriers** — it is the one table this module owns that siblings write |
 | `idempotency_keys` (`schema.ts:238`) | AD-5 storage: `(tenant_id, key)` unique + payload hash + response snapshot | Also written by every other module. Extra `idempotency_keys_key_idx` exists solely for registration's key-only replay lookup |
 
@@ -77,11 +78,28 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 | `payload_hash` | text | NO | — | sha256 over the command's fields. **Convention changed in 10.2** (base units, not milli) — no pre-10.2 key replays |
 | `response_snapshot` | jsonb | NO | — | **Durable and re-served on replay. Never put secret material here** — story 3.2 did, and story 4-6b forbids it |
 
+### `rejected_ops` (5-6, `schema.ts:3134`)
+
+| Column | Type | Null | Guard | Meaning |
+|---|---|---|---|---|
+| `device_id` / `operator_user_id` | uuid ×2 | NO | — | Badge-in attribution ids — **bare uuid, no FK** (the repo convention; scope-validated server-side). `operator_user_id` rides the device session that reported |
+| `op_id` | text | NO | **`unique (tenant_id, op_id)`** | The mobile op's own ULID — the per-row dedupe key that makes at-least-once uploads safe. Never `self-test.echo` (not reviewable; the upload refuses it) |
+| `op_type` | text | NO | CHECK (migration `0047`) | The mobile OpType — the seven reviewable types (`REJECTED_OP_TYPES`, `sync-report.command.ts:89`) |
+| `classification` | text | NO | CHECK (migration `0047`) | `rejected \| quarantined` — the replay fate the server refused with, carried verbatim |
+| `problem_code` / `problem_detail` | text / text | NO / **YES** | — | The replay refusal, verbatim. The queue card's primary display |
+| `payload` | jsonb | NO | — | The op's payload as uploaded (base units); the apply arm re-executes it. `binStateEpoch` is stripped at APPLY time, **never at store time** |
+| `attribution` | jsonb | NO | — | `{deviceId, deviceLabel, operatorId, operatorEmail, opDeviceLabel, opOperatorEmail}` — the server-verified badge-in identity beside the op's own sealed session |
+| `op_enqueued_at` / `op_occurred_at` | timestamptz / nullable | NO / **YES** | — | The op's own timestamps from the device |
+| `status` | text | NO | CHECK (migration `0047`) | `open \| applied \| recounted \| discarded` — exactly `open` at upload; the resolve arms own every later state |
+| `resolved_by` / `resolved_at` / `resolved_outcome` | uuid / timestamptz / jsonb | **YES** | — | The resolver, the resolution instant, and the arm's outcome (applied snapshot / minted count-task id / the discard marker) — all null while open |
+
+Second index: `rejected_ops_tenant_status_created_at_id_idx` — the review queue's keyset read (status filter first, the pendings-queue keyset shape). RLS policy `rejected_ops_tenant_isolation` (migration `0047`) — the `client-isolation` count pin is 56 since this table.
+
 ---
 
 ## Public seam
 
-`TenancyModule` exports exactly two providers (`tenancy.module.ts:55`): `TenancyService` and `EnrollmentCommand`.
+`TenancyModule` exports three providers (`tenancy.module.ts:76`): `TenancyService`, `EnrollmentCommand`, and — since 5-6 — `SyncReportCommand` (so the api shell's `DevicesController` can reach the AD-14 upload/list/resolve routes; its constructor injects the seven op types' owning facades for the apply arm and `InventoryFacade` for the recount arm's advisory lock).
 
 **`TenancyService`** (`tenancy.service.ts:139`) — for siblings and the api shell:
 
@@ -101,6 +119,8 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 - `ensureReceivingBinInTx` / `ensureQcHoldBinInTx` — `receiving-bin.ts:51,114`. Inbound calls these so bin master data stays tenancy-owned even when a GRN or a QC hold creates a bin.
 
 **`EnrollmentCommand`** (`enrollment.command.ts:200`) is exported so the api shell's `DevicesController` can reach it: `mintEnrollmentCode`, `enroll`, `badgeIn`, `revokeDevice`, `list`, `selfTestEcho`.
+
+**`SyncReportCommand`** (`sync-report.command.ts:471`, 5-6) export exists for the same reason: `recordSyncReport` (badge-in), `listRejectedOps` (any member, keyset), `resolveRejectedOp` (`review.decide`).
 
 **`UsersCommand`** and the bin/zone/warehouse commands are **not** exported — they are reachable only through this module's own controllers.
 
@@ -155,6 +175,29 @@ The docstring asserts the two families are "mutually exclusive by claim shape". 
 ### Bin administration
 
 `merge` moves stock (emitting `bin.merged`, a two-arm relocation) and `retire` is **terminal and requires empty**. Both live in `bin.command.ts`, not putaway — putaway *directs* placement, tenancy *owns* the bin. `bins` is the one table deliberately shared by column: tenancy owns structure — since 11-5 that includes the four physical-capacity attributes (`editBinCapacity`) — and `retired_at`, putaway owns `blocked`. It has **no architecture-test block**, which makes the shared-ownership case the least-guarded one in the repo.
+
+### The quarantine loop (5-6) — from replay fate to queue resolution
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant D as Device (offline store)
+  participant T as tenancy (sync-report.command)
+  participant Op as Ops Manager / Owner (web)
+
+  Note over D,T: a replay pass refused an op — replay-classification case 3<br/>(rejected) or case 4 AD-14 (quarantined); the op is dropped<br/>terminal and RETAINED, never deleted
+  loop uploader passes (50-row slices)
+    D->>T: POST /devices/sync-reports (badge-in, Idempotency-Key)
+    Note over T: per-row dedupe on (tenant, op_id);<br/>each row persists `open`;<br/>body-limit breach → 413 before any row is named
+    T-->>D: per-row acks {recorded} — acked rows unmark, refused stay retained
+  end
+  Op->>T: GET /rejected-ops?status=open (keyset; any member)
+  Op->>T: POST /rejected-ops/{id}/resolve {apply|recount|discard} (review.decide)
+  Note over T: apply re-executes the payload through the op's OWN<br/>guarded command (idempotency key = the op ULID);<br/>recount mints a count task on the payload's bin;<br/>discard carries the row to the audit trail — no stock write
+  T-->>Op: {status: applied|recounted|discarded, outcome}
+```
+
+The mobile side owns exactly two behaviors the server does not: the **slicing** (50-row slices; on 413 the uploader *halves the slice and retries this pass* — `sync-report-uploader.ts`, the effective bound is the body limit, not the 200-row DTO ceiling) and the **ack discipline** (acked rows unmark in the store; refused or unreachable reports leave everything retained).
 
 ---
 
@@ -266,6 +309,22 @@ The UPDATE re-carries every validity condition including `inviteExpiresAt > now(
 
 `mintEnrollmentCode` (`device.manage`), `enroll` (unauthenticated), `badgeIn` (device token, no idempotency key), `revokeDevice` (`device.manage`), `selfTestEcho` (badge-in session).
 
+### `SyncReportCommand` (5-6, `sync-report.command.ts:471`)
+
+**`recordSyncReport` (`:510`, badge-in session required).** The replay pass's durable upload — the report carries the `rejected`/case-4 `quarantined` residents. Guards in order: row shape (`REJECTED_OP_TYPES` + `assertSyncReportRowShape`, per-row — malformed → 400 naming the row, `Sync-report row ${index} (op ${opId}): ${why}`) → replay lookup → device row **locked and re-resolved** (`:540-548`, 403 `device-revoked` — the self-test echo's fail-closed shape) → operator's role re-read from the DB in the same tx (`:553-566`, removed/demoted/`accountant` → 403). Rows insert one by one with `onConflictDoNothing` on `(tenant_id, op_id)` (`:609-627`) — the dedupe acks re-posted rows as `recorded: false` rather than erroring, the exact at-least-once shape. **Attribution is per row** (`:599-606`): the badge-in session's server-verified ids/label/email beside the row's own sealed op session — a batch may mix the op sessions that produced its drops, so a stamp from `rows[0]` would misstamp the rest. Emits nothing to the outbox; the audit row is `device.sync_report.recorded` (whole report, keyed to the device).
+
+The DTO carries a 200-row ceiling, but the **effective bound is the body limit** — 413 before any row can be named. On a 413 the mobile uploader halves that pass's slice and retries (client-side; see the flow above); the server-side `ArrayMaxSize(200)` is the direct-request contract only.
+
+**`listRejectedOps` (`:687`).** One keyset page, `(created_at, id)` desc, status-filtered, `limit` clamped 1–200 after the DTO's own `@IsNumber/@Min/@Max` boundary gate. Cursor validation is this module's `decodeCursor` copy (`:703-725` → 400 `invalid-cursor`). Any tenant member (a read, never capability-gated).
+
+**`resolveRejectedOp` (`:784`, `review.decide` — owner + ops_manager).** Command order is the resolveCountVariance shape, order-for-order: capability (DB role read inside the tx, **before** the replay lookup) → fingerprint → row lock `.for('update')` → 404 → 409 `rejected-op-resolved` → payload shape assert → arm → **conditional** terminal UPDATE `.where(status = 'open')` (another 409 backstop on the settled-under-a-concurrent-resolution race) → audit + outbox `device.rejected_op.resolved` → idempotency LAST. Three arms:
+
+- **apply** — the stored payload re-executed through the op's OWN guarded command facade, `binStateEpoch` stripped (`applyArm` at `:1087`); every other guard is live. The re-execution's idempotency key is the op's own ULID, so an apply-retry after a crash mid-arm replays the settled apply exactly-once. A guard refusal rolls the whole resolution back — the row **stays open** and the refusal surfaces verbatim; the queue keeps showing the original replay refusal. A permanently-refused op closes only via discard — honest, not a defect.
+- **recount** — `payload.binId ?? payload.toBinId` (`:882`, a pick's `binId` or a placement's `toBinId`), validated against the payload's **own** `warehouseId`; a toBinId from another warehouse 404s on the bin select. Missing/unshaped `binId`+`warehouseId` → 400 **validation-failed** ("The payload carries no bin") — the arm is hidden client-side for bin-less payloads; this arm is the direct-request backstop, never a served 409. Then canonical order: `assertWarehouseInTenant` → bin SELECT FOR UPDATE → `lockWarehouseInTx` (advisory, LAST) → `movements.mintRecountTaskInTx` — the movement core, no ledger-write shortcut.
+- **discard** — no stock write; the row's refusal + attribution carry to the audit trail.
+
+The 404 on the row is **ambiguous by design** — it also covers an inner command's re-executed refusal (an applied putaway whose bin vanished names the bin), so the FE's not-found arm prefers the server `detail` verbatim over its fallback copy.
+
 ---
 
 ## Key algorithms
@@ -371,6 +430,9 @@ The QC-hold re-select additionally requires `systemOwned = true` (`:169`): adopt
 | A bulk asset's capacity is weight-defined (12-4): required at create, never cleared, never re-valued below held mass, never suggested, never gridded | `assertBulkAssetWeightDefined` / `refuseBulkAssetWeightClear` / the re-value guard in `editBinCapacity`; `binCandidatesInTx` WHERE excludes the type; `GRID_TYPES` + `refuseBulkAssetGrid` |
 | Zone/bin codes are unique per **warehouse**, warehouse codes per **tenant** | The three unique indexes |
 | A revoked device is dead on its next request | Every device command re-resolves the row before acting |
+| A sync-report row is recorded at most once per (tenant, op_id) — at-least-once uploads are safe | `rejected_ops_tenant_id_op_id_unique` + `onConflictDoNothing` (`sync-report.command.ts:609`) |
+| A rejected op resolves exactly once, in one terminal state | Row lock `.for('update')` + the conditional UPDATE `.where(status = 'open')` (`:967`) — a concurrent resolution races to the same 409 `rejected-op-resolved` |
+| A rejected op's apply can never launder a stale epoch | `binStateEpoch` is stripped at APPLY time — the re-executed command's own binStateEpoch guard is live and current |
 
 ---
 
@@ -412,6 +474,8 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 | `device.enrollment_code_minted` / `device.enrolled` / `device.revoked` | `EnrollmentCommand` | `{deviceId, …}` — **never** the code, PIN or sealed key |
 | `bin.blocked` | putaway's `BinStateCommand` | — |
 | `bin.capacity_changed` (11-5) | `editBinCapacity` | `{binId, warehouseId, lengthMm, widthMm, heightMm, maxWeightGrams}` |
+| `device.rejected_op.resolved` (5-6) | `resolveRejectedOp` | `{rejectedOpId, opId, opType, classification, problemCode, decision, status, deviceId, deviceLabel, operatorId, operatorEmail, resolvedAt}` |
+| `device.sync_report.recorded` (5-6) | `recordSyncReport` | **audit-only** — an `audit_events` row (action = the event name, `target_type` = `device`), no outbox row: the per-row dedupe + `rejected_ops` rows carry the durable facts |
 
 `createBin` emits nothing (see Commands).
 
@@ -440,3 +504,9 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 **`decodeCursorSafe` exists in eleven private copies across the repo**, three of them in this module (`tenancy.service.ts:425`, `users.command.ts:632`, `enrollment.command.ts:822`). They are not identical — carriers' additionally pins the instant shape with a regex. A crafted cursor that skips validation reaches the `::uuid`/`::timestamptz` cast and surfaces as a 500, which is exactly what these exist to prevent (`test/tenancy.spec.ts:521`).
 
 **`../PENDING.md` records that the enroll replay lookup was missing its `tenantId` predicate** (epic-3 retro a6). The code at `enrollment.command.ts:338-347` now carries it and `test/devices.spec.ts:703` pins it — that arm is closed; the PIN-lockout and binding-role-gate arms are not.
+
+**5-6: the 200-row sync-report ceiling is not the effective bound — the body limit is.** A report that exceeds it is refused 413 before any row is named, the row-level shape assert never runs, so the client (and only the client — `wms-mobile/src/state/sync-report-uploader.ts`) recovers by halving that pass's slice. The DTO's `ArrayMaxSize(200)` exists for direct requests only. If the server's body limit ever drops below a single 32 KB-capped row's worst case, the uploader's halving would loop — unreachable today and pinned by the mobile suite's convergence test, but re-check that pin when touching the body limit.
+
+**5-6: the recount arm's bin comes from the payload alone (`binId ?? toBinId`, `:882`).** The server does not consult bin master data or the original op's context to find "the" bin — a `transfer.confirm` payload's `destBinId` is outside this vocabulary on both sides (the queue hides the recount arm for it client-side, and the server 400s a direct request). Any new op type that should be recountable must name its bin in the payload and join `REJECTED_OP_TYPES` with its `assertPayloadShape` branch — the exhaustive switch at `:1242` forces that branch into existence.
+
+**5-6: a refused apply leaves the row open, deliberately.** The re-executed command's refusal rolls the whole resolution transaction back — the queue keeps showing the row's ORIGINAL replay refusal, not the fresh one. Do not "help" a reviewer by surfacing the inner refusal into `problem_*.code`/`detail`: those columns are the replay history, and the 404-style ambiguity resolution in FE (`review-queue.ts`'s not-found arm preferring the server `detail`) already leans on that distinction.
