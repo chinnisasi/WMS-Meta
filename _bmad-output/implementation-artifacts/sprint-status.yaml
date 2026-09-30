@@ -326,7 +326,7 @@ development_status:
   5-3-cycle-count-scheduling-and-execution: done
   # merged — BE PR #62 (squash 093eb6d), FE PR #47 (f7f29b3); no mobile change
   5-4-variance-review-and-resolution: done
-  # implemented on feat/5-5… commit ac3729f (44e19ec + patch round); FE-only, branch not yet pushed
+  # implemented on feat/5-5… (44e19ec + patch round ac3729f); FE-only — PR #48 open
   5-5-conflicts-reviews-the-human-review-queue: review
   epic-5-retrospective: optional
 
