@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 09-30-2026 00:15
+last_updated: 09-30-2026 00:40
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -326,8 +326,8 @@ development_status:
   5-3-cycle-count-scheduling-and-execution: done
   # merged — BE PR #62 (squash 093eb6d), FE PR #47 (f7f29b3); no mobile change
   5-4-variance-review-and-resolution: done
-  # implemented on feat/5-5… (44e19ec + patch round ac3729f); FE-only — PR #48 open
-  5-5-conflicts-reviews-the-human-review-queue: review
+  # merged — FE PR #48 (squash 42e906e); no mobile change
+  5-5-conflicts-reviews-the-human-review-queue: done
   epic-5-retrospective: optional
 
   epic-6: backlog
