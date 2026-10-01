@@ -146,7 +146,7 @@ sequenceDiagram
 
 1. distinct `(tenant, warehouse)` from `reorder_policies` — warehouses with configured overrides;
 2. every warehouse of every tenant carrying at least one SKU default > 0 (point OR qty — a point-0 SKU with a qty is not an alert source, and a scope whose SKUs all read effective point 0 short-circuits in the sweep anyway);
-3. (story 6.2) distinct `(tenant, warehouse)` from `batch_on_hand.quantity > 0` joined batch-tracked SKUs, UNIONed with scopes of OPEN batch alerts — so a warehouse whose alerts are standing but whose last scope was consumed still gets enumerated to resolve them.
+3. (story 6.2) distinct `(tenant, warehouse)` from `batch_on_hand.quantity > 0` joined batch-tracked SKUs **and predicated on the tenant holding an `expiry_alert_policies` row** (`and exists (…)` — a config-less tenant's scan no-ops anyway, so enumerating it is pure waste), UNIONed with scopes of OPEN batch alerts with NO config check (the policy table has no DELETE, so an open alert implies the config row existed) — so a warehouse whose alerts are standing but whose last scope was consumed still gets enumerated to resolve them.
 
 The union is a deduped Map, deterministic: **policy scopes** (a configured override is the sharpest alert source), **then defaults**, **then batch scopes** — and the deduped Map is also the scan's source: each carried scope calls `sweepScope` AND `scanScope` (each in its own try/catch — a poisoned sweep does not skip the scan, and a poisoned scan does not skip the sweep; pinned by a plumbing test).
 
@@ -201,7 +201,7 @@ The breach-open path carries no command — it is the sweep's (system actor, no 
 | `listSuggestedPos(tenantId, query)` :252 | Keyset page, `status`/`warehouseId` filters |
 | `getExpiryPolicy(tenantId)` (6.2) | The tenant's config snapshot — **`null` when absent** (the disable mechanism read back); the controller renders the null as `404 not-found` |
 | `upsertExpiryPolicy` / `dismissBatchAlert` (6.2) | Delegate to `ReplenishmentCommand` (the config snapshot, the dismissal snapshot) |
-| `listBatchAlerts(tenantId, query)` (6.2) | Keyset page on the batch-alert scope, `kind`/`status`/`warehouseId` filters; each row's `onHandMilli` stitched LIVE via `batchScopeSumsForScopesInTx` (a batch consumed an hour ago reads 0 here, not a stored figure) |
+| `listBatchAlerts(tenantId, query)` (6.2) | Keyset page on the batch-alert scope, `kind`/`status`/`warehouseId` filters; each row's `onHandMilli` stitched LIVE via `batchScopeSumsForScopesInTx` (a batch consumed an hour ago reads 0 here, not a stored figure) and its `batchCode` stitched via the catalog facade's in-tx intake read (AD-6 — identity read in catalog, never a direct table reach); both stitches are OPTIONAL on the wire (`required: false`) — the DISMISSAL snapshot omits them, and the FE card renders the human code, never a truncated id |
 | `sweepScope(tenantId, warehouseId)` | The worker's per-scope breach entry (see the sweep section) |
 | `scanScope(tenantId, warehouseId)` | The worker's per-scope expiry/aging entry (see the scan section) |
 
