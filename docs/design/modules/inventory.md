@@ -100,11 +100,11 @@ Same append-only trigger pair as `ledger_events`. **No HTTP route and no job** �
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
 | `tenant_id` · `warehouse_id` · `sku_id` | uuid | NO | — | — | **Scope is (tenant, warehouse, sku) — never bin-level** |
-| `owner_type` | text | NO | — | — | **Only `order` is ever written** (`ORDER_OWNER_TYPE`, `order.command.ts:74`, written at `:767`). Picking carries the *order's* hold forward rather than minting a line-scoped one |
+| `owner_type` | text | NO | — | — | `order` (the outbound order's hold; `ORDER_OWNER_TYPE`, `order.command.ts:74`, written at `:767` — picking carries the *order's* hold forward rather than minting a line-scoped one) and, since 7-1, **`buffer`** (`BUFFER_OWNER_TYPE`, `reservation.service.ts`) — the channels module's standing buffer, written only through the facade's `applyChannelBuffer` |
 | `owner_id` | text | NO | — | — | text, not uuid |
 | `quantity` | bigint `mode:'number'` | NO | — | `reservations_quantity_positive` | Milli-units |
 | `state` | text | NO | `'held'` | `reservations_state_check` | `held \| committed \| released \| expired`. **A typo'd state would silently drop the row out of every `state = 'held'` consumer** and corrupt the mirror |
-| `expires_at` | timestamptz | NO | — | — | TTL; the reaper sweeps `held` only |
+| `expires_at` | timestamptz | **YES since 7-1** | — | `reservations_expires_at_standing_rule_check` (`drizzle/0050`: NULL admitted ONLY for `owner_type = 'buffer'`) | TTL; the reaper sweeps `held` only — and the standing rule's CHECK is why the standing buffer never meets the reaper: every other hold keeps an expiry |
 
 **`reservations_open_owner_scope_unique` is PARTIAL on `state = 'held'`** — one open hold per owner scope, and the reason a `committed` owner read cannot use it.
 
@@ -196,6 +196,9 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 | `reservationsByIds` :612 / `reservationsByIdsInTx` :686 | Journal rows by id. | order, wave commands |
 | `heldReservationsByOwnerInTx` :641 / `committedReservationsByOwnerInTx` :664 | Holds by OWNER, not by id — deliberately; see Gotchas. | pack / dispatch |
 | `holdLivenessInTx` :624 | `{state, expiresAt, expired}` with `expired` judged by **the database's clock**. | `outbound/pick.command.ts` |
+| `applyChannelBuffer` (the facade, `inventory.facade.ts:777`) / `applyStandingBuffer` | 7-1's standing-buffer arm — the ONLY path by which the channels module touches the core (never a Valkey counter, never a reservations SQL write; the buffer IS a `held` `owner_type:'buffer'` row with `expires_at: null`). A ceiling refusal throws 409 `unavailable` (the OLD buffer standing — the caller maps it to its per-item verdict) | `channels/channels.publish.ts` |
+| `channelVisibleQuantity` (`inventory.facade.ts:787`, `reservation.service.ts:2092`) | The per-(warehouse, sku, buffer-owner) visible quantity (RN-6): pool ATP fail-closed read plus THIS channel's own standing buffer, computed in the core — the sync delivers arithmetic results it never performs | `channels/channels.publish.ts` |
+| `standingBuffersByOwnerInTx` / `standingBuffersForTenantInTx` | Every still-held standing buffer of one owner (the disconnect release set) / of one tenant (arm 4's bucketed list rows), in the CALLER's tx | `channels/channels.command.ts`, `channels/channels.publish.ts` |
 
 ### Reads
 

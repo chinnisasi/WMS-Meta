@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-01-2026 06:30
+last_updated: 10-01-2026 11:40
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -336,11 +336,11 @@ development_status:
   epic-6: in-progress
   6-1-reorder-points-breach-alerts-and-suggested-pos: done
   6-2-expiry-and-aging-alerts: done
-  epic-6-retrospective: optional
+  epic-6-retrospective: done
 
   # RE-SEQUENCED: epic-7 now depends on epic-11's variant model.
-  epic-7: backlog
-  7-1-channel-connections-buffers-and-availability-sync: backlog
+  epic-7: in-progress
+  7-1-channel-connections-buffers-and-availability-sync: review
   7-2-channel-order-ingestion-and-fulfillment-writeback: backlog
   epic-7-retrospective: optional
 
@@ -844,3 +844,46 @@ action_items:
     owner: "when next touched"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-5-retro-2026-09-30.md"
+  - id: "epic-6-retro-item-66-record-the-expiry-capture-gap-expiry_dat"
+    epic: 6
+    action: "Record the expiry-capture gap (expiry_date reachable only via manual
+      intake; GRN batches never get one) in PENDING.md + module docs; Epic-9 bell
+      panel must not promise receiving-fed coverage"
+    owner: "next doc pass / future inbound story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
+  - id: "epic-6-retro-item-67-be-comment-truth-patch-batchcode-lookup"
+    epic: 6
+    action: "BE comment-truth patch: batchCode lookup comment (no-FK convention),
+      expiry-policy docblock disable asymmetry, scan phase-1 dead aggregate"
+    owner: "next replenishment touch"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
+  - id: "epic-6-retro-item-68-broaden-the-explain-scale-review-deferra"
+    epic: 6
+    action: "Broaden the EXPLAIN scale-review deferral to the tick enumeration arms
+      (status=open cross-tenant, batch_on_hand quantity scan)"
+    owner: "scale story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
+  - id: "epic-6-retro-item-69-pending-rows-tick-shed-logging-duration"
+    epic: 6
+    action: "PENDING rows: tick shed logging + duration telemetry; alert-history retention
+      TTL; batch-ids stitch seam; replay-superseded hint (fold into PENDING 117)"
+    owner: "respective future stories"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
+  - id: "epic-6-retro-item-70-fe-follow-up-surface-onhandmilli-absent"
+    epic: 6
+    action: "FE follow-up surface: onHandMilli absent-vs-zero, caption staleness,
+      panel/hook extraction, expired-label honesty — as Epic-9 prep"
+    owner: "Epic-9 prep story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
+  - id: "epic-6-retro-item-71-keep-epic-wide-review-in-the-loop-when-a"
+    epic: 6
+    action: "Keep epic-wide review in the loop when a new evaluation arm depends on
+      data upstream may not capture"
+    owner: "workflow"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
