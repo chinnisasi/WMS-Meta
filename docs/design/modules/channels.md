@@ -99,7 +99,7 @@ sequenceDiagram
 
 | Event | Payload | Carries |
 |---|---|---|
-| `channel.availability.published` (outbox) | `{connectionId, provider, scopes: [{warehouseId, skuId, quantity, quantityMilli, publishedAt}], publishedAt}` | ids and quantities **never a secret** — the credential material never leaves `integrations.credential_sealed` except opened in process by the delivery handler, which never logs or persists it |
+| `channel.availability.published` (outbox) | `{connectionId, provider, scopes: [{warehouseId, skuId, visibleMilli}], publishedAt}` (a scope's `visibleMilli` is RN-6's `V(c)` in milli-units — the port's `ChannelAvailabilityScope` verbatim) | ids and quantities **never a secret** — the credential material never leaves `integrations.credential_sealed` except opened in process by the delivery handler, which never logs or persists it |
 
 The audit events (tenancy's `audit_events`, the actor = the command's user; **no secret hash of the content**):
 

@@ -107,6 +107,23 @@ BE jest: connect/rotate/disconnect e2e with real facades (credential sealing rou
 
 **RN-7 — FE.** The Channels surface is one card column (connections, health amber inline) + one buffer editor per connection; degraded shows lag + last effort inline, never a modal (UX-DR19).
 
+## Step-03 Verification Record
+
+*(this session's own read of the staged diffs + source files + first-hand test runs; not the implementer's report)*
+
+**T1✓ T2✓ T3✓ T4✓ T5✓** — verified against `/tmp/71-core.diff`, migration `0050_channels_integrations.sql`, all ten `src/modules/channels/*` files, `channels.controller.ts` + `channels.dto.ts`, the `ChannelsSyncWorker` in `jobs.module.ts`, the architecture.spec additions, all three channel test suites, and the full FE diff (`/tmp/71-fe.diff`: view + lib + hooks + client wrappers + generated SDK + nav/capability mirror + 15-test surface suite + 200-line vocabulary suite). Test runs first-hand: `channel-buffers`/`channel-sync`/`channel-connections` **25/25 pass**; `reservations.spec` + `inventory-surfaces.spec` pass with `channel-buffers` alongside (**53/53**) — the standing arm did not disturb the reservation-core suites.
+
+**Matrix audit (8 rows):** every arm has its controller route, dto shape, error arms and a passing test; the buffer route reads the single-`channels` segment; the DELETE is 204 with idempotent replay; the list carries no secrets (leak scans over response/outbox/audit/idempotency, both plaintext AND sealed blob).
+
+**Open findings (triaged → patch round):**
+- **F1 (dead code):** `RESERVATION_MIRROR_INCREMENT_SCRIPT` + `ValkeyClient.incrementCounter` have zero callers — remove.
+- **F2 (doc-truth + missing guard):** `docs/design/modules/channels.md` claims an envelope-shape CHECK on `integrations.credential_sealed` ("a code path that ever stored raw material fails the write") that migration 0050 does **not** create; carriers' 0025 has the precedent CHECK. Fix: add the CHECK to 0050 (unmerged), keeping the doc true.
+- **F3 (dead DTO):** `ChannelConnectionListResponse` (with a misleading `nextCursor`) is unused — the list is `{items}` only. Remove.
+- **F4 (doc-accuracy):** channels.md's event-payload row shows `{warehouseId, skuId, quantity, quantityMilli, publishedAt}`; the actual `PublishedScope` is `{warehouseId, skuId, visibleMilli}`. Fix the doc row.
+- **F5 (wire-contract nicety, deferred):** the list-entry `buffers` array is `type: [Object]` on the wire, so the generated FE type is opaque `{[key: string]: unknown}`, stitched back via `entryBuckets`. A nested DTO class would keep it typed end-to-end; deferred as a PENDING row (the FE handles it honestly today).
+
+*(F2/F4's doc fixes land in the meta repo at step-05's docs commit; F1/F2-code/F3 go to the implementation agent as one patch round.)*
+
 ## Spec Change Log
 
 *(appended during implementation; each entry names the arm it changed)*
