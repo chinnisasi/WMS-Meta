@@ -19,12 +19,13 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **carriers** | [`carriers.md`](carriers.md) | The carrier adapter registry and the tenant credential vault |
 | **compliance** | [`compliance.md`](compliance.md) | Temperature excursions (FR-44/45): record → per-scope QC holds + zero-delta ledger events, resolve (the review flip) |
 | **movements** | [`movements.md`](movements.md) | Planned stock movement — transfer orders (5-1): two-leg ledger legs, the IN-TRANSIT system bin, in-transit ATP exclusion, the device inbound confirm. Adjustments, counts and variance review grow here |
+| **replenishment** | [`replenishment.md`](replenishment.md) | Reorder points (per-warehouse policy over the SKU defaults), the worker breach sweep (three-phase; ATP strictly via the facade, fail-closed), breach alerts + suggested-PO drafts, the human-triggered PO submit (6-1) |
 
 ## Planned
 
 | Module | Epic | Will own |
 |---|---|---|
-| `replenishment` | 6 | Reorder points, breach alerts, suggested POs, expiry and aging |
+| `replenishment` (remaining) | 6 | Expiry and aging alerts (story 6-2) |
 | `channels` | 7 | Channel connections, standing availability buffers, order ingestion, fulfilment writeback |
 | `compliance` (remaining) | 8 | GST invoicing, e-way bills, HSN summary — and later customs, excise and controlled-substance registers (epics 16–18). Temperature excursions is built above |
 | `reporting` | 9 | Operational dashboard, notification panel, global audit trail, async export |

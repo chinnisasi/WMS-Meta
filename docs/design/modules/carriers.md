@@ -75,7 +75,7 @@ The facade also re-exports the types a consumer needs (`CarrierConnectionView`, 
 
 **`CarrierConnectionView`** (`carrier.command.ts:60`) is the only shape that leaves the module: `{id, tenantId, carrierCode, carrierName, accountLabel, credentialVersion, connectedBy, rotatedAt, rotatedBy, createdAt, updatedAt}`. `carrierName` is resolved from the registry at read time and never stored — the code is the truth, the name a convenience, and a row whose adapter was de-registered still lists under its raw code (`:119-121`).
 
-HTTP lives in the api shell (`src/api/carriers.controller.ts`), not here. `rotate` and `disconnect` are POST sub-resources, not PUT/DELETE — the repo has no `@Delete` route anywhere; every destructive verb is a POST carrying an `Idempotency-Key`.
+HTTP lives in the api shell (`src/api/carriers.controller.ts`), not here. `rotate` and `disconnect` are POST sub-resources, not PUT/DELETE — the repo keeps every destructive verb a POST carrying an `Idempotency-Key` (6-1 later introduced the single `replenishment` `@Delete` — idempotent and snapshot-returning, so it lives within the same contract; carriers still do not use it).
 
 ---
 

@@ -103,6 +103,16 @@ Two sources, both authoritative:
 - **The excursion↔hold linkage lives only in `temperature_excursions.hold_ids`** — ledger `qc.held` events carry reference kind `qc-hold` (holdId + fromBinId) with no excursion id, so a ledger-only reconstruction correlates excursions to holds by bin + timestamp, not by id. 12-6's cold-chain reporting consumes the excursion events (its own reference kind), which is unambiguous; if a later story needs hold-level attribution, the column is the join
 - **CI's migration drift guard does not pin `temperature_excursions_status_check`** — `verify.ts` round-trips only app_metadata (tenancy) fields; the status CHECK and RLS live in hand-appended SQL only, so a regenerated migration could silently drop them *(12-5 defer, deferred-work.md)*. The same guard cannot see hand-emitted expression indexes: 0039's `ledger_events_order_ref_idx` is in the live DB but in no drizzle snapshot, so a future hand-edited migration could drop or reshape it with nothing failing *(12-6 defer, same entry family)*
 
+## replenishment
+
+*(6-1 populated the spine module; entries below are its known-not-done, grouped by what defers them.)*
+
+- **Cold-scope bootstrap gap** — a brand-new tenant's warehouses get no breach detection until their first reservation activity wakes the ATP readiness machinery (the sweep's ATP read is fail-closed and the ready marker self-heals only via the startup rebuild's reservation/stock owners and the not-ready grant repair); set by an eager readiness rebuild on warehouse creation, or worker-side not-ready-vs-down logging — recorded in `deferred-work.md` *(6-1 triage defer)*
+- **No notification delivery** — `replenishment.breach_detected` and `replenishment.suggested_po_submitted` carry a `notifyRole` hint whose only consumer today is the relay's log line; the alert panel/bell is Epic 9's surface (the events are audit-adjacent, not delivery — by design)
+- **No seasonality / temporal reorder model** — by design (the epic's amendment note); the policy schema deliberately does not preclude one but nothing seasonal ships
+- **`counts`-style policy admin gap: no per-warehouse defaults editor, no breach-bulk-dismiss** — deliberate scope cuts of 6-1: the SKU-table's tenant-wide editors are the only default surfaces, and dismissal is one breach at a time; neither was specced past the matrix
+- **The sweep's ATP freshness is accepted as of phase 2** — a stock movement between the ATP reads and the transitions tx is not re-read before opening (the fresh re-read covers POINT edits only). A tighter window would want the ATP read or the breach open inside one consistent view, which the fail-closed phase rule deliberately forbids; re-reading ATP in phase 3 is the candidate fix if a false-open ever surfaces in practice *(6-1 review)*
+
 ## movements
 
 - **No FE `/moves` surface** — transfer orders are creatable/confirmable via HTTP only; the planner verbs (create / cancel / outbound confirm) have no web consumer, and the FE capability mirror must grow `transfers.manage` / `transfers.execute` in that story. Deferred by Decision 1 of spec-5-1; the FE drift guard stays red against this backend until it lands *(5-1)*
