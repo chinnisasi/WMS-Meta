@@ -60,7 +60,7 @@ development_status:
   3-6-bin-administration: done
   epic-3-retrospective: done
 
-  epic-4: in-progress
+  epic-4: done
   4-1-orders-manual-entry-idempotent-ingestion-acceptance-reservat: done
   4-2-waves-and-picklists: done
   # Split out of 4.2 at the build multi-goal gate (2026-09-11, human): the web
@@ -176,7 +176,7 @@ development_status:
   # AD-9 amended 2026-09-17: quantities become fractional (scaled integers,
   # milli-units). Oracle: story 2.2 replay-reconciliation must reproduce
   # every derived balance after the migration.
-  epic-10: in-progress
+  epic-10: done
   10-1-fractional-quantity-migration: done
   10-2-uom-vocabulary-and-precision: done
   10-3-catch-weight-handling-units: done
@@ -194,7 +194,7 @@ development_status:
   # Epic 11 unblocks story 4-6d (rating needs an address + weight/dims) and
   # gates epic-7 (Shopify is product->variant; without variants the channel
   # mapping is lossy by construction).
-  epic-11: in-progress
+  epic-11: done
   11-1-shipment-address-model: done
   11-2-sku-physical-attributes-and-origin: done
   11-3-product-variants: done
@@ -222,7 +222,7 @@ development_status:
 
   # Touches ALREADY-SHIPPED code: conformance is enforced inside the
   # existing putaway (3.5) and pick (4.3) commands.
-  epic-12: in-progress
+  epic-12: done
   12-1-storage-class-and-conformance: done
   12-2-hazard-segregation-matrix: done
   12-3-secure-locations: done
@@ -317,7 +317,7 @@ development_status:
   # epic-10 (fractional quantities) and epic-12 (storage/location model).
   # Building it first would mean rewriting transfers, adjustments and
   # counts on the new quantity model.
-  epic-5: in-progress
+  epic-5: done
   # merged 2026-09-28 — BE PR #59 (squash 22ec29a), mobile PR #12 (f821745)
   5-1-transfer-orders: done
   # merged 2026-09-28 — BE PR #60 (squash d4e0907), FE PR #45 (1815d20)
