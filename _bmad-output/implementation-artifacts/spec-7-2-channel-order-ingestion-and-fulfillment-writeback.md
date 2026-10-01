@@ -2,7 +2,7 @@
 title: '7.2 Channel order ingestion and fulfillment writeback'
 type: 'feature'
 created: '2026-10-02'
-status: 'draft'
+status: 'in-progress'
 baseline_commit: '3598565'
 route: 'dispatch'
 review_loop_iteration: 1
@@ -142,6 +142,15 @@ BE jest: webhook arms (verify-first ordering, tamper, topic binding, dedup/redel
 ## Spec Change Log
 
 *(appended during implementation; each entry names the arm it changed)*
+
+| # | Change | Route |
+|---|---|---|
+| 1 | **channel-http rides `node:https`, not fetch.** RD-6's transport text said fetch; the landed transport uses `node:https` so a per-request `rejectUnauthorized` can honor the test harness's TLS-off override — the jest runtime's fetch ignores in-process `NODE_TLS_REJECT_UNAUTHORIZED`, so the stub-server transport arms cannot run its per-server certificate override through fetch. Production behavior (verify on, timeout, redirect-off) is unchanged. | RD-6, T2 (channel-http.ts) |
+| 2 | **RD-10's integrity gate is self-computed parity, not ReservationRebuildReport.** `ReservationRebuildReport` is write-only (its only production writer produces; nothing reads it), so the harness computes its own parity checks instead: Σ held vs ledger per (warehouse, sku), reservation/order count parity, and the negative-headroom walk from the reservations rows. Same guarantees, different mechanism. | RD-10, T8 (loadtest-acceptance.ts) |
+| 3 | **The harness registers its own `test-load` transport adapter** to measure writeback lag exactly (the writeback port is the measurement point), in addition to the `test-echo` adapter the webhook tests use. | RD-10, T8 |
+| 4 | **Every mutating harness request mints a fresh 26-char ULID `Idempotency-Key` per request.** uuidv7's dashed form is not a valid key (the app enforces the 26-char canonical shape), and an owner header object with one key baked in reuses it across different payloads → 422 `idempotency-key-reuse`. Found by the harness's own first full run. | RD-10, T8 |
+| 5 | **The recorded 2-hour 15× acceptance run was NOT driven.** The harness ships and the RD-10 gates are implemented and verified in a smoke run (120 s: 60/60 orders delivered, p95 142 ms, zero timeouts, all parity checks empty, `gates.pass: true`); the long run is the user's decision and is recorded as a PENDING row. | RD-10, T8, row 123 |
+| 6 | **Spec status stays `in-progress`.** Both child-repo commits (wms-be `b262e1a`, wms-fe `42e29eb`) sit on `feat/7-2-...` branches un-pushed by instruction; per the 7-1 convention the story flips to `done` only after the user opens/merges the PRs. | — |
 
 ## Review Triage Log
 
