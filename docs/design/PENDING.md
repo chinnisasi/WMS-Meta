@@ -15,7 +15,7 @@ Two sources, both authoritative:
 | **Keyset cursor truncates to milliseconds** against microsecond `created_at`, so same-millisecond rows at a page boundary are **silently skipped** | Affects every `buildPage(rows.map(toView))` site in the repo. A real correctness bug in pagination, not cosmetic. **5-2 repaired the two inventory cursors** (ledger timeline + pending queue) — they now encode from the raw `::text` instant via the shared primitive `fullPrecisionInstant` (`src/shared/primitives/time.ts`); every other `buildPage` site still truncates and can adopt the same primitive when next touched | epic-2 retro a1 |
 | **`decodeCursorSafe`/clamp guards are copy-pasted**, not a shared primitive | Six copies of the same UUID regex; the next one to drift is a 500 instead of a 400 | epic-1 retro item 6 |
 | **Idempotency scaffolding is duplicated verbatim across nine command files** | `writeIdempotencyKey` ×5, the replay block hand-inlined everywhere. A shared helper is its own change | 4-6 review, epic-3 retro a8 |
-| **`unavailable` means two different things** — a real stockout and a fail-closed Valkey outage | Epic 7's channel consumers will branch on it. Needs its own machine code before they do | epic-2 retro a8 |
+| **`unavailable` means two different things** — a real stockout and a fail-closed Valkey outage | ~~Epic 7's channel consumers will branch on it. Needs its own machine code before they do~~ **7-1 did the branching** (RN-3): the sync reads the codes by machine — 503 `reservation-store-unavailable` = fail-closed (the row degrades, nothing published), 409 `unavailable` = a real pool state (the clamped figure publishes); `channels.publish.ts`. The generic reaper/grant clients still branch the same way when next touched | epic-2 retro a8 (branched 7-1) |
 | **Process: no real-HTTP smoke in step-05** | Live runs caught two behaviours a 212-test suite never observed | epic-1 item 8, epic-2 a9 |
 
 ---
@@ -116,6 +116,15 @@ Two sources, both authoritative:
 - **No FE editor for the expiry alert config** — the panel reads `GET .../expiry-policies` (absent row → "alerts are OFF") but no surface edits `PUT .../expiry-policies` yet; the route is live and capability-gated, only the web consumer is missing — natural home alongside the suggested-PO/policy admin gap above *(6-2 scope cut)*
 - **Dismissed batch alerts re-raise while conditions persist** — recorded BY DESIGN, not as a defect: the open-only partial unique means a fresh alert row opens on the next conditioned scan after any dismissal (matching 6-1's re-breach past dismissal). If tenants report alert fatigue, the candidate fix is an explicit suppression state on the row (its own lifecycle arms), not a unique re-key — see the module doc's gotcha *(6-2)*
 
+## channels
+
+*(7-1 built the module: connection vault + registry + standing buffers + availability sync; entries below are its known-not-done, grouped by what defers them.)*
+
+- **No real marketplace HTTP adapter** — the port's availability and revoke arms answer a typed, verbatim `501 channel-transport-unconfigured` for all three providers, so every connection's health reads degraded-from-transport while the machinery runs. Real transport lands with the launch story that has live credentials (spec 7-1's boundary); 7-2's ingestion/webhooks are separate
+- **No mapping-write route** — `ChannelsFacade.setChannelMappings`/`listChannelMappings` is facade-only (7-2's config path + the e2e seeder are the callers). Until a story adds the config surface, a fresh connection publishes nothing (zero mappings appends nothing by design — RN-6's "only mapped scopes")
+- **Rotating `CHANNEL_ENCRYPTION_KEY` is unsupported** — the same 4-6b carrier-vault gap: every stored blob becomes unopenable (`503 channel-credential-unreadable`, the rotation path is the written recovery) and idempotent replay breaks. Needs a key id in the blob and a re-seal path, together across the two vaults
+- **The breaker threshold is a frozen const** (`BREAKER_FAILURE_THRESHOLD = 5`) and the 60s sync SLO likewise — no per-tenant config exists; the epic-9 KPI read consumes what the const computes
+- **No mobile surface for channels** (the epic-7 decision) — the four-state banner and the scan path stay wms-fe-only; the mobile offline engine has no channel integration
 ## movements
 
 - **No FE `/moves` surface** — transfer orders are creatable/confirmable via HTTP only; the planner verbs (create / cancel / outbound confirm) have no web consumer, and the FE capability mirror must grow `transfers.manage` / `transfers.execute` in that story. Deferred by Decision 1 of spec-5-1; the FE drift guard stays red against this backend until it lands *(5-1)*

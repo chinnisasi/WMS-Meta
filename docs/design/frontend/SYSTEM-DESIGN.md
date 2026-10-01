@@ -48,13 +48,13 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 | `/moves` | Moves | `SurfacePlaceholder` |
 | `/conflicts` | Conflicts & Reviews | **Real** — `OverReceiptQueue`. The only nav item that declares a capability (`review.decide`, `src/lib/navigation.ts:39`) |
 | `/notifications` | Notifications | `SurfacePlaceholder` |
-| `/replenishment` | Replenishment | `SurfacePlaceholder` |
-| `/channels` | Channels | `SurfacePlaceholder` |
-| `/compliance` | Compliance | `SurfacePlaceholder` |
+| `/replenishment` | Replenishment | **Real** — `ReplenishmentView`: reorder-point policies, breach queue, suggested-PO drafts (6-1) and the expiry/aging configurator + batch-alert queue (6-2), on the `replenishment.manage` capability |
+| `/channels` | Channels | **Real** — `ChannelsView` (story 7-1): the frozen three provider connections (connect / rotate / disconnect / retry), each connection's standing-buffer editor and sync health inline; the nav item gates on `channel.manage`, the list read is member-open |
+| `/compliance` | Compliance | **Real** — `ColdChainTrace` (12-6) |
 | `/reports` | Reports / Audit | `SurfacePlaceholder` |
 | `/settings` | Settings | **Real** — a `SurfacePlaceholder` header above nine working cards: setup checklist, warehouse create, zones/bins setup, catalog import, products (11.6), SKU table (with the kit editor, 11.6), users, warehouse list, devices (`settings/page.tsx:15-25`) |
 
-Six of twelve are still `SurfacePlaceholder` — a two-prop component rendering a heading and a sentence (`src/components/shell/surface-placeholder.tsx`). The IA is complete; the surfaces are not.
+Four of twelve are still `SurfacePlaceholder` (the `/settings` header counts its own placeholder section, not the surface) — a two-prop component rendering a heading and a sentence (`src/components/shell/surface-placeholder.tsx`). The IA is complete; the surfaces are not.
 
 ### `(auth)` — outside the shell (`src/app/(auth)/layout.tsx`, a centred card)
 

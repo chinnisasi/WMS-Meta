@@ -2,10 +2,10 @@
 title: '7.1 Channel connections, buffers, and availability sync'
 type: 'feature'
 created: '2026-10-01'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '5ea3f66866b12fe345f62434d5acbc32d990d997'
 route: 'dispatch'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context:
   - '_bmad-output/implementation-artifacts/epic-7-context.md'
   - 'docs/design/SYSTEM-DESIGN.md'
@@ -109,4 +109,13 @@ BE jest: connect/rotate/disconnect e2e with real facades (credential sealing rou
 
 ## Spec Change Log
 
-*(appended after review rounds; nothing at draft)*
+*(appended during implementation; each entry names the arm it changed)*
+
+- **Arm-5 route path read as a type (route fixed at implementation).** The spec's `PUT /channels/connections/:id/buffers` was written with a doubled `channels/channels/` wire segment; implemented as `PUT /tenants/:tenantId/channels/connections/:connectionId/buffers` — one `channels` segment, under the existing connection nesting. No consumer ever held the doubled form.
+- **Publish fan-out shape.** `ChannelsPublishService` publishes one snapshot per SKU × tenant warehouse (a scope = a mapped SKU at one warehouse), not one blob per connection — the envelope RN-6's `V(c)` defines per scope.
+- **Revoke before delete.** The disconnect FIRST meters the marketplace revoke attempt through the port (logged, never blocking — an unreachable channel keeps no say; AD-15 makes deletion a local atomic act), THEN re-locks the row, deletes it with the sealed blob inside, drops the mappings and releases the buffers through the core. A failed revoke never blocks the delete (spec arm 3, read literally).
+- **Facade-only mapping seed.** SKU mappings seeded through the inventory/catalog facade read (a connection with zero mappings publishes nothing) — there is no mapping-write route in 7-1; the surface edits buffers, mappings are a later deliverable.
+- **`RoutedEventBus` provider swap.** The availability delivery goes through the shared `RoutedEventBus` with a `channel-availability-port` provider — the same port/adapter seam as the carriers' 4.6b (501 transport-unconfigured arms standing in).
+- **RN-5 semantic pin: half-open only from open.** Manual retry from a *closed* breaker is still a normal re-append (it returns the snapshot) but does NOT flip the breaker through half-open; the half-open transition is reachable only from `open`.
+- **Suite-side provider-CHECK swap.** `channels_integrations.provider` CHECK allows only the frozen three; the test adapter swaps the CHECK constraint suite-side (`admitTestProviderInDb`) on a throwaway clone the way suites already treat the provider CHECK on other tables.
+- **ApiProperty nullable-union type pins.** `ChannelConnectionResponse` / list-entry dtos pin `type: String`/`Number` explicitly on every nullable union field (the carriers precedent) — tsc's jest decorator metadata renders `string | null` as `Object` under swc, which the served-vs-exported drift guard would otherwise catch per-arm. Should be the standing convention for any new nullable union exposed on the wire.
