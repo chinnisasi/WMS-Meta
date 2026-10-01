@@ -2,7 +2,7 @@
 title: '7.1 Channel connections, buffers, and availability sync'
 type: 'feature'
 created: '2026-10-01'
-status: 'done'
+status: 'in-review'
 baseline_commit: '5ea3f66866b12fe345f62434d5acbc32d990d997'
 route: 'dispatch'
 review_loop_iteration: 1
@@ -115,10 +115,12 @@ BE jest: connect/rotate/disconnect e2e with real facades (credential sealing rou
 
 **Matrix audit (8 rows):** every arm has its controller route, dto shape, error arms and a passing test; the buffer route reads the single-`channels` segment; the DELETE is 204 with idempotent replay; the list carries no secrets (leak scans over response/outbox/audit/idempotency, both plaintext AND sealed blob).
 
+**Post-patch verdict:** F1–F3 were fixed by the patch round and re-verified first-hand from the diff (dead code fully removed, no stray references; CHECK in place; no reference to the dead DTO in any json/openapi artifact). Re-run on the patched tree at settled load: the four suites **63/63 pass in 25s** — the interim "7 failed / 9 failed / 1,041s" runs coincided with a machine load spike (~40) and were CPU starvation, not code.
+
 **Open findings (triaged → patch round):**
-- **F1 (dead code):** `RESERVATION_MIRROR_INCREMENT_SCRIPT` + `ValkeyClient.incrementCounter` have zero callers — remove.
-- **F2 (doc-truth + missing guard):** `docs/design/modules/channels.md` claims an envelope-shape CHECK on `integrations.credential_sealed` ("a code path that ever stored raw material fails the write") that migration 0050 does **not** create; carriers' 0025 has the precedent CHECK. Fix: add the CHECK to 0050 (unmerged), keeping the doc true.
-- **F3 (dead DTO):** `ChannelConnectionListResponse` (with a misleading `nextCursor`) is unused — the list is `{items}` only. Remove.
+- **F1 (dead code, fixed):** `RESERVATION_MIRROR_INCREMENT_SCRIPT` + `ValkeyClient.incrementCounter` had zero callers — removed in wms-be `12350c2`.
+- **F2 (doc-truth + missing guard, fixed):** migration 0050 lacked the envelope CHECK on `integrations.credential_sealed` that `channels.md` described and carriers' 0025 has as precedent — `integrations_credential_sealed_envelope` CHECK (LIKE 'v1:%') added in `12350c2`; the doc row is now true.
+- **F3 (dead DTO, fixed):** `ChannelConnectionListResponse` removed in `12350c2`; the exported openapi never carried it (no drift impact).
 - **F4 (doc-accuracy):** channels.md's event-payload row shows `{warehouseId, skuId, quantity, quantityMilli, publishedAt}`; the actual `PublishedScope` is `{warehouseId, skuId, visibleMilli}`. Fix the doc row.
 - **F5 (wire-contract nicety, deferred):** the list-entry `buffers` array is `type: [Object]` on the wire, so the generated FE type is opaque `{[key: string]: unknown}`, stitched back via `entryBuckets`. A nested DTO class would keep it typed end-to-end; deferred as a PENDING row (the FE handles it honestly today).
 
