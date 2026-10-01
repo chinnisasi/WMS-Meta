@@ -2,7 +2,7 @@
 title: '7.1 Channel connections, buffers, and availability sync'
 type: 'feature'
 created: '2026-10-01'
-status: 'in-review'
+status: 'done'
 baseline_commit: '5ea3f66866b12fe345f62434d5acbc32d990d997'
 route: 'dispatch'
 review_loop_iteration: 1

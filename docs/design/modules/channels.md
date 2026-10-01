@@ -22,7 +22,7 @@ CHECKs and RLS live only in `drizzle/0050_channels_integrations.sql` (the 0048/0
 
 - `integrations_tenant_provider_unique` — one connection per provider per tenant; a concurrent double-connect is the deterministic 409, never a read-then-write race.
 - `integrations_provider_check` (`shopify | amazon-in | flipkart`) — **the frozen three** (the launch decision). The suite-side test adapter swaps this CHECK via `admitTestProviderInDb` on a throwaway clone the way 6-1's suites treat the provider CHECK on other tables.
-- `integrations_credential_sealed` envelope shape — `v1:<iv>:<tag>:<ct>` (the carriers' `0025` envelope CHECK mirrored). A code path that ever stored raw material fails the write.
+- `integrations_credential_sealed` envelope prefix — the CHECK pins a `v1:` prefix only (the carriers' `0025` precedent; it is NOT the full four-part `v1:<iv>:<tag>:<ct>` shape — a corrupt or truncated blob still passes). A code path that ever stored raw material fails the write; the four-part shape is TS-side.
 - `integrations_status_check`, `integrations_backorder_policy_check`, `integrations_breaker_state_check`, `integrations_consecutive_failures_nonnegative_check` — vocabularies mirroring the TS tuples in `schema.ts` (`CHANNEL_PROVIDERS`, `INTEGRATION_STATUSES`, `BACKORDER_POLICIES`, `INTEGRATION_BREAKER_STATUSES`).
 - fail-closed RLS per table — **the pinned RLS-policy count grew 61 → 64** (the `client-isolation` count pin updated in-story).
 
@@ -103,7 +103,7 @@ sequenceDiagram
 
 The audit events (tenancy's `audit_events`, the actor = the command's user; **no secret hash of the content**):
 
-`channels.connected` · `channels.credentials_rotated` · `channels.backorder_policy_set` · `channels.disconnected` · `channels.sync_retried`
+`channels.connected` · `channels.credentials_rotated` · `channels.backorder_policy_set` · `channels.buffers_set` (the buffers PUT's Phase-3 key tx — one row per request, no outbox event; the next publish cycle carries the availability delta) · `channels.disconnected` · `channels.sync_retried`
 
 ## Gotchas (the real-defect list)
 

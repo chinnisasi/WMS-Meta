@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-01-2026 10:45
+last_updated: 10-01-2026 11:40
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -340,7 +340,7 @@ development_status:
 
   # RE-SEQUENCED: epic-7 now depends on epic-11's variant model.
   epic-7: in-progress
-  7-1-channel-connections-buffers-and-availability-sync: in-progress
+  7-1-channel-connections-buffers-and-availability-sync: review
   7-2-channel-order-ingestion-and-fulfillment-writeback: backlog
   epic-7-retrospective: optional
 
