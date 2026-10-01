@@ -105,13 +105,16 @@ Two sources, both authoritative:
 
 ## replenishment
 
-*(6-1 populated the spine module; entries below are its known-not-done, grouped by what defers them.)*
+*(6-1 populated the spine module and 6-2 extended it (expiry/aging batch alerts); entries below are its known-not-done, grouped by what defers them.)*
 
 - **Cold-scope bootstrap gap** — a brand-new tenant's warehouses get no breach detection until their first reservation activity wakes the ATP readiness machinery (the sweep's ATP read is fail-closed and the ready marker self-heals only via the startup rebuild's reservation/stock owners and the not-ready grant repair); set by an eager readiness rebuild on warehouse creation, or worker-side not-ready-vs-down logging — recorded in `deferred-work.md` *(6-1 triage defer)*
-- **No notification delivery** — `replenishment.breach_detected` and `replenishment.suggested_po_submitted` carry a `notifyRole` hint whose only consumer today is the relay's log line; the alert panel/bell is Epic 9's surface (the events are audit-adjacent, not delivery — by design)
+- **No notification delivery** — `replenishment.breach_detected`, `replenishment.suggested_po_submitted` and `replenishment.batch_alert_raised` carry a `notifyRole` hint whose only consumer today is the relay's log line; the alert panel/bell is Epic 9's surface (the events are audit-adjacent, not delivery — by design; 6-2's batch alerts click through to the batch record from the Replenishment surface, the bell-panel click-through lands there too)
 - **No seasonality / temporal reorder model** — by design (the epic's amendment note); the policy schema deliberately does not preclude one but nothing seasonal ships
 - **`counts`-style policy admin gap: no per-warehouse defaults editor, no breach-bulk-dismiss** — deliberate scope cuts of 6-1: the SKU-table's tenant-wide editors are the only default surfaces, and dismissal is one breach at a time; neither was specced past the matrix
 - **The sweep's ATP freshness is accepted as of phase 2** — a stock movement between the ATP reads and the transitions tx is not re-read before opening (the fresh re-read covers POINT edits only). A tighter window would want the ATP read or the breach open inside one consistent view, which the fail-closed phase rule deliberately forbids; re-reading ATP in phase 3 is the candidate fix if a false-open ever surfaces in practice *(6-1 review)*
+- **No batch `block` verb** — `batches.status='blocked'` is unreachable vocabulary (6-2's scan reads it and raises NO NEW alert for a blocked batch, but nothing SETS it); blocking is a future catalog batch-verb story *(6-2 ratification)*
+- **No FE editor for the expiry alert config** — the panel reads `GET .../expiry-policies` (absent row → "alerts are OFF") but no surface edits `PUT .../expiry-policies` yet; the route is live and capability-gated, only the web consumer is missing — natural home alongside the suggested-PO/policy admin gap above *(6-2 scope cut)*
+- **Dismissed batch alerts re-raise while conditions persist** — recorded BY DESIGN, not as a defect: the open-only partial unique means a fresh alert row opens on the next conditioned scan after any dismissal (matching 6-1's re-breach past dismissal). If tenants report alert fatigue, the candidate fix is an explicit suppression state on the row (its own lifecycle arms), not a unique re-key — see the module doc's gotcha *(6-2)*
 
 ## movements
 

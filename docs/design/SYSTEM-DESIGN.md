@@ -68,7 +68,9 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `outbound` | orders, waves, picklists, picks, pack, dispatch |
 | `carriers` | carrier registry, tenant credential vault |
 | `compliance` | temperature excursions (FR-44): record → per-scope QC holds + zero-delta ledger events, resolve (the review flip) — 12-5 |
-| `movements` · `replenishment` · `channels` · `reporting` · `notifications` | spine placeholders for epics 5–9 |
+| `movements` | counts, variances, stock adjustments' review, moves/transfer orders (epics 5, 15+) |
+| `replenishment` | the stock-intelligence spine (epic 6): the breach sweep + suggested-PO drafts (6-1, FR-22) and the expiry/aging batch-alert scan on the SAME tick (6-2, FR-23) — alerts are evidence; only a human submit orders |
+| `channels` · `reporting` · `notifications` | spine placeholders for epics 7–9 |
 
 The api shell (`src/api/`) is where two modules' reads are joined — the device catalog snapshot composes across `inbound` and `outbound` there rather than making one module import the other.
 
