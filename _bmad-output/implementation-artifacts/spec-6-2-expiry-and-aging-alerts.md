@@ -2,7 +2,8 @@
 title: '6.2 Expiry and aging alerts'
 type: 'feature'
 created: '2026-10-01'
-status: 'ready-for-dev'
+status: 'in-progress'
+baseline_commit: '0171dcc6a7b78fe6bbb21856bbc0540d29752158'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
