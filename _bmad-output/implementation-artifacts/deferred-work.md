@@ -539,3 +539,31 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-7-1-channel-connections-buffers-and-availability-sync.md`
   summary: `integration_calls` rows for a disconnected connection are never cleaned (no FK, no cascade, no retention policy) — append-only metered history accumulates forever under a deleted connection id.
   evidence: Migration `0050` defines `integration_calls` with no FK to `integrations` (checked the CREATE TABLE); disconnect Phase-2 deletes the connection + mappings but preserves its meter rows. A retention/cleanup policy (or a documented keep-for-history rationale) is an ops-grade question, not a 7-1 defect.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (code review, iteration 2)
+  summary: The ingest-verification meter opens a transaction and a newest-row SELECT per refused request, and its read-then-insert window can mint more than one row per 60 s — a tamper/storm costs a short tx per bad request and a window's cap can be briefly over-set.
+  evidence: `recordIngestVerificationRefused` (`channels.publish.ts`) opens `withTenantTransaction` and SELECTs the window's newest row serially per call; no lock protects the window check against two concurrent refusals. Correctness fine (a few extra coarse rows); the bloom/cap alternative is the 5-x metering machinery re-derivable later.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (code review, iteration 2)
+  summary: A concurrent dedup loser meters `accepted` even though its order was released — the meter can overstate accepted orders at contended SKUs.
+  evidence: Outcome label derives from a pre-create read (`channels.ingest.command.ts` ~:186-193) then `createOrder` resolves the loser via `resolveDedupLoser`; the loser's meter row answers `accepted`/`backordered` per the stale read. The ORDER system stays correct (the losing delivery is released; the winner is the order). Settle by: metering from the command's post-facade outcome value.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (code review, iteration 2)
+  summary: The disconnect's post-commit revoke block can be skipped by a crash between phase-2's commit and the attempt — the channel-side key stays live with no local record.
+  evidence: Phase-1 replay settle returns before the revoke; the revoke runs after the phase-2 commit within the same request (`channels.command.ts` disconnect flow). A crash in the gap leaves Shopify's webhook secret + token live while `integrations` is deleted. Settle by: a background reaper sweeping connections deleted while `revoked_at` is unset (an ops-grade job, not a request path).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (code review, iteration 2)
+  summary: One availability-publish delivery carries all ≤ 200 scopes through the arm in a single sequential lane — a slow channel response serializes the publish behind it; fine at 15× smoke, unbounded at larger scope counts.
+  evidence: `channel-availability.delivery.ts` (~:103/:107) invokes the arm once with `request.scopes`; `channel-http.ts` is sequential per attempt; 7-1's concurrency shape was accepted there and this story adds no lane. Settle by: lane split or batched posts when scope counts grow (the SKU × warehouse ceiling can exceed 200 rows).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (code review, iteration 2)
+  summary: `parseOrderRef` accepts any string ≤ 200 including `/`, `?` and `..` — an externally-controlled identifier with no shape policy; safe today (parameterized reads only), a hazard if the ref ever flows into a path-like surface.
+  evidence: `channel-shopify-port.ts` `parseOrderRef`; lookups ride typed SQL parameters. Settle by: a stricter ref shape (Shopify ids are numeric strings) at the parse arm.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (code review, iteration 2)
+  summary: A mappings GET racing the disconnect's phase-2 delete answers 200 with empty rows for a connection that is being deleted — a transient read-your-deletion oddity, no stale data leaks after the commit.
+  evidence: Mappings GET does not lock or recheck connection existence beyond the initial read. Settle by: 404 on the row-missing race if a consumer ever surfaces it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (Spec Change Log #5 / triage row 38)
+  summary: The 2-hour 15× NFR-2 acceptance run (RD-10's recorded evidence) was not driven — the smoke mode only. Awaiting the user's decision; background runner ceiling is 2 h wall-clock.
+  evidence: Smoke run passed all gates (120 s, 60/60 orders, p95 142 ms, zero timeouts, parity empty, `gates.pass: true`). The full run is reproducible from the committed script and its flags.
