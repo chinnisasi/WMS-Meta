@@ -564,6 +564,6 @@
   summary: A mappings GET racing the disconnect's phase-2 delete answers 200 with empty rows for a connection that is being deleted — a transient read-your-deletion oddity, no stale data leaks after the commit.
   evidence: Mappings GET does not lock or recheck connection existence beyond the initial read. Settle by: 404 on the row-missing race if a consumer ever surfaces it.
 
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (Spec Change Log #5 / triage row 38)
-  summary: The 2-hour 15× NFR-2 acceptance run (RD-10's recorded evidence) was not driven — the smoke mode only. Awaiting the user's decision; background runner ceiling is 2 h wall-clock.
-  evidence: Smoke run passed all gates (120 s, 60/60 orders, p95 142 ms, zero timeouts, parity empty, `gates.pass: true`). The full run is reproducible from the committed script and its flags.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (Spec Change Log #5 / triage row 38) — **RESOLVED 10-02-2026**
+
+  The 2-hour 15× NFR-2 acceptance run was driven by the user on 2026-10-02 against the patch-round tree (wms-be `44dfd4a`): 7,200 s at the recorded invocation, 100% of target achieved, 3,597 deliveries, p50 69 ms / p95 419 ms (gate ≤ 4,000 ms), > 5 s fraction 0, 7,106 concurrent adjustments, oversells 0 (all parity sweeps empty), no pool deadlock. Report committed at wms-be `artifacts/nfr2-2h-report.json` (commit `cec7c73`); the retained suite DB was dropped. No settlement left.
