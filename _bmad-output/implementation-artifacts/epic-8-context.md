@@ -22,7 +22,7 @@ Every dispatch produces a GST-compliant invoice without manual work, and consign
 
 ## Technical Decisions
 
-- **New `compliance/` module owning FR-26.** GST invoices, e-way generation, and the HSN summary live there; it reads through facades (outbound dispatch/order state, catalog SKU data) like every other module — never tables across module lines.
+- **New `compliance/` module owning FR-26.** *(Amended by 8-1: `src/modules/compliance/` was already taken by 12-5's temperature-excursion module, so the GST module is the sibling `src/modules/invoicing/`. 8-2's e-way and HSN work extends `invoicing/`.)* GST invoices, e-way generation, and the HSN summary live there; it reads through facades (outbound dispatch/order state, catalog SKU data) like every other module — never tables across module lines.
 - **One `EwayGateway` port** for the e-way transport path (PRD OQ3: official portal API vs GSP intermediary — decide which before building 8-2; the port makes the choice swappable without touching the spine). No outbound integration call may leave the metered adapter ports (AD-17/AD-6).
 - **Transactional outbox for generation (AD-7).** Dispatch commits state changes and the outbound compliance event in one transaction; the relay publishes at-least-once; external failures (portal error, GSP down) retry with backoff and dead-letter — the dispatch is never retried or rolled back.
 - **Credentials follow the AD-15 pattern.** GSP/GST portal credentials are as sensitive as channel tokens (a GSP credential grants filing-adjacent capability); envelope-sealed storage referencing by id, never env vars or code, never on any wire shape — the channels/carriers vault pattern is the precedent.

@@ -21,13 +21,14 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **movements** | [`movements.md`](movements.md) | Planned stock movement — transfer orders (5-1): two-leg ledger legs, the IN-TRANSIT system bin, in-transit ATP exclusion, the device inbound confirm. Adjustments, counts and variance review grow here |
 | **replenishment** | [`replenishment.md`](replenishment.md) | Reorder points (per-warehouse policy over the SKU defaults), the worker breach sweep (three-phase; ATP strictly via the facade, fail-closed), breach alerts + suggested-PO drafts, the human-triggered PO submit (6-1) |
 | **channels** | [`channels.md`](channels.md) | The sealed-credential connection vault + the frozen-three provider registry, standing buffers held through the reservation core (AD-13), and the outbox availability sync with the RN-5 breaker (7-1) |
+| **invoicing** | [`invoicing.md`](invoicing.md) | GST invoices (8-1): one per dispatched order derived from dispatch facts, exact paise/bps tax math, per-tenant FY numbering, the `order.dispatched` delivery (first subscriber — ACKs data faults) and the manual price/regenerate command |
 
 ## Planned
 
 | Module | Epic | Will own |
 |---|---|---|
-| `channels` (remaining) | 7 | Order ingestion + webhook intake, the mapping config surface, fulfilment writeback (story 7-2) |
-| `compliance` (remaining) | 8 | GST invoicing, e-way bills, HSN summary — and later customs, excise and controlled-substance registers (epics 16–18). Temperature excursions is built above |
+| `invoicing` (remaining) | 8 | E-way bills and the HSN summary (8-2), extending the 8-1 invoice core |
+| `compliance` (remaining) | 16–18 | Customs, excise and controlled-substance registers. Temperature excursions is built above |
 | `reporting` | 9 | Operational dashboard, notification panel, global audit trail, async export |
 | `notifications` | 9 | The notification panel and mobile pushes |
 
@@ -37,6 +38,6 @@ Each is a spine placeholder today: a registered NestJS module with empty `provid
 
 **A module owns its tables exclusively.** A sibling reaches it only through its facade or through an event — never by touching its tables, and never by importing past `*.facade`, `*.module` or `*.dto`.
 
-`test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports, per module — **for the three module table-sets it covers today** (stock/ledger, order/wave/pick, carrier). Tenancy, catalog, inbound and putaway have no block, so their ownership rests on review alone. When you add a module that owns tables, you add its block there too — and because the detector is only meaningful when something could violate it, the block includes hard-coded specifier strings that self-test the regex.
+`test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports, per module — **for the nine module table-sets it covers today** (stock/ledger, order/wave/pick, catalog identity, carrier credentials, clients, transfers, replenishment, channels, invoices — recounted from the file's `describe` blocks at story 8-1). Tenancy, inbound, putaway and compliance have no block, so their ownership rests on review alone. When you add a module that owns tables, you add its block there too — and because the detector is only meaningful when something could violate it, the block includes hard-coded specifier strings that self-test the regex.
 
 Where two modules genuinely need each other's reads, the join happens in the **api shell** (`src/api/`), not by one module importing the other. The device catalog snapshot is the worked example: it composes across `inbound` and `outbound` in the controller, because making `inbound` import `outbound` was tried, reverted, and is documented as having caused a cross-suite flake.
