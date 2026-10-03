@@ -1,12 +1,12 @@
 # Invoicing module
 
-> GST invoices (story 8-1): one invoice per dispatched order, derived from persisted dispatch facts, taxed in exact integer math, numbered per tenant per financial year, and printed on the web's `/compliance` surface. E-way bills and the HSN summary (8-2) and the 3PL client-billing model (21-5) extend this module.
+> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. E-way bills and the HSN summary (8-2) and the 3PL client-billing model (21-5) extend this module.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first. The command skeleton is followed closely here and is not repeated.
 
 **Why `invoicing/`, not `compliance/`:** the epic-8 context named a "new `compliance/` module", but `src/modules/compliance/` was already 12-5's temperature-excursion module. GST work lives in this sibling. 8-2 extends `invoicing/`, not `compliance/`.
 
-The module exists for one invariant: **an invoice is derived, never trusted**. Every generation re-reads the order, its lines, the picks, the parties and the state-code list. It never reads the event payload beyond the order id, so a retry, a redelivery or a manual regenerate converges on the same document by derivation, not by caching.
+The module exists for two invariants. **Until it issues, an invoice is derived, never trusted**: every generation re-reads the order, its lines, the picks, the parties and the state-code list, and never reads the event payload beyond the order id, so a retry, a redelivery or a manual regenerate converges on the same document by derivation, not by caching. **Once it issues, it is a legal document and is frozen** (8-1b): generation returns the stored row and never recomputes it, so a later catalog edit can never reach it. Corrections need credit/debit notes (deferred).
 
 ---
 
@@ -14,12 +14,12 @@ The module exists for one invariant: **an invoice is derived, never trusted**. E
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `invoices` (`schema.ts:3753`) | One row per `(tenant_id, order_id)`: `status` (`awaiting-data \| issued \| voided`), `invoice_no` / `fy_label` / `series_seq` (null until first issuance), `origin_gstin`, `consignee_gstin`, `place_of_supply` (two-digit code), `supply_type` (`intra \| inter`), `subtotal_paise` / `gst_paise` / `total_paise`, `revision`, `document` (jsonb) | **`invoices_tenant_order_unique`**: the one-invoice rule, and the race arbiter. `invoices_tenant_invoice_no_unique` is partial (`WHERE invoice_no IS NOT NULL`). `invoices_totals_balance_check`: `subtotal + gst = total` in storage |
+| `invoices` (`schema.ts:3753`) | One row per `(tenant_id, order_id)`: `status` (`awaiting-data \| issued \| voided`), `invoice_no` / `fy_label` / `series_seq` (null until first issuance), `origin_gstin`, `consignee_gstin`, `place_of_supply` (two-digit code), `supply_type` (`intra \| inter`), `subtotal_paise` / `gst_paise` / `total_paise` (exact), `payable_paise` / `round_off_paise` (8-1b, the stored rupee rounding), `revision`, `document` (jsonb) | **`invoices_tenant_order_unique`**: the one-invoice rule, and the race arbiter. `invoices_tenant_gstin_invoice_no_unique` on `(tenant_id, origin_gstin, invoice_no) WHERE invoice_no IS NOT NULL` (8-1b; two GSTINs may share a number). CHECKs: `subtotal + gst = total`; (0054) `payable = total + round_off`, `round_off BETWEEN -49 AND 50`, `payable % 100 = 0`, `payable >= 0`, and `status <> 'issued' OR (invoice_no IS NOT NULL AND origin_gstin IS NOT NULL)` |
 | `invoice_lines` (`:3804`) | The computation's output for the current revision: SKU code/name/HSN snapshots, `qty_milli`, `rate_paise`, `rate_source` (`order_line \| manual`), `taxable_paise`, `gst_bps`, `cgst/sgst/igst_paise`, `hsn_gap` | Rebuilt whole on every content change (delete then insert). It carries no identity of its own |
-| `invoice_series` (`:3842`) | One row per `(tenant_id, fy_label)`, holding `last_seq` | `invoice_series_tenant_fy_unique`; `last_seq` is advanced only under the row's `FOR UPDATE` lock |
+| `invoice_series` (`:3842`) | One row per `(tenant_id, origin_gstin, fy_label)`, holding `last_seq` (8-1b) | `invoice_series_tenant_gstin_fy_unique`, **partial** `WHERE origin_gstin IS NOT NULL`; `last_seq` is advanced only under the row's `FOR UPDATE` lock. **The NULL invariant:** a NULL `origin_gstin` marks a legacy 8-1 per-tenant series (`FY-2627-000001` format) — kept as history, never allocated from again, never deleted. Every row this build writes has a GSTIN; issuance cannot happen without one (the issued CHECK above) |
 | `gst_state_codes` (`:3865`) | **Global** reference data: the CBIC state-code list, 38 rows (`26` = Dadra & Nagar Haveli and Daman & Diu, `37` = Andhra Pradesh, `38` = Ladakh, `97` = Other Territory, `99` = Other Country; `25` and `28` are absent) | Hand-seeded in 0053. **No RLS**: it is India-wide law, not tenant data (the `app_metadata` precedent). The count is pinned by `invoicing.spec.ts`'s seed proof, and the FE mirrors it in `GST_STATE_NAMES` |
 
-CHECKs, RLS and the seed live only in `drizzle/0053_invoicing_core.sql`, hand-amended. Policies follow the guide's shape (`invoices_tenant_isolation`, …), and **the `client-isolation` RLS count pin moved 64 → 67**.
+CHECKs, RLS and the seed live only in `drizzle/0053_invoicing_core.sql`, hand-amended; 8-1b's columns, CHECKs, index swaps and data rewrites are `drizzle/0054_invoice_regulatory_pass.sql` (hand-written, proven by `test/invoicing-migration.spec.ts` on a scratch database). Policies follow the guide's shape (`invoices_tenant_isolation`, …), and **the `client-isolation` RLS count pin moved 64 → 67**.
 
 **Owned columns on other modules' tables.** Each is written only by its owner's command, never by invoicing:
 
@@ -68,7 +68,7 @@ sequenceDiagram
     R->>B: publish(order.dispatched)
     B->>H: deliver (FIRST subscriber)
     H->>G: generateCoreInTx(order, no overrides) — own tenant tx
-    G-->>H: outcome (insert / identical / update)
+    G-->>H: outcome (frozen / insert / identical / update)
     H->>O: append invoice.issued (in the same tx, ONLY on first issuance)
     alt data fault (4xx problem, ArithmeticOverflowError)
         H-->>B: log + ACK
@@ -89,8 +89,11 @@ sequenceDiagram
     M->>M: hash (rates sorted by orderLineId — never throws)
     M->>M: assert invoice.generate → replay lookup → rates shape
     M->>G: generateCoreInTx(order, rates)
+    alt invoice already issued / voided (frozen)
+        G-->>M: rates non-empty → 409 invoice-frozen; else the stored row, unchanged
+    end
     alt InvoiceRaceLostError (the delivery inserted first)
-        M->>M: retry ONCE in a fresh tx (takes the update path)
+        M->>M: retry ONCE in a fresh tx (winner awaiting → update path, rates apply; winner issued → freeze → 409 invoice-frozen)
     end
     M->>M: invoice.issued (first issuance) → audit → idempotency key
     M-->>C: {invoice} (200)
@@ -108,6 +111,7 @@ sequenceDiagram
 | permission | role re-read in the tx | `403 role-denied` |
 | replay | same key, same hash → stored snapshot | `422 idempotency-key-reuse` on a different hash |
 | rates shape | non-negative safe integer `ratePaise`, non-empty `orderLineId`, no duplicate line | `400 validation-failed` |
+| lock + freeze (8-1b) | the order's invoice row is locked FIRST; an `issued`/`voided` row short-circuits before anything below — non-empty `rates` refuse, a plain call returns the stored row (no write, no revision, no event) | `409 invoice-frozen` (outranks the line checks) |
 | facts | order exists; status `dispatched` | `404 not-found`, `409 order-not-dispatched` |
 | overrides | every override names a line of the order, **and an unpriced one** | `409 line-not-of-order`, `409 line-already-priced` |
 | write | insert, or an update of the settled row | unique violation → `InvoiceRaceLostError` → one retry |
@@ -149,14 +153,21 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 - `taxable = halfUp(qtyMilli × ratePaise, 1000)`, then `tax = halfUp(taxable × bps, 10000)`, **per line**, never on totals.
 - Intra-state splits CGST = ⌊tax/2⌋ and SGST/UTGST = the remainder, so the odd paisa goes to SGST. Inter-state carries the whole tax as IGST. An unresolved supply charges zero.
 - Totals are sums of rounded lines, re-checked by `assertInvoiceTotals` (`subtotal + gst = total`, `cgst + sgst + igst = gst`).
-- No rupee rounding is stored; whether the printed payable rounds is 8-2's regulatory question.
+- **Rupee rounding (8-1b), `roundToRupee`:** half-up at 50 paise — `payable = ⌊(total + 50) / 100⌋ × 100`, `roundOff = payable − total` ∈ −49…+50 (228060 → 228100 +40; 435449 → 435400 −49; 435450 → 435500 +50). It touches **only** `total → payable`; taxable, GST and every per-tax amount stay paise-exact. Both figures are stored (row columns and `document.totals`); `roundOff` is a checked signed integer, not `Paise`. Migration 0054's `div(total + 50, 100) * 100` is the SQL twin; a parity test pins that the two agree byte-for-byte.
+- `document.totals` is `{subtotal, gst, total, roundOff, payable}`. 8-1's `payAble` was renamed `total` (its value was always the exact sum) and 0054 rewrote every stored document and idempotency snapshot, so readers learn one spelling.
+- **Downstream figures:** e-way's total invoice value and GSTR-1's invoice value read `payable`; e-way's "other value" carries `roundOff`; the HSN summary and per-tax figures stay exact.
 
-**Numbering.** It happens only on the flip to `issued`, with one clock read for both the FY and `issuedAt`.
+**Numbering (8-1b: one consecutive series per supplier GSTIN).** It happens only on the flip to `issued`, with one clock read for both the FY and `issuedAt`.
 - `fyLabelFor` reads the IST clock (April–March): `FY-2627`.
-- `allocateSeriesSeq` locks (or creates, then re-locks) the series row and increments it, giving `FY-2627-000001`.
-- An already-numbered invoice keeps its number and `issuedAt` forever, and a status never regresses. A recompute of an issued invoice may find warnings, and in practice cannot find blocking gaps: every blocking input is frozen or create-only.
+- `allocateSeriesSeq(tenant, originGstin, fy)` locks (or creates, then re-locks) the GSTIN's series row and increments it. Its `ON CONFLICT DO NOTHING` names the partial unique's predicate (`target: [tenantId, originGstin, fyLabel], where: origin_gstin is not null`) — Postgres only infers a partial index as the arbiter when the predicate matches.
+- `formatInvoiceNo` gives `29/2627/000001`: the **GSTIN's own** first two characters (never `resolveStateCode`'s answer), the FY digits, the 6-digit sequence — 14 chars, asserted ≤ 16 (Rule 46's limit; a 7-digit sequence still fits).
+- Each GSTIN starts at `000001`, which cannot collide with a legacy `FY-…` number; legacy series rows (NULL GSTIN) stop allocating.
+- **Two GSTINs in the same state print identical numbers.** The pair `(originGstin, invoiceNo)` identifies an invoice: the unique, the list entry, the `invoice.issued` payload and every consumer key on it, never on `invoiceNo` alone.
+- A tenant-GSTIN fallback for an out-of-state warehouse numbers in the tenant's state series (the existing `pos-discrepancy` case).
 
-**Revisions.** `documentsEqual` (`:814`) compares canonicalized documents, excluding `revision` (jsonb re-sorts object keys, so a naive stringify would bump on key order alone). An identical re-derivation writes nothing. A changed one bumps `revision` and rewrites the row and lines **under the same number**.
+**The freeze (8-1b).** `generateCoreInTx` locks the invoice row **first**, before the facts read; an `issued` or `voided` row returns from the stored row (`contentChanged: false`, `firstIssuance: false`) before the facts, the override checks and the computation. Because the lock comes first, a generation that waited on a concurrent awaiting→issued flip reads the issued row after the winner's commit and freezes — exactly one issuance, one number, one `invoice.issued`. The freeze is total, **warnings included**: a blank-HSN line on an issued invoice stays blank, and the HSN summary must handle blank-HSN lines.
+
+**Revisions.** `documentsEqual` (`:814`) compares canonicalized documents, excluding `revision` (jsonb re-sorts object keys, so a naive stringify would bump on key order alone). It now only runs on **awaiting** rows: an identical re-derivation writes nothing; a changed one bumps `revision` and rewrites the row and lines.
 
 ---
 
@@ -166,13 +177,15 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 - Generation never touches dispatch state; a generation failure leaves the order `dispatched`.
 - `order_lines.rate_paise` is never written after create; overrides freeze into the invoice document.
 - No ledger writes: an invoice is a derived money artifact, not stock motion.
-- Only an `issued` invoice has a number. `voided` exists for vocabulary stability; there is no void command in 8-1.
+- Only an `issued` invoice has a number, and every issued invoice has a number and a supplier GSTIN (a CHECK since 0054). `voided` exists for vocabulary stability; there is no void command.
+- **An issued or voided invoice is never recomputed, re-priced or renumbered** — no write, no revision bump, no event (8-1b). Corrections need credit/debit notes.
+- `payable_paise = total_paise + round_off_paise`, a whole number of rupees, round-off in −49…+50 — in storage, not only in `arith.ts`.
 
 ## The event
 
 | Event | Emitted | Payload |
 |---|---|---|
-| `invoice.issued` (outbox, in-tx) | on the **first** flip to `issued` only (by either path), not on later revisions | `{invoiceId, orderId, warehouseId, invoiceNo, fyLabel, revision, subtotalPaise, gstPaise, totalPaise}`: flat and client-agnostic (21-5 reads it) |
+| `invoice.issued` (outbox, in-tx) | on the **first** flip to `issued` only (by either path); an issued invoice never changes again | `{invoiceId, orderId, warehouseId, originGstin, invoiceNo, fyLabel, revision, subtotalPaise, gstPaise, totalPaise, payablePaise, roundOffPaise}`: flat and client-agnostic (21-5 reads it). Built by ONE function, `invoiceIssuedPayload` (`events.ts`), for both emitters. **Consumers key on `(originGstin, invoiceNo)`** |
 
 No consumer exists yet (8-2, 21-5). Audit: `invoice.generated`, one row per manual call, with the actor and the idempotency key as reference.
 
@@ -187,5 +200,8 @@ No consumer exists yet (8-2, 21-5). Audit: `invoice.generated`, one row per manu
 - **Raw Postgres timestamps on the wire.** The views passed `timestamptz` text through, so the list's own `nextCursor` failed its cursor regex and page 2 answered 400. Views use `canonicalInstant`, and the cursor uses `fullPrecisionInstant(created_at::text)` (millisecond truncation skips same-millisecond rows).
 - **Nullable union ApiProperties need `type: String`** (the channels gotcha, again): `TenantResponse.gstin` / `WarehouseResponse.gstin` tripped the OpenAPI drift guard.
 - **Gaps that name a line must carry its id structurally.** The first document shape put the unpriced line's id only in `detail` prose. The FE (which never parses prose) could not price anything, and a follow-up PR added `orderLineId`. When pinning a document shape, ask who acts on each field.
+- **A partial unique index needs its predicate in `ON CONFLICT`** (8-1b design review #1). Without `where: origin_gstin is not null` Postgres cannot infer the arbiter and every first issuance errors with "no unique or exclusion constraint matching". It is invisible until the first insert of a series row.
+- **A migration's NOT NULL / CHECK before its backfill fails only on a non-empty table** — CI's databases are empty, so it is invisible there. 0054 orders guard → pre-flight → nullable ADD → backfill → rewrite → SET NOT NULL → CHECKs, and `invoicing-migration.spec.ts` runs it over seeded 0053 rows.
+- **Idempotency snapshots embed the response shape forever.** Changing a document shape without rewriting `idempotency_keys.response_snapshot` makes a pre-change key replay the old shape to a client that no longer reads it; 0054 rewrites them.
 - **Count pins move with this module**: capabilities 33 → 34 (`users.spec.ts`, FE `users.test.ts`), RLS policies 64 → 67 (`client-isolation.spec.ts`).
 - **FE: keep `DataTable` mounted while a page loads.** Swapping it for a loading line on every page change remounts it onto page one, so Prev never enables. Likewise, a success banner rendered inside a subtree that remounts after the save vanishes on arrival; lift it above the remount, keyed to its invoice.

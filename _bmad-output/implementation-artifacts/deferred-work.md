@@ -583,3 +583,9 @@
 - source_spec: none
   summary: Web inputs for GSTINs and prices — tenant gstin on register, warehouse gstin on warehouse create, consigneeGstin and per-line ratePaise on the order form (none exist today, so invoices cannot issue from the UI alone).
   evidence: Split from the 8-2 intent (carried from the 8-1 seed run) as an independent FE-only deliverable.
+
+## Deferred from: code review of spec-8-1b-invoice-regulatory-pass (2026-10-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-1b-invoice-regulatory-pass.md`
+  summary: Voided invoices — extend `invoices_issued_stamped_check` to `invoice_no IS NULL OR origin_gstin IS NOT NULL` (so a voided number cannot escape the per-GSTIN unique through a NULL GSTIN) and pin the voided half of the freeze with a test.
+  evidence: The freeze and the docs cover voided rows, but no code path creates one until the void/credit-note story; that story must add the constraint and the test together.
