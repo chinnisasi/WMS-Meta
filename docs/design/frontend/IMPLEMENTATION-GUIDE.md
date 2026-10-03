@@ -180,7 +180,7 @@ AD-5: every mutating request carries a client-minted ULID (`lib/ulid.ts:28` — 
 | Shape | Where | Key minted |
 |---|---|---|
 | **Per click** | `ulid()` inline at the call site — every Settings action, the over-receipt decision, the QC release, the order cancel | at the moment of the click |
-| **Per draft** | `OrderCreateForm` (`outbound-orders.tsx:110`, `:132-133`), `WavePolicyForm` / generate (`outbound-waves.tsx:179`, `:351`) | on first submit, **reused across retries of an unchanged draft**, cleared on success and on any draft edit (`editDraft` → `setIdempotencyKey(null)`, `outbound-orders.tsx:118-121`) |
+| **Per draft** | `OrderCreateForm` (`outbound-orders.tsx:125`, `:178-179`), `WavePolicyForm` / generate (`outbound-waves.tsx:179`, `:351`) | on first submit, **reused across retries of an unchanged draft**, cleared on success and on any draft edit — `editDraft` (lines, including each line's rate), `editDestination` and, since 8-1c, `editConsigneeGstin` (the buyer GSTIN) each call `setIdempotencyKey(null)` (`outbound-orders.tsx:136-153`), because every one of them is in the backend's request hash |
 | **Per confirmation** | the wave release/cancel row actions (`outbound-waves.tsx:605-616`, `:824`, `:844`) | when the confirmation opens; reused across retries of it; cleared with the confirmation |
 
 The per-draft and per-confirmation shapes exist because a create that times out **after the server committed** is only safe to retry if the retry replays. Re-minting would raise a second order. Conversely, sending the same key with a *changed* body is what the backend answers 422 `idempotency-key-reuse` to — hence clearing on every edit.
@@ -351,6 +351,7 @@ When you touch any of these, state which of the two precision-source options you
 - Then a pure parser in `src/lib/` producing `{body|lines, problem}`: `parseDraftLines` (`outbound-orders.ts:352`) and `parsePolicyDraft` (`outbound-waves.ts:667`). Both return `problem: string` and **send nothing** when set.
 - Bounds are mirrored from the backend's decorators with a comment naming which: `MAX_ORDER_LINES = 200`, `MAX_LINE_QUANTITY = 2147483647` ("the backend's `@Max` on a line quantity (int32)"), `MAX_POLICY_NAME_LENGTH = 120` ("the backend's `@Length(1, 120)`"), `MAX_POLICY_ORDERS`, `MAX_POLICY_PRIORITY`.
 - Optional fields the viewer left blank are **dropped from the body**, not sent as `''` (`outbound-waves.ts:659-661`).
+- **Money and GSTIN inputs have shared helpers (8-1c) — use them, never re-derive.** `src/lib/rupees.ts` (`parseRupees`: rupee text → exact integer paise, no float, at most two decimals; re-exported from `invoices.ts`), `src/lib/gstin.ts` (`GSTIN_RE`, a byte-for-byte mirror of the BE regex, and `parseGstinField`: trim + uppercase, blank → absent, malformed → a problem naming the field), and `src/lib/tenancy-forms.ts` (`registerTenantBody` / `warehouseBody`: the register and warehouse-create bodies built from the parse, pure so they test without an App Router). GSTIN inputs carry no `pattern` — the parser is the only shape gate.
 - One rule is refused client-side purely for the copy: a `00:00` cutoff would refuse release for the whole day, and the backend's 400 has nothing more to say than the client already knows (`outbound-waves.ts:664-666`, `:713-719`).
 
 **What the client must let the server refuse:**
