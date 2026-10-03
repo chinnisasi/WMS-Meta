@@ -2,7 +2,7 @@
 title: 'Dimensional capacity (FR-39)'
 type: 'feature'
 created: '2026-09-21'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: 'f67a206' # wms-be main HEAD when implementation began
 route: 'dispatch'
 review_loop_iteration: 0
