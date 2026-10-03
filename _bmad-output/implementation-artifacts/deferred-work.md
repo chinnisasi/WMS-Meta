@@ -567,3 +567,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-7-2-channel-order-ingestion-and-fulfillment-writeback.md` (Spec Change Log #5 / triage row 38) — **RESOLVED 10-02-2026**
 
   The 2-hour 15× NFR-2 acceptance run was driven by the user on 2026-10-02 against the patch-round tree (wms-be `44dfd4a`): 7,200 s at the recorded invocation, 100% of target achieved, 3,597 deliveries, p50 69 ms / p95 419 ms (gate ≤ 4,000 ms), > 5 s fraction 0, 7,106 concurrent adjustments, oversells 0 (all parity sweeps empty), no pool deadlock. Report committed at wms-be `artifacts/nfr2-2h-report.json` (commit `cec7c73`); the retained suite DB was dropped. No settlement left.
+
+## Deferred from: code review of spec-8-1-gst-compliant-invoicing (2026-10-03)
+
+- **Kit orders always park `awaiting-data`, even when priced at create.** The parent's frozen `ratePaise` drops with the zero-pick parent line, and the components are exploded with `rate_paise = null`, so every kit dispatch needs per-component manual pricing. Reason for deferring: per-component manual pricing works for 8-1, and splitting a kit's price across components needs a rounding rule designed on purpose, not improvised.

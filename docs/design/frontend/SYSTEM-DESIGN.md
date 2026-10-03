@@ -50,7 +50,7 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 | `/notifications` | Notifications | `SurfacePlaceholder` |
 | `/replenishment` | Replenishment | **Real** — `ReplenishmentView`: reorder-point policies, breach queue, suggested-PO drafts (6-1) and the expiry/aging configurator + batch-alert queue (6-2), on the `replenishment.manage` capability |
 | `/channels` | Channels | **Real** — `ChannelsView` (story 7-1): the frozen three provider connections (connect / rotate / disconnect / retry), each connection's standing-buffer editor and sync health inline; the nav item gates on `channel.manage`, the list read is member-open |
-| `/compliance` | Compliance | **Real** — `ColdChainTrace` (12-6) |
+| `/compliance` | Compliance | **Real** — `Invoices` (8-1: list, printable GST invoice, gated pricing panel) above `ColdChainTrace` (12-6) |
 | `/reports` | Reports / Audit | `SurfacePlaceholder` |
 | `/settings` | Settings | **Real** — a `SurfacePlaceholder` header above nine working cards: setup checklist, warehouse create, zones/bins setup, catalog import, products (11.6), SKU table (with the kit editor, 11.6), users, warehouse list, devices (`settings/page.tsx:15-25`) |
 
