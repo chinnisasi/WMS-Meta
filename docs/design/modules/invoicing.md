@@ -1,6 +1,6 @@
 # Invoicing module
 
-> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. E-way bills and the HSN summary (8-2) and the 3PL client-billing model (21-5) extend this module.
+> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. The HSN summary (8-2a, GSTR-1 Table 12) reads the issued invoices back per supplier GSTIN and period. E-way bills (8-2) and the 3PL client-billing model (21-5) extend this module.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first. The command skeleton is followed closely here and is not repeated.
 
@@ -14,12 +14,12 @@ The module exists for two invariants. **Until it issues, an invoice is derived, 
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `invoices` (`schema.ts:3753`) | One row per `(tenant_id, order_id)`: `status` (`awaiting-data \| issued \| voided`), `invoice_no` / `fy_label` / `series_seq` (null until first issuance), `origin_gstin`, `consignee_gstin`, `place_of_supply` (two-digit code), `supply_type` (`intra \| inter`), `subtotal_paise` / `gst_paise` / `total_paise` (exact), `payable_paise` / `round_off_paise` (8-1b, the stored rupee rounding), `revision`, `document` (jsonb) | **`invoices_tenant_order_unique`**: the one-invoice rule, and the race arbiter. `invoices_tenant_gstin_invoice_no_unique` on `(tenant_id, origin_gstin, invoice_no) WHERE invoice_no IS NOT NULL` (8-1b; two GSTINs may share a number). CHECKs: `subtotal + gst = total`; (0054) `payable = total + round_off`, `round_off BETWEEN -49 AND 50`, `payable % 100 = 0`, `payable >= 0`, and `status <> 'issued' OR (invoice_no IS NOT NULL AND origin_gstin IS NOT NULL)` |
-| `invoice_lines` (`:3804`) | The computation's output for the current revision: SKU code/name/HSN snapshots, `qty_milli`, `rate_paise`, `rate_source` (`order_line \| manual`), `taxable_paise`, `gst_bps`, `cgst/sgst/igst_paise`, `hsn_gap` | Rebuilt whole on every content change (delete then insert). It carries no identity of its own |
+| `invoices` (`schema.ts:3753`) | One row per `(tenant_id, order_id)`: `status` (`awaiting-data \| issued \| voided`), `invoice_no` / `fy_label` / `series_seq` (null until first issuance), `origin_gstin`, `consignee_gstin`, `place_of_supply` (two-digit code), `supply_type` (`intra \| inter`), `subtotal_paise` / `gst_paise` / `total_paise` (exact), `payable_paise` / `round_off_paise` (8-1b, the stored rupee rounding), `revision`, `document` (jsonb), `issued_at` (8-2a, read model) | **`invoices_tenant_order_unique`**: the one-invoice rule, and the race arbiter. `invoices_tenant_gstin_invoice_no_unique` on `(tenant_id, origin_gstin, invoice_no) WHERE invoice_no IS NOT NULL` (8-1b; two GSTINs may share a number). CHECKs: `subtotal + gst = total`; (0054) `payable = total + round_off`, `round_off BETWEEN -49 AND 50`, `payable % 100 = 0`, `payable >= 0`, and `status <> 'issued' OR (invoice_no IS NOT NULL AND origin_gstin IS NOT NULL)` |
+| `invoice_lines` (`:3804`) | The computation's output for the current revision: SKU code/name/HSN snapshots, `uom` (8-2a, read model), `qty_milli`, `rate_paise`, `rate_source` (`order_line \| manual`), `taxable_paise`, `gst_bps`, `cgst/sgst/igst_paise`, `hsn_gap` | Rebuilt whole on every content change (delete then insert). It carries no identity of its own. `invoice_lines_invoice_order_line_unique` on `(invoice_id, order_line_id)` (0055) |
 | `invoice_series` (`:3842`) | One row per `(tenant_id, origin_gstin, fy_label)`, holding `last_seq` (8-1b) | `invoice_series_tenant_gstin_fy_unique`, **partial** `WHERE origin_gstin IS NOT NULL`; `last_seq` is advanced only under the row's `FOR UPDATE` lock. **The NULL invariant:** a NULL `origin_gstin` marks a legacy 8-1 per-tenant series (`FY-2627-000001` format) — kept as history, never allocated from again, never deleted. Every row this build writes has a GSTIN; issuance cannot happen without one (the issued CHECK above) |
 | `gst_state_codes` (`:3865`) | **Global** reference data: the CBIC state-code list, 38 rows (`26` = Dadra & Nagar Haveli and Daman & Diu, `37` = Andhra Pradesh, `38` = Ladakh, `97` = Other Territory, `99` = Other Country; `25` and `28` are absent) | Hand-seeded in 0053. **No RLS**: it is India-wide law, not tenant data (the `app_metadata` precedent). The count is pinned by `invoicing.spec.ts`'s seed proof, and the FE mirrors it in `GST_STATE_NAMES` |
 
-CHECKs, RLS and the seed live only in `drizzle/0053_invoicing_core.sql`, hand-amended; 8-1b's columns, CHECKs, index swaps and data rewrites are `drizzle/0054_invoice_regulatory_pass.sql` (hand-written, proven by `test/invoicing-migration.spec.ts` on a scratch database). Policies follow the guide's shape (`invoices_tenant_isolation`, …), and **the `client-isolation` RLS count pin moved 64 → 67**.
+CHECKs, RLS and the seed live only in `drizzle/0053_invoicing_core.sql`, hand-amended; 8-1b's columns, CHECKs, index swaps and data rewrites are `drizzle/0054_invoice_regulatory_pass.sql` (hand-written, proven by `test/invoicing-migration.spec.ts` on a scratch database). 8-2a's two read-model columns are `drizzle/0055_hsn_summary_columns.sql` (see "The HSN summary" below). Policies follow the guide's shape (`invoices_tenant_isolation`, …), and **the `client-isolation` RLS count pin moved 64 → 67**.
 
 **Owned columns on other modules' tables.** Each is written only by its owner's command, never by invoicing:
 
@@ -171,6 +171,48 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 
 ---
 
+## The HSN summary (8-2a) — GSTR-1 Table 12
+
+A **read**, member-open, over **issued** invoices only (never `awaiting-data` or `voided`): `InvoicingFacade.hsnSummary(tenant, gstin, period)` and `hsnSummaryGstins(tenant)`, served by `GET /invoices/hsn-summary` and `GET /invoices/hsn-summary/gstins` (declared before `:invoiceId`). Code: `hsn-summary.ts` (periods, aggregate, rows) and `uqc.ts` (the unit table).
+
+**The read model (migration 0055).** Two columns, both written by the generator, both backfilled from the frozen document, neither on any view, DTO, snapshot or `documentsEqual` input:
+- `invoices.issued_at timestamptz` — the SAME value as `document.header.issuedAt`: both issuance paths (the insert and the awaiting→issued update) write it from the one `issuedAt` variable `buildDocument` gets (one clock read); `null` while awaiting. Two-way CHECKs: `invoices_awaiting_unissued_check` (awaiting ⇒ NULL) and `invoices_issued_at_stamped_check` (issued/voided ⇒ NOT NULL). The backfill touched issued/voided rows only — a re-parked 8-1 row's stale `issuedAt` stays out. Partial index `invoices_tenant_gstin_issued_at_idx (tenant_id, origin_gstin, issued_at) WHERE status = 'issued'`.
+- `invoice_lines.uom text NOT NULL` — the SKU's base UoM at generation (the document line's `uom`), **no vocabulary CHECK** (a frozen snapshot must survive a vocabulary change). Backfilled on `(invoice_id, orderLineId)`, which 0055 made UNIQUE.
+
+0055 runs guard → pre-flight (every offender at once: a non-ISO-Z `issuedAt` on an issued/voided row, a line matching zero or several document lines, a blank matched `uom`, duplicate `(invoice_id, order_line_id)`) → nullable ADD → backfill → NOT NULL → CHECKs → UNIQUE → index. `invoicing-migration.spec.ts` applies it to seeded 0054 rows and proves every row's `to_jsonb(row)` minus the new column is unchanged, `updated_at` included.
+
+```mermaid
+sequenceDiagram
+    participant W as /compliance (web)
+    participant C as InvoicingController
+    participant F as InvoicingFacade
+    participant S as hsn-summary.ts
+    participant K as CatalogFacade
+    W->>C: GET /invoices/hsn-summary/gstins
+    C->>F: hsnSummaryGstins → [{gstin, firstIssuedAt, lastIssuedAt}]
+    W->>W: period options (IST months + FY quarters, first → max(last, today))
+    W->>C: GET /invoices/hsn-summary?gstin&period
+    C->>F: hsnSummary (gstin shape, parsePeriod → [from, to) — 400 validation-failed)
+    F->>S: in one tenant tx: grouped sums, invoice counts, issue lines
+    S->>K: getSkuHsnByCodesInTx (the current catalog HSN hint)
+    F-->>W: {b2b, b2c, totals, issueLines}
+    W->>W: CSV per section (issue rows excluded)
+```
+
+**Periods.** `parsePeriod` accepts `YYYY-MM` (01–12) and `FY-yyyy-Qn` (consecutive two-digit years, Q1 Apr–Jun … Q4 Jan–Mar of the next calendar year — the `FY-2627` label's convention). It computes `[from, to)` in TypeScript as the UTC instants of IST midnights from the generator's `IST_OFFSET_MS` and binds them as `timestamptz` — never `date_trunc` or a session time zone. `to` is exclusive and the response says so (`toExclusive: true`).
+
+**Aggregation.** SQL over `invoices ⨝ invoice_lines`: `status = 'issued'`, tenant, `origin_gstin = $gstin` (exact, no case folding), `issued_at` in range, grouped by B2B (`consignee_gstin IS NOT NULL`), `nullif(btrim(hsn), '')`, `uom`, `gst_bps`, with `sum(…)::bigint` → `Number()` + `isSafeInteger`. Then in TS: `uom → uqcFor → UQC`, and rows sharing (section, HSN, UQC, rate) merge in integers; a row records its `sourceUoms` and `mixedUnits` (only `OTH` can merge). Order: HSN ascending with issue rows last, then UQC, then rate. `invoiceCount` is `count(*)` over `invoices` (a lineless issued invoice counts).
+
+**HSN issues are kept.** Validity is `HSN_PATTERN = ^[0-9]{4}([0-9]{2}){0,2}$` on the SQL-normalized value `nullif(btrim(hsn), '')` (whitespace-only is a blank, i.e. null), ONE pattern used by the TS row check (no second JS trim) and the SQL issue-line filter. The summary's three reads run in one REPEATABLE READ transaction so rows, counts and issue lines share a snapshot; the `status = 'issued'` predicate is a literal so the partial index stays usable under a generic plan. An issue row stays in the totals (so they reconcile to the invoices), is listed line by line in `issueLines` with the SKU's current catalog HSN (a hint — the invoice is never rewritten), and the web leaves it out of the CSV.
+
+**Exactness.** Every figure is the paise sum of frozen lines; nothing is rounded per row and the invoice round-off is never spread (Table 12's values are taxable + tax). The reconciliation test compares the totals to Σ `invoices.subtotal_paise` / Σ `gst_paise` read independently.
+
+**UoM → UQC (`uqc.ts`).** `UOM_TO_UQC: Record<Uom, Uqc>` covers all 35 units (a missing entry is a compile error; the suite also asserts completeness over the runtime tuple). No scaling ever: where no UQC means the same unit it maps to `OTH` (`case`, `pallet`, `crate`, `tin`, `jar`, `tray`, `sheet`, `bar`, `cylinder`, `keg`, `mm`); an unknown stored unit is `OTH` with `exact: false`. The UQC *descriptions* (`KGS-KILOGRAMS`) and the pinned CSV header live on the web (`wms-fe/src/lib/hsn-summary.ts`).
+
+**Not modelled** (PENDING): credit/debit-note netting, cess (always 0), HSN-master validation.
+
+---
+
 ## Invariants
 
 - Exactly one invoice per `(tenant, order)`; a lost insert race never produces a second row or a second tax.
@@ -204,4 +246,5 @@ No consumer exists yet (8-2, 21-5). Audit: `invoice.generated`, one row per manu
 - **A migration's NOT NULL / CHECK before its backfill fails only on a non-empty table** — CI's databases are empty, so it is invisible there. 0054 orders guard → pre-flight → nullable ADD → backfill → rewrite → SET NOT NULL → CHECKs, and `invoicing-migration.spec.ts` runs it over seeded 0053 rows.
 - **Idempotency snapshots embed the response shape forever.** Changing a document shape without rewriting `idempotency_keys.response_snapshot` makes a pre-change key replay the old shape to a client that no longer reads it; 0054 rewrites them.
 - **Count pins move with this module**: capabilities 33 → 34 (`users.spec.ts`, FE `users.test.ts`), RLS policies 64 → 67 (`client-isolation.spec.ts`).
+- **A route literal beside a `:param` route must be declared first** (8-2a). Express matches in declaration order, so `GET /invoices/hsn-summary` declared after `GET /invoices/:invoiceId` would answer `400 invoiceId must be a uuid`. The controller declares it first and `invoicing-hsn.spec.ts` pins both the behaviour and the method order.
 - **FE: keep `DataTable` mounted while a page loads.** Swapping it for a loading line on every page change remounts it onto page one, so Prev never enables. Likewise, a success banner rendered inside a subtree that remounts after the save vanishes on arrival; lift it above the remount, keyed to its invoice.

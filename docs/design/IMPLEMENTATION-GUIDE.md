@@ -202,6 +202,12 @@ A refusal names the rule and the offender:
 
 ---
 
+### Route declaration order
+
+**A literal route segment must be declared before a sibling `:param` route in the same controller.** Express matches routes in declaration order, so `GET /invoices/hsn-summary` declared after `GET /invoices/:invoiceId` is captured by the param route and answers `400 invoiceId must be a uuid` — or, for a param route without a shape check, a `404` or a wrong read. Declare the literal first, say why in a comment, and pin it with a test that calls the literal route and expects its own response (8-2a's `invoicing-hsn.spec.ts` asserts both the behaviour and the method order on the controller prototype).
+
+---
+
 ## 7. Cross-repo
 
 Backend first, always. A story spanning repos lands the additive backend change, then the frontend that consumes it.

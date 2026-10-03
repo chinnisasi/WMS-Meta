@@ -2,8 +2,9 @@
 title: 'HSN summary for GST filing'
 type: 'feature'
 created: '2026-10-03'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '51f459c358a0b1c666d99bf1268f66b967179829'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-8-context.md'
@@ -95,7 +96,7 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0055_hsn_summary_columns.sql` (+ journal/snapshot), in this order:
+- [x] `wms-be/drizzle/0055_hsn_summary_columns.sql` (+ journal/snapshot), in this order:
   1. **Guards.** RAISE if `invoices.issued_at` or `invoice_lines.uom` already exists (re-run). RAISE if `invoices.payable_paise` is missing (out of order).
   2. **Pre-flight**, listing every offender at once:
      - issued or voided rows whose `document.header.issuedAt` is null or not an ISO-Z instant;
@@ -110,30 +111,30 @@ context:
   8. The partial index.
 
   The lock window is acceptable at current volumes (0054 already rewrote whole tables). State this in the header.
-- [ ] `wms-be/src/modules/invoicing/generator.ts`: write `issued_at` on both issuance paths (insert and update; `null` while awaiting) from the document's `issuedAt` variable, and `uom` in `writeLines`.
-- [ ] `wms-be/src/modules/invoicing/uqc.ts` + test:
+- [x] `wms-be/src/modules/invoicing/generator.ts`: write `issued_at` on both issuance paths (insert and update; `null` while awaiting) from the document's `issuedAt` variable, and `uom` in `writeLines`.
+- [x] `wms-be/src/modules/invoicing/uqc.ts` + test:
   - `uqcFor(uom: string) → {uqc, exact: boolean}`;
   - the full 35-unit table below; a completeness test over `UOMS`;
   - an unknown unit → `OTH` with `exact: false`;
   - **never scale a quantity.**
-- [ ] `wms-be/src/modules/invoicing/hsn-summary.ts` + `facade.ts`:
+- [x] `wms-be/src/modules/invoicing/hsn-summary.ts` + `facade.ts`:
   - **Periods.** `parsePeriod('YYYY-MM' | 'FY-yyyy-Qn')`: validates month 01-12, consecutive FY years and `Q1`-`Q4`. It computes `[from, to)` in TypeScript as UTC instants of IST midnights, reusing the generator's `IST_OFFSET_MS`, and binds them as timestamptz (never `date_trunc` or session time zones). `to` is exclusive and the response says so.
   - **Aggregation.** In SQL, over `invoices ⨝ invoice_lines`: `status = 'issued'`, tenant, `origin_gstin = $gstin` (exact, no case folding), and `issued_at` in range. B2B means `invoices.consignee_gstin IS NOT NULL`. Group by `trim(hsn)`, `uom` and `gst_bps`, using `sum(...)::bigint` → `Number()` with an `isSafeInteger` check.
   - **Rows.** HSN validity is `^\d{4}(\d{2}){0,2}$` on the trimmed value. Map UoM → UQC, then merge rows sharing (HSN, UQC, rate) in integers. An `OTH` row records its distinct source units. Ordering is deterministic: HSN ascending with issues last, then UQC, then rate.
   - **Totals.** `invoiceCount` is `count(*)` from `invoices`, because an invoice can have zero lines.
   - **Issue lines** are listed with the invoice number, SKU code, value and the SKU's current catalog HSN, read through the catalog facade.
   - **`hsnSummaryGstins`** returns each issued `origin_gstin` with its min/max `issued_at`.
-- [ ] `wms-be/src/api/invoicing.{controller,dto}.ts`:
+- [x] `wms-be/src/api/invoicing.{controller,dto}.ts`:
   - `GET /tenants/{t}/invoices/hsn-summary?gstin=&period=` (declared before `:invoiceId`);
   - `GET /tenants/{t}/invoices/hsn-summary/gstins`;
   - any member; a missing or malformed `gstin` or `period` gives 400;
   - re-export `openapi.json`.
-- [ ] `wms-be/test/invoicing-hsn.spec.ts`:
+- [x] `wms-be/test/invoicing-hsn.spec.ts`:
   - every matrix row;
   - **reconciliation against the invoice columns**: B2B + B2C + issue-row totals equal `sum(subtotal_paise)` and `sum(gst_paise)` over the included invoices, with an issue line present;
   - `issued_at` equals `document.header.issuedAt` on both issuance paths;
   - the route-order pin on `/hsn-summary`.
-- [ ] `wms-be/test/invoicing-migration.spec.ts`: a new 0055 `describe` on a scratch DB trimmed to ≤ 54. Seed:
+- [x] `wms-be/test/invoicing-migration.spec.ts`: a new 0055 `describe` on a scratch DB trimmed to ≤ 54. Seed:
   - an 8-1-legacy issued row;
   - an 8-1b issued row;
   - an awaiting row with lines and a stale `issuedAt`;
@@ -146,7 +147,7 @@ context:
   - **everything else is unchanged** (`to_jsonb(row) - 'issued_at' - 'uom'` identical, `updated_at` included);
   - the pre-flight refuses;
   - the re-run guard and the CHECKs hold.
-- [ ] `wms-fe`:
+- [x] `wms-fe`:
   - client wrappers + `client.test.ts`;
   - a new `src/lib/hsn-summary.ts` + test:
     - period options derived from each GSTIN's min/max `issued_at` (months and FY quarters, the current period included and labelled "in progress");
@@ -164,7 +165,7 @@ context:
     - empty states (no issued GSTINs; an empty period);
     - two CSV buttons;
     - `ResourceState` / `ReadFailure`.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `invoicing.md`: the HSN read model and 0055;
   - `API-SURFACE.md`;
   - `PENDING.md`: close the HSN deferral; add "catalog HSN is free text, not validated against the HSN master", "credit/debit notes must net into Table 12 in their own period", and "cess is unmodelled (0)";
@@ -192,6 +193,9 @@ context:
 - Given the full BE and FE suites, when run, then they pass.
 
 ## Implementation Notes
+
+- Baselines: wms-be `51f459c358a0b1c666d99bf1268f66b967179829` (frontmatter `baseline_commit`); wms-fe `9c33b7e82eda39a4e4da7e5690df26a6646da16b`. Work happens on `feat/8-2a-hsn-summary` in both repos. Leave changes uncommitted; do not commit, push, or open PRs.
+- Shipped: WMS-BE #72 (`e4a6606`), WMS-FE #57 (`667874b`); design PR WMS-Meta #84.
 
 ## Spec Change Log
 
@@ -221,6 +225,27 @@ context:
 | 18 | low | Wrong line refs | Corrected |
 | 19 | low | Null-HSN rows and ordering underspecified | Deterministic order; issue rows grouped |
 | 20 | low | Credit/debit netting, cess, QRMP/IFF unstated | Design Notes + PENDING |
+
+*Code review, 2026-10-03: three layers (blind, edge-case, verification-gap); 26 findings, 21 after merging duplicates. Each was verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---------|---------|----------|-------|
+| C1 | medium | The three summary reads run READ COMMITTED, so an invoice issued between them makes the rows, `invoiceCount` and `issueLines` disagree | `withTenantTransaction` with no isolation option; `repeatable read` exists (`tenant-scope.ts:52`, used at `reconcile.ts:731`); the default period is the open month, where issues are live | patch |
+| C2 | medium | The `INVOICES_CHANGED_EVENT` refetch has no test | No test file dispatches the event; dropping the listener keeps every test green | patch |
+| C3 | medium | The refactored catalog error-report download (BOM, filename, formula guard) has no test | `import-catalog.test.tsx` has no download assertion; the README now promises the BOM | patch |
+| C4 | low | Switching GSTIN after picking a period: the reset to the default has no test | The only picker test changes GSTIN before choosing a period | patch |
+| C5 | low | The picker opens on the current (in-progress) month, usually empty; a filer wants the newest period with data | `options.months[0]` default; the component test's own default is empty | patch: default to the IST month of the GSTIN's `lastIssuedAt` |
+| C6 | low | TS `trim()` and SQL `btrim` disagree on non-space whitespace; a whitespace-only HSN becomes `''`, not null, which splits rows, ties `compareRows` and duplicates React keys | Unreachable through today's API (import and PATCH both JS-trim; `''` maps to null), but the module claims one classifier | patch: `nullif(btrim(hsn), '')` in SQL, classify the SQL value with no second trim |
+| C7 | low | Nothing checks that the issue lines and the `hsnIssue` rows agree | Two classifiers (TS for rows, SQL for lines); only a hand-listed expectation | patch: per section, Σ issue-line value = Σ `hsnIssue` row value, and the counts match |
+| C8 | low | `status = 'issued'` is bound as a parameter, so a generic plan cannot use the partial index | drizzle `eq()` binds a parameter; the index predicate is a literal | patch: literal predicate |
+| C9 | low | Issue-line amounts use plain `+`, unlike every other sum in the module | `hsn-summary.ts` issue-line map | patch: `addExact` |
+| C10 | low | `UQC_DESCRIPTIONS` is `Record<string, string>`, so a new backend code silently becomes `OTH-OTHERS` | The test's list is hand-copied | patch: type it over the generated `uqc` enum |
+| C11 | low | The route-order gotcha is not in `IMPLEMENTATION-GUIDE.md`; the `SYSTEM-DESIGN.md` module map still says the HSN summary "lands in 8-2" and omits the invoicing → catalog read | `SYSTEM-DESIGN.md:74` | patch (docs) |
+| C12 | low | `csvField`'s formula guard would turn a negative amount into `'-12.00` | No amount can be negative until credit notes exist | rejected: unreachable today. Recorded in PENDING's credit-note entry |
+| C13 | low | A year 0000–0099 maps to the 1900s; year 9999 gives an extended ISO bound and a 500 | Nobody files for those years; the fix is new guards | rejected |
+| C14 | low | The pre-flight passes an impossible date such as `2026-02-30` | `issuedAt` was always written by `toISOString()` | rejected |
+| C15 | low | `issueLines` is unbounded | A catalog with no HSNs lists every line; that is a large table, not a failure, and a cap needs new response fields | rejected |
+| C16 | low | No architecture test pins invoicing's single catalog read | Developer-only; the dependency is recorded in the module map (C11) | rejected |
 
 ## Design Notes
 

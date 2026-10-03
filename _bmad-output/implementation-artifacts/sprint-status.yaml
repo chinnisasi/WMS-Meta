@@ -348,7 +348,7 @@ development_status:
   8-1-gst-compliant-invoicing: done
   8-1b-invoice-regulatory-pass: done
   8-1c-web-gstin-and-price-inputs: done
-  8-2a-hsn-summary: ready-for-dev
+  8-2a-hsn-summary: done
   8-2-e-way-bills-and-hsn-summary: backlog
   epic-8-retrospective: optional
 
