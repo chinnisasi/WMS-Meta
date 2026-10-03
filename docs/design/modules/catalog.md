@@ -111,6 +111,7 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 | `ensureSerials(tenantId, skuId, serialNumbers)` `:371` | Idempotent identity creation | Same |
 | `getKitCompositionInTx(tx, tenantId, kitSkuId)` `:457` | The composition rows (component sku id + milli-qty), **in the caller's tx** — the flat-BOM explosion read | Outbound's `createOrder` (11.4) |
 | `getKitSkuIdsInTx(tx, tenantId, skuIds)` `:466` | The subset of the given ids that are kits, **in the caller's tx** — the batch "is a kit" answer | Inbound's GRN submit + over-receipt **approve** arm, inventory's `stock.adjust`, and the kit command's own `assertComponentsAreNotKits` |
+| `getSkuHsnByCodesInTx(tx, tenantId, codes)` (8-2a) | code → the SKU's CURRENT `hsn` (absent when unknown), in the caller's tx | Invoicing's HSN summary — the hint beside a frozen blank/malformed-HSN line |
 | `getSegregationMatrix(tenantId)` (12-7) | `{classes, incompatible}` — the 12-2 hazard matrix fully expanded from `hazard.ts` (explosive's universal rule enumerated incl. the self-pair; sorted keys; no tx — a pure code read) | `GET …/catalog/segregation-matrix` (ungated; the FE matrix card is its only consumer) |
 
 **`uom.ts` file-level functions** are imported directly by anything that needs the vocabulary: `resolveUom`, `uomPrecision`, `isFractionalUom`, `serialTrackedFractionalUomDetail`, `unknownUomDetail`, plus the `UOMS` tuple (consumed by `catalog.dto.ts` for the OpenAPI enum).
@@ -370,6 +371,8 @@ Bulk inserts are chunked at 2,000 rows (`INSERT_CHUNK_ROWS`, `:405`): Postgres b
 1. No unit declares more decimals than `QUANTITY_DECIMALS`.
 2. No alias is also a canonical unit; every alias resolves to a canonical unit; every alias is already in normalized form (an un-normalized alias could never match).
 3. `STORY_10_1_DISCRETE_UOMS` (`:448-456`) — every spelling the pre-vocabulary allowlist blessed still resolves, and still to a 0-dp unit. Dropping one would leave stored rows failing `skus_uom_check` and take migration 0027 down.
+
+**Adding a unit — the checklist.** A migration that drops and re-adds both `skus_uom_check` and `uom_conversions_uom_check`; the line in `UOMS` and its precision in `UOM_PRECISION`; **its GST UQC in `invoicing/uqc.ts` `UOM_TO_UQC` (8-2a — typed `Record<Uom, Uqc>`, so a missing entry fails the build; `OTH` when no UQC means the same unit, never a scaled one)**; and, if that UQC code is new, its GSTN description in wms-fe `src/lib/hsn-summary.ts` `UQC_DESCRIPTIONS`.
 
 `WHOLE_UNIT_UOMS` (`:320`) is **derived** from the precision table, never listed twice; migration 0027 declares the same set in a temp table and the e2e suite pins the two together, so adding a 0-dp unit cannot silently miss the migration's rounding statements.
 
