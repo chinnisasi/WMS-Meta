@@ -2,8 +2,9 @@
 title: 'Invoice regulatory pass — frozen issued invoices, rupee round-off, per-GSTIN numbering'
 type: 'feature'
 created: '2026-10-03'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'edb1e999efc0a7c5d59e9bfb2ef955e65f286ddd'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-8-context.md'
@@ -59,7 +60,7 @@ Existing rows are migrated to the new shapes.
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 |----------|--------------|---------------------------|----------------|
 | Catalog edit after issue | SKU `gst_rate_bps` changed; event redelivery or a plain manual regenerate on an issued invoice | The stored invoice is returned byte-identical. No write, no revision bump, no event | Delivery ACKs |
-| Rates sent to an issued invoice | `POST /invoices {orderId, rates}`, invoice issued | Refused | `409 invoice-issued` |
+| Rates sent to an issued invoice | `POST /invoices {orderId, rates}`, invoice issued | Refused | `409 invoice-frozen` |
 | Awaiting invoice issues | All gaps close | Number taken from its supplier GSTIN's series (e.g. `29/2627/000003`) | Series row locked |
 | Two GSTINs, same FY | Warehouses in 29 and 27 | Two independent series, each starting at `000001` | Unique (tenant, origin GSTIN, number) |
 | Rounding | total 228060 / 435449 / 435450 paise | payable 228100 (+40) / 435400 (−49) / 435500 (+50) | N/A |
@@ -94,7 +95,7 @@ Existing rows are migrated to the new shapes.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0054_invoice_regulatory_pass.sql` (+ journal/snapshot, git-added together). Statement order is load-bearing:
+- [x] `wms-be/drizzle/0054_invoice_regulatory_pass.sql` (+ journal/snapshot, git-added together). Statement order is load-bearing:
   1. Guards: RAISE if `invoices.payable_paise` exists (already applied) or `invoice_series` is missing (out of order).
   2. Pre-check: RAISE if any row has `(document->'totals'->>'payAble')::bigint <> total_paise`.
   3. `ADD COLUMN payable_paise`, `round_off_paise` (nullable, no DEFAULT).
@@ -110,31 +111,31 @@ Existing rows are migrated to the new shapes.
      - `status <> 'issued' OR (invoice_no IS NOT NULL AND origin_gstin IS NOT NULL)`.
   9. `invoice_series`: add `origin_gstin` (nullable; legacy rows stay NULL), drop `invoice_series_tenant_fy_unique`, create the partial unique.
   10. Swap the invoice-number unique.
-- [ ] `wms-be/src/modules/invoicing/arith.ts`: `roundToRupee`.
-- [ ] `wms-be/src/modules/invoicing/generator.ts`: the freeze, per-GSTIN series and format, rounding, and the totals shape (per the Code Map).
-- [ ] `wms-be/src/modules/invoicing/{command,delivery,events,view}.ts`, `src/api/invoicing.{dto,controller}.ts`:
+- [x] `wms-be/src/modules/invoicing/arith.ts`: `roundToRupee`.
+- [x] `wms-be/src/modules/invoicing/generator.ts`: the freeze, per-GSTIN series and format, rounding, and the totals shape (per the Code Map).
+- [x] `wms-be/src/modules/invoicing/{command,delivery,events,view}.ts`, `src/api/invoicing.{dto,controller}.ts`:
   - non-empty `rates` on an issued or voided invoice → `409 invoice-frozen` (it outranks the line checks; a plain regenerate returns the stored invoice with 200);
   - the shared payload builder;
   - the new view and DTO fields;
   - re-export `openapi.json`.
-- [ ] `wms-be/test/invoicing-arith.spec.ts`: the rounding table (remainders 00/40/49/50, zero total, the safe-integer bound) and the 16-char number assertion.
-- [ ] `wms-be/test/invoicing.spec.ts`:
+- [x] `wms-be/test/invoicing-arith.spec.ts`: the rounding table (remainders 00/40/49/50, zero total, the safe-integer bound) and the 16-char number assertion.
+- [x] `wms-be/test/invoicing.spec.ts`:
   - freeze after a SKU `gstRate` PATCH, via both manual regenerate and redelivery;
   - `409 invoice-frozen`;
   - concurrent awaiting→issued vs regenerate (a single issuance);
   - numbering: two GSTINs in different states, and two in the same state, each consecutive from 000001 (rewrite the numbering test);
   - a migrated awaiting row regenerated with unchanged facts keeps its revision (SQL/TS rounding parity).
-- [ ] `wms-be/test/invoicing-migration.spec.ts` (new, scratch DB, trimmed journal `idx <= 53`):
+- [x] `wms-be/test/invoicing-migration.spec.ts` (new, scratch DB, trimmed journal `idx <= 53`):
   - seed issued rows with remainders 00/49/50, an awaiting zero-total row, a legacy series row and a legacy idempotency snapshot;
   - apply 0054 whole and assert the ACs;
   - a second apply RAISEs.
-- [ ] `wms-fe/src/lib/invoices.ts` + `components/compliance/invoices.tsx` + tests:
+- [x] `wms-fe/src/lib/invoices.ts` + `components/compliance/invoices.tsx` + tests:
   - read `total`/`roundOff`/`payable`;
   - print Invoice total, Round off and Payable, with words from `payable`;
   - `invoice-frozen` arm in `generateReason` and `refusalNeedsReread`;
   - the pricing panel only for `awaiting-data` (issued is a guaranteed no-op);
   - the list shows each invoice's supplier GSTIN beside its number.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `invoicing.md`: freeze, numbering, rounding, the series NULL invariant, consumers key on (GSTIN, number);
   - `API-SURFACE.md`;
   - `PENDING.md`: close three rows; add "corrections need credit/debit notes; frozen blank-HSN lines reach the HSN summary".
@@ -151,7 +152,11 @@ Existing rows are migrated to the new shapes.
 
 ## Implementation Notes
 
+- Baselines: wms-be `edb1e999efc0a7c5d59e9bfb2ef955e65f286ddd` (frontmatter `baseline_commit`); wms-fe `7842db6f165882804bbf171df06881991208f15a`. Work happens on `feat/8-1b-invoice-regulatory-pass` in both repos.
+
 ## Spec Change Log
+
+1. **2026-10-03 — matrix error code `invoice-issued` → `invoice-frozen` (human-authorised frozen-block edit).** Design-review finding #16 renamed the rates-on-issued refusal to `invoice-frozen`, because it fires on voided invoices too. The amendment reached the Code Map and Tasks but not the frozen I/O matrix. The implementation's matrix audit caught the contradiction, and the human chose to amend the matrix rather than rename the code. KEEP: `invoice-frozen` in the BE refusal, the FE mapper and the tests.
 
 ## Review Triage Log
 
@@ -180,6 +185,26 @@ Existing rows are migrated to the new shapes.
 | 19 | low | Re-run / out-of-order guards unspecified | 0053-shaped guards |
 | 20 | low | "No production invoices" claim unverified | Dropped; the migration is correct regardless |
 | 21 | low | Downstream readers' figures unnamed | Design Note: e-way/GSTR-1 use payable, HSN exact |
+
+*Code review, 2026-10-03: three layers (blind, edge-case, verification-gap), all reported. Each finding was verified against the code.*
+
+| # | Verdict | Finding | Route |
+|---|---------|---------|-------|
+| C1 | medium | The controller description, a `command.ts` comment and API-SURFACE claim a race-loser's "rates still apply". If the insert winner issued, the loser's retry hits the freeze and gets `409 invoice-frozen`. No test covers that arm (blind, edge, VG) | patch: correct the copy; add a forced race where the winner issues |
+| C2 | medium | FE: on `invoice-frozen` the re-read shows `issued`, which unmounts `PricingPanel` with its local refusal banner (confirmed: the panel is gated by `canRegenerate(status)`). The test mock never flips to issued (edge) | patch: route the refusal outcome to the section level; the test flips the status |
+| C3 | medium | The list's Total renders `totalPaise` (₹210.49), but the spec's FE task says the list uses `payablePaise` (blind) | patch: render `payablePaise`; update the test |
+| C4 | low | Step 6: a snapshot lacking `invoice.totalPaise` makes `jsonb_set(…, to_jsonb(NULL))` return NULL (blind, edge) | patch: `coalesce(s.invoice_total, s.total)` |
+| C5 | low | Pre-flight check (b) (issued without number or GSTIN) is never triggered by a test (VG, blind) | patch: add the row and assertion to the pre-flight test |
+| C6 | low | The `formatInvoiceNo` comment says 7 digits is the last legal width; 8 digits (16 chars) passes (blind, edge) | patch: correct the comment |
+| C7 | low | A `documentsEqual` fixture `{total 0, roundOff 50, payable 50}` breaks the rounding invariants (blind) | patch: use an invariant-respecting pair |
+| C8 | low | A GSTIN with legacy `FY-…` numbers gets a second series in the same FY (GSTR-1 Table 13), and legacy issued invoices are now frozen as they are; PENDING says neither (blind) | patch: PENDING note |
+| C9 | medium | Voided rows sit outside `invoices_issued_stamped_check`, so a voided number with a NULL GSTIN escapes the unique; the voided half of the freeze is untested (blind, edge, VG) | defer: no path creates a voided row until the void/credit-note story |
+| C10 | low | The `::bigint` casts in the pre-flight and Step 6 abort without naming a row on a non-integer `payAble` (blind, edge) | reject: code-written documents are always integers; the guard adds complexity for an unseen state |
+| C11 | false | `invoiceIssuedPayload` throws a plain Error on an unstamped outcome, so delivery retries forever (edge) | reject: `firstIssuance` is set only on the stamped path, so it is unreachable |
+| C12 | low | `ArithmeticOverflowError` is reused for a bad FY, GSTIN prefix, exhausted series and an unstamped issuance, which delivery would ACK silently (blind) | reject: each throw is unreachable (GSTIN shape CHECK, fixed FY format, 10^8 sequence, blocking supplier-gstin gap) |
+| C13 | false | The BE list test's `originGstin: expect.any(String)` depends on test order (edge) | reject: the test creates its own invoices; the newest is its issued one |
+| C14 | false | Generated artifacts (snapshot, OpenAPI, FE client) are unreviewed (blind) | reject: excluded by design; `db:generate` "No schema changes" and the client regeneration were verified separately |
+| C15 | low | Migration test: the out-of-order guard and a non-negative violation are untested; a fixed scratch-DB name (blind) | reject: the guard mirrors 0053's; the scratch-DB naming follows the `fractional-quantity` harness |
 
 ## Design Notes
 

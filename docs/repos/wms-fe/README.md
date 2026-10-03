@@ -78,7 +78,7 @@ Keep this current whenever a cross-repo change lands — this is what lets an ag
     - a signatory block.
 
     The date is the IST calendar date, and quantities are in the snapshot's own unit. An un-issued invoice prints as "Draft — not a tax invoice".
-  - **Pricing panel** (`invoice.generate`): rupee inputs for exactly the gaps' `orderLineId`s (never parsed from prose), parsed to paise without floats. It calls `fetchApiGenerateInvoice` with per-draft keys and re-reads on `line-already-priced`/`line-not-of-order`.
+  - **Pricing panel** (`invoice.generate`): rupee inputs for exactly the gaps' `orderLineId`s (never parsed from prose), parsed to paise without floats. It calls `fetchApiGenerateInvoice` with per-draft keys and re-reads on `line-already-priced`/`line-not-of-order`/`invoice-frozen`. Since 8-1b (consumes the WMS-BE regulatory pass) the panel is offered for `awaiting-data` invoices only — an issued one is frozen; the print shows Invoice total, a signed Round off and the Payable, with the amount in words from `payable`; the list shows each number's supplier GSTIN beside it (numbers repeat across same-state GSTINs).
   - **"Generate for a dispatched order":** a UUID input.
 
   All copy and derivations are in `src/lib/invoices.ts`. The capability mirror gains `invoice.generate` (34). The SDK is regenerated against merged `main`, and `TenantResponse.gstin` is now required, so test session fixtures carry `gstin: null`. `bun test` 723 pass; tsc, lint and build are clean.
