@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-02-2026 01:03
+last_updated: 10-03-2026 11:10
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -339,10 +339,10 @@ development_status:
   epic-6-retrospective: done
 
   # RE-SEQUENCED: epic-7 now depends on epic-11's variant model.
-  epic-7: in-progress
+  epic-7: done
   7-1-channel-connections-buffers-and-availability-sync: done
   7-2-channel-order-ingestion-and-fulfillment-writeback: done
-  epic-7-retrospective: optional
+  epic-7-retrospective: done
 
   epic-8: backlog
   8-1-gst-compliant-invoicing: backlog
@@ -887,3 +887,61 @@ action_items:
     owner: "workflow"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-6-retro-2026-10-01.md"
+  - id: "epic-7-retro-item-1-epic7-patch-round"
+    epic: 7
+    action: "Epic-7 patch round: replace variants.json?sku= lookup with GraphQL productVariants
+      resolve (REST deprecated, endpoint does not exist); revoke the re-locked read
+      blob on disconnect (rotate race ships live credential); availability-arm shape
+      checks (negative visibleMilli, non-uuid connectionId, locationId numeric)"
+    owner: "epic-7 patch story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-7-retro-item-2-relay-drain-concurrency"
+    epic: 7
+    action: "Relay-drain concurrency design decision: bounded-concurrent dispatch
+      or per-arm writeback timeout or dedicated drain plane — the sequential drain
+      queues all tenants sync deliveries behind one channels HTTPS stall"
+    owner: "next outbox-spine story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-7-retro-item-3-worker-tick-suite"
+    epic: 7
+    action: "Real-DB channels sync worker-tick suite (enumeration SQL, stall, skip
+      paths currently run against stubs only) + breaker half-open-to-closed heal test"
+    owner: "next BE channels test touch"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-7-retro-item-4-sync-slo-measurement"
+    epic: 7
+    action: "Measure the 60s availability-sync p95 SLO — currently no measured evidence
+      anywhere; extend the acceptance harness (soft report like writeback lag) and
+      pin the figure in modules/channels.md"
+    owner: "NFR instrumentation touch"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-7-retro-item-5-doc-pass-now"
+    epic: 7
+    action: "Documentation pass NOW in the retro PR: PENDING rows (Overview sync-health
+      routed to Epic 9 dashboard; PUT-guard bypass folded into 200-cap truncation
+      row; fast-follow-provider connection posture; mapping normalization + writeback
+      quantization posture) + channels module-doc gotchas (resolve-at-publish real
+      shape, revoke blob posture, drain serialization)"
+    owner: "retro PR (immediate)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-7-retro-item-6-process-contract"
+    epic: 7
+    action: "Process: external-API tests must pin at least one request URL/shape against
+      the published API surface (D1 class); a triaged-settled review row must be re-verified
+      against the code (D4 class); the epic-retro lens pass stays mandatory"
+    owner: "bmad-build step contracts"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-7-retro-item-7-fe-followup"
+    epic: 7
+    action: "FE follow-up: BE-reported webhook URL, sparse ingest-warehouse PUT (stale
+      sibling policy revert), channels-list read-failure render test, duplicate buffer
+      rows guard, channels-view.tsx extraction (joins epic-6 item 5)"
+    owner: "epic-9-prep FE story"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
