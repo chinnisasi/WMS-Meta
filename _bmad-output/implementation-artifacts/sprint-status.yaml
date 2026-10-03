@@ -341,7 +341,7 @@ development_status:
   # RE-SEQUENCED: epic-7 now depends on epic-11's variant model.
   epic-7: in-progress
   7-1-channel-connections-buffers-and-availability-sync: done
-  7-2-channel-order-ingestion-and-fulfillment-writeback: in-progress
+  7-2-channel-order-ingestion-and-fulfillment-writeback: done
   epic-7-retrospective: optional
 
   epic-8: backlog

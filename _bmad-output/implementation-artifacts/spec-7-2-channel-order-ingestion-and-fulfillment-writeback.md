@@ -2,7 +2,7 @@
 title: '7.2 Channel order ingestion and fulfillment writeback'
 type: 'feature'
 created: '2026-10-02'
-status: 'in-review'
+status: 'done'
 baseline_commit: '3598565'
 route: 'dispatch'
 review_loop_iteration: 2
