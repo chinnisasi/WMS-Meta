@@ -571,3 +571,15 @@
 ## Deferred from: code review of spec-8-1-gst-compliant-invoicing (2026-10-03)
 
 - **Kit orders always park `awaiting-data`, even when priced at create.** The parent's frozen `ratePaise` drops with the zero-pick parent line, and the components are exploded with `rate_paise = null`, so every kit dispatch needs per-component manual pricing. Reason for deferring: per-component manual pricing works for 8-1, and splitting a kit's price across components needs a rounding rule designed on purpose, not improvised.
+
+## Deferred from: bmad-build scope split of story 8-2 (2026-10-03)
+
+- source_spec: none
+  summary: E-way bills — single and batch generation above a versioned-config threshold behind the EwayGateway port, with sealed GSP/portal credentials and the OQ3 (portal vs GSP) decision; the core of story 8-2.
+  evidence: Split from the 8-2 intent as an independently shippable goal; it reads the invoice number/date/value that the invoice regulatory pass (taken first) may change.
+- source_spec: none
+  summary: HSN summary — per accounting-period HSN totals for GST filing, a read model over issued invoices; the second half of story 8-2.
+  evidence: Split from the 8-2 intent as an independently shippable goal; it sums invoice values whose rounding and revision semantics the regulatory pass settles first.
+- source_spec: none
+  summary: Web inputs for GSTINs and prices — tenant gstin on register, warehouse gstin on warehouse create, consigneeGstin and per-line ratePaise on the order form (none exist today, so invoices cannot issue from the UI alone).
+  evidence: Split from the 8-2 intent (carried from the 8-1 seed run) as an independent FE-only deliverable.
