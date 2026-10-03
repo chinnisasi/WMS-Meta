@@ -589,3 +589,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-1b-invoice-regulatory-pass.md`
   summary: Voided invoices — extend `invoices_issued_stamped_check` to `invoice_no IS NULL OR origin_gstin IS NOT NULL` (so a voided number cannot escape the per-GSTIN unique through a NULL GSTIN) and pin the voided half of the freeze with a test.
   evidence: The freeze and the docs cover voided rows, but no code path creates one until the void/credit-note story; that story must add the constraint and the test together.
+
+## Deferred from: code review of spec-8-1c-web-gstin-and-price-inputs (2026-10-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-1c-web-gstin-and-price-inputs.md`
+  summary: Order outcome — add an "invoice will wait for pricing" note when NO line is priced (today only a partly priced order is noted).
+  evidence: Pre-existing outcome copy (the wholly unpriced case predates 8-1c); the invoice's awaiting state is still visible on /compliance.
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-1c-web-gstin-and-price-inputs.md`
+  summary: Decide whether the invoice pricing panel (`parseRateDraft`, 8-1b) should also refuse ₹0, as the order form now does.
+  evidence: The 8-1c human decision refused ₹0 on the order form because a typed rate is frozen; a panel rate freezes into an issued invoice just as permanently. Human decision needed.
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-1c-web-gstin-and-price-inputs.md`
+  summary: Cross-repo drift guard for the FE `GSTIN_RE` mirror against wms-be `src/shared/primitives/gstin.ts`.
+  evidence: The mirror test compares against a literal; 8-2's regulatory pass will change the backend regex, so the guard belongs there.

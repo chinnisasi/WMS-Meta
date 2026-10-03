@@ -2,8 +2,9 @@
 title: 'Web inputs for GSTINs and line prices'
 type: 'feature'
 created: '2026-10-03'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '30771565c05f4cc2c028ac8a34994f291f153704'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-8-context.md'
@@ -89,44 +90,51 @@ No web form collects any of them. An order entered in the app therefore always p
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-fe/src/lib/gstin.ts` + `gstin.test.ts`:
+- [x] `wms-fe/src/lib/gstin.ts` + `gstin.test.ts`:
   - `GSTIN_RE`, a byte-for-byte mirror with a source comment;
   - `parseGstinField(text, label) → {gstin?: string, problem: string | null}`: trim and uppercase, blank → undefined, malformed → a problem naming the label.
-- [ ] `wms-fe/src/lib/outbound-orders.ts` + `outbound-orders.test.ts`:
+- [x] `wms-fe/src/lib/outbound-orders.ts` + `outbound-orders.test.ts`:
   - `DraftLine.rate?: string` (optional, so existing literals stand);
   - a row with any of SKU, quantity or rate counts as filled;
   - the rate goes through `parseRupees`; 0 is refused;
   - the problem is `Line N: …`, where N is the 1-based position in the rendered draft;
   - a blank rate yields no `ratePaise` key (assert with `'ratePaise' in line`);
   - `createOutcome` adds "N of M lines unpriced — the invoice will wait for pricing" when some lines are priced and some aren't, and "kit lines are priced per component on the invoice" when the response has `parentLineId` children.
-- [ ] `wms-fe/src/lib/tenancy-forms.ts` (new) + test:
+- [x] `wms-fe/src/lib/tenancy-forms.ts` (new) + test:
   - `registerTenantBody({name, ownerEmail, password, gstinText})` → `{body} | {problem}`;
   - `warehouseBody({code, name, origin, gstinText})` → `{body} | {problem}`, built on `parseDestinationFields` + `parseGstinField`.
 
   The forms call these.
-- [ ] `wms-fe/src/components/auth/auth-forms.tsx`: the GSTIN input after the business name, sent via `registerTenantBody`.
-- [ ] `wms-fe/src/components/settings/warehouse-create-form.tsx` + new `warehouse-create-form.test.tsx`:
+- [x] `wms-fe/src/components/auth/auth-forms.tsx`: the GSTIN input after the business name, sent via `registerTenantBody`.
+- [x] `wms-fe/src/components/settings/warehouse-create-form.tsx` + new `warehouse-create-form.test.tsx`:
   - the GSTIN input, sent via `warehouseBody`;
   - `setGstin('')` in the success reset;
   - the banner echoes the stored `warehouse.gstin` ("GSTIN 29… — can't be changed later") when present;
   - the test asserts the body, the blank omission and the refusal.
-- [ ] `wms-fe/src/components/outbound/outbound-orders.tsx` + `outbound-orders.test.tsx`:
+- [x] `wms-fe/src/components/outbound/outbound-orders.tsx` + `outbound-orders.test.tsx`:
   - a per-line rate input and a "Buyer GSTIN (optional, B2B)" input in its **own state**, with an `editConsigneeGstin` that resets the key. `DestinationFields` is untouched.
   - Parse order is lines → address → GSTIN, before the key mint and `setPending`.
   - Reset on success.
   - A new harness renders `OutboundOrders` as `orders.manage`, routes `POST …/outbound/orders`, and captures the JSON body and `Idempotency-Key`.
   - The test asserts `ratePaise`, `consigneeGstin`, the omissions, and a fresh key after a rate edit following a failed submit.
-- [ ] GSTIN inputs everywhere: no `pattern`; `maxLength={20}`; `autoCapitalize="characters"`; `spellCheck={false}`. `parseGstinField` is the only shape gate.
-- [ ] Help copy, in `src/lib/`:
+- [x] GSTIN inputs everywhere: no `pattern`; `maxLength={20}`; `autoCapitalize="characters"`; `spellCheck={false}`. `parseGstinField` is the only shape gate.
+- [x] Help copy, in `src/lib/`:
   - GSTIN: "Can't be changed after creation yet."
   - Rate: "₹ per base unit, before GST. Once set it can't be changed and the invoice prices from it — leave blank to price it on the invoice instead. Kit lines are priced per component on the invoice."
-- [ ] `docs/repos/wms-fe/README.md` (meta): the three forms now send these fields.
+- [x] `docs/repos/wms-fe/README.md` (meta): the three forms now send these fields.
 
 **Acceptance Criteria:**
 - Given a tenant and warehouse created in the app with GSTINs, when an order is entered with a consignee GSTIN and every **non-kit** line priced above ₹0 and is then dispatched, then its invoice is `issued` with no `unpriced-line` or `supplier-gstin` gap. This is a manual check against the local wms-be (Verification).
 - Given the FE suite, when run, then lint, test, typecheck and build pass and `check:capability-mirror` is unchanged.
 
 ## Implementation Notes
+
+- Implementer decisions (verified against the spec):
+  - `parseRupees` moved to `src/lib/rupees.ts`, re-exported from `invoices.ts`, because `invoices.ts` imports `outbound-orders.ts` (a cycle otherwise). There is still one rupee grammar.
+  - `OrderLineDto` carries no rate, so the "N of M unpriced" note counts the lines as sent (`createOutcome` gains an optional third argument).
+  - Only rate refusals carry the `Line N:` prefix; the existing SKU and quantity messages are unchanged.
+- The manual end-to-end check (Verification) was **not run**: the human chose to ship on the automated coverage (770/770 FE tests, including request-body assertions for all three forms). It remains a worthwhile smoke test after merge.
+- Baseline: wms-fe `30771565c05f4cc2c028ac8a34994f291f153704` (frontmatter `baseline_commit`). Work happens on `feat/8-1c-web-gstin-and-price-inputs` in wms-fe; the meta contract edit is uncommitted in WMS-Meta.
 
 ## Spec Change Log
 
@@ -151,6 +159,27 @@ No web form collects any of them. An order entered in the app therefore always p
 | 13 | low | Refusal order and "inline problem" unspecified | Lines → address → GSTIN before the key; the rejected banner |
 | 14 | low | A required `rate` breaks about 21 literals; `toEqual` can't see an absent key | `rate` optional; `in` checks |
 | 15 | low | No client rate ceiling; an overflow faults at invoicing | Accepted: mirrors the BE bounds (safe-int); the overflow is already a PENDING data-fault row |
+
+*Code review, 2026-10-03: three layers (blind, edge-case, verification-gap), all reported. Every finding was verified against the code.*
+
+| # | Verdict | Finding | Route |
+|---|---------|---------|-------|
+| C1 | medium | `pricingNotes` counts a kit parent's inert rate as priced, so an all-priced kit order shows no warning while its invoice waits; the note's line counts also disagree with the header (edge, blind) | patch: kit-aware counting, one basis for both counts |
+| C2 | medium | `RegisterForm`'s wiring is untested (only `registerTenantBody` is); none of the forms tests that a refused GSTIN leaves the button enabled (VG, blind) | patch: an `auth-forms.test.tsx` component test via `mock.module('next/navigation')` |
+| C3 | low | The warehouse "echoed from the response" test's stub mirrors the request, so it cannot prove the stored value is shown (VG) | patch: a response GSTIN differing from the typed one |
+| C4 | low | The order form's lines → address → GSTIN refusal order is untested (blind) | patch: a bad address and a bad buyer GSTIN together |
+| C5 | low | GSTIN help copy isn't linked by `aria-describedby`, so screen readers miss the permanence warning (blind) | patch: `useId` + `aria-describedby`, as on the rate inputs |
+| C6 | low | `frontend/IMPLEMENTATION-GUIDE.md` idempotency-key line refs moved and the new shared modules are unrecorded (blind) | patch: update the refs; note `gstin.ts`, `rupees.ts`, `tenancy-forms.ts` |
+| C7 | low | A wholly unpriced order gets no "invoice will wait" note (edge, blind) | defer: the pre-existing outcome copy, not caused by this change |
+| C8 | medium | The invoice pricing panel (`parseRateDraft`) still accepts ₹0 while the order form refuses it (blind) | defer: pre-existing 8-1b surface; needs a human decision |
+| C9 | low | The `GSTIN_RE` mirror test compares to a literal, so backend drift goes undetected (VG) | defer: a cross-repo drift guard with 8-2's regex change |
+| C10 | false | New files untracked, so the build breaks (blind, edge) | reject: expected before commit; step 5 stages all |
+| C11 | low | A rate × quantity product can exceed the safe integer (edge) | reject: accepted in design triage #15 (mirrors the BE; a PENDING data-fault row) |
+| C12 | low | Rate and GSTIN inputs are editable while pending, so the success reset wipes an edit (edge) | reject: the form's existing pattern for every input; a ~100 ms window |
+| C13 | low | The register and order forms don't echo the stored GSTIN (blind) | reject: a warehouse-only echo was decided in design triage #12 |
+| C14 | low | Comma or ₹-prefixed rate input is refused with generic copy (blind) | reject: refused safely with an example; leniency adds parser surface |
+| C15 | false | A case-only GSTIN edit mints a new key (blind) | reject: a fresh key on an identical payload is safe |
+| C16 | low | `submitCreate` finds the form by label (blind) | reject: no failure today; a style preference |
 
 ## Design Notes
 
