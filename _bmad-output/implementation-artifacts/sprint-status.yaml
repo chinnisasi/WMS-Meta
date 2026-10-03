@@ -344,7 +344,7 @@ development_status:
   7-2-channel-order-ingestion-and-fulfillment-writeback: done
   epic-7-retrospective: done
 
-  epic-8: backlog
+  epic-8: in-progress
   8-1-gst-compliant-invoicing: backlog
   8-2-e-way-bills-and-hsn-summary: backlog
   epic-8-retrospective: optional
