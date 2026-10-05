@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-03-2026 22:51
+last_updated: 10-05-2026 09:01
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -344,14 +344,14 @@ development_status:
   7-2-channel-order-ingestion-and-fulfillment-writeback: done
   epic-7-retrospective: done
 
-  epic-8: in-progress
+  epic-8: done
   8-1-gst-compliant-invoicing: done
   8-1b-invoice-regulatory-pass: done
   8-1c-web-gstin-and-price-inputs: done
   8-2a-hsn-summary: done
   8-2b-e-way-bills: done
   8-2-e-way-bills-and-hsn-summary: done
-  epic-8-retrospective: optional
+  epic-8-retrospective: done
 
   epic-9: backlog
   9-1-operational-dashboard: backlog
@@ -383,7 +383,7 @@ action_items:
     epic: 1
     action: "FE capability-mirror drift guard before epic 2 adds capabilities"
     owner: "Claude"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-09-08.md"
   - id: "epic-1-retro-item-5-migration-0005-owner-backfill-verificati"
     epic: 1
@@ -513,7 +513,7 @@ action_items:
       cross-check generated client capabilities against ROLE_CAPABILITIES in wms-fe
       before Epic 3/4 stories consume capabilities"
     owner: "Claude (next wms-fe story)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
   - id: "epic-2-retro-a13-blocked-status-draw-unenforcement-note"
     epic: 2
@@ -931,7 +931,7 @@ action_items:
       quantization posture) + channels module-doc gotchas (resolve-at-publish real
       shape, revoke blob posture, drain serialization)"
     owner: "retro PR (immediate)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
   - id: "epic-7-retro-item-6-process-contract"
     epic: 7
@@ -949,3 +949,62 @@ action_items:
     owner: "epic-9-prep FE story"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-7-retro-2026-10-03.md"
+  - id: "epic-8-retro-item-79-epic-8-patch-story-issuance-gate-parity"
+    epic: 8
+    action: "Epic-8 patch story: issuance-gate parity — warn at issue on malformed
+      HSN, unresolved address state and dispatch-from state mismatch; validate GSTIN
+      state prefix against gst_state_codes (BE+FE); State inputs become a select;
+      flag non-NIC rates in the HSN CSV; optional buyer legal name used as toTrdName
+      (S1-S5, S7)"
+    owner: "epic-8 patch story (BE then FE)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-8-retro-item-80-fe-e-way-follow-up-stop-refetching-setti"
+    epic: 8
+    action: "FE e-way follow-up: stop refetching settings lists on INVOICES_CHANGED_EVENT,
+      delay or drop the bills refetch; role-aware needs-irn hint (S8-S9)"
+    owner: "the A1 FE PR"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-8-retro-item-81-doc-spec-reconciliation-in-the-retro-pr"
+    epic: 8
+    action: "Doc/spec reconciliation in the retro PR: PENDING rows for the human-amended
+      e-way AC, manual retry, unmeasured SM-8, India residency, unversioned GST rates,
+      awaiting-invoice rate drift, dispatch-from state block, odd-paise CGST/SGST;
+      close stale PENDING:117/:118; refresh deferred-work GSTIN_RE rationale; gstin.ts
+      comment truth; 8-2a matrix typo"
+    owner: "retro PR (immediate)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-8-retro-item-82-manual-format-checks-before-real-filings"
+    epic: 8
+    action: "Manual format checks before real filings: import one HSN CSV into the
+      GSTN offline tool; upload one e-way JSON to NIC; confirm CGST != SGST by one
+      paisa is accepted"
+    owner: "Sasidhar"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-8-retro-item-83-invoicing-cleanup-at-next-touch-extract"
+    epic: 8
+    action: "Invoicing cleanup at next touch: extract generator.ts and eway-bills.tsx;
+      de-duplicate state maps, instant regex, FE IST handling, loader helpers; one
+      FE-BE constants drift guard; converge the idempotency skeleton and lock the
+      config commands; fix supplyType nullable-enum"
+    owner: "next invoicing touch (21-5)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-8-retro-item-84-process-specs-citing-a-regulator-or-exte"
+    epic: 8
+    action: "Process: specs citing a regulator or external file format must cite a
+      primary-source file verified before freezing; step-02 self-review cross-checks
+      every frozen matrix row against the task rules"
+    owner: "bmad-build step contracts"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-8-retro-item-85-dev-runbook-local-env-sets-outbox_relay_"
+    epic: 8
+    action: "Dev runbook: local .env sets OUTBOX_RELAY_POLL_MS=2000; dispatch-driven
+      flows stall silently without it"
+    owner: "Claude (immediate)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"

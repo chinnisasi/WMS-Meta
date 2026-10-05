@@ -605,3 +605,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-2b-e-way-bills.md`
   summary: E-way generate's malformed-gateway-result arm and its taken-EWB-number arm have no tests; the sandbox adapter can produce neither (code review C13).
   evidence: Verified by grep in test/eway.spec.ts. Add the tests with the first live EwayGateway adapter, which is where those results become reachable.
+
+- source_spec: `_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md`
+  summary: The GSTIN_RE FE↔BE drift guard is still missing, and the earlier deferral's rationale ("8-2's regulatory pass will change the backend regex") no longer holds — 8-1b and 8-2 left both regexes unchanged (BE `shared/primitives/gstin.ts`, FE `lib/gstin.ts`).
+  evidence: Verified at the epic-8 retro (R6). Folded into retro action A5 (one FE↔BE constants drift guard) and A1 (GSTIN state-prefix validation changes both files together).
