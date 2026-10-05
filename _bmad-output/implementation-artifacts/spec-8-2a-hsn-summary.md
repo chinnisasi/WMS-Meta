@@ -199,6 +199,8 @@ context:
 
 ## Spec Change Log
 
+- **2026-10-05, epic-8 retro (R6):** the I/O matrix's quarter row reads `FY2627-Q2`; Decision 1 and the code use `FY-2627-Q2` (`hsn-summary.ts`), and `FY2627-Q2` is refused with 400. The matrix row is a typo; the frozen block is left as approved, and this entry is the reconciliation.
+
 ## Review Triage Log
 
 *Design review, 2026-10-03: two reviewers (code-verified; GST Table 12 + migration). 29 findings merged into 20, every one verified. The regulatory claims were checked against GSTN advisories (B2B/B2C bifurcation from May 2025; Phase III HSN master dropdown and auto description; AATO digit rule). The CSV header order and quantity decimals were **unverifiable** and moved to the template decision.*
