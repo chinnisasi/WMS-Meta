@@ -150,6 +150,8 @@ Uniform across eleven enums. **Three mirrored layers:**
 2. **DB CHECK** in a migration — `CHECK ("col" IN (...))`. Widening drops and re-adds
 3. **API** — `@IsIn(X)` + `@ApiProperty({ enum: [...X] })` over *the same tuple*
 
+**A nullable enum must list `null` in its values** (8-2b): `@ApiProperty({ type: String, nullable: true, enum: X })` exports `nullable: true` but the generated FE type drops the `| null` (hey-api reads the enum), so a client sees `'manual' | 'gateway'` for a column that is null on every pending row. Write `enum: [...X, null]`. Older DTOs (`InvoiceEntryDto.supplyType`) still carry the lossy form.
+
 Plus **an e2e test pinning the TS list against the DB constraint** (`orders.spec.ts` does this for `ORDER_STATUSES`). Without it the three copies drift silently.
 
 **Replacing a vocabulary, list or guard set: the new one must admit everything the old one did, asserted mechanically.** Story 10.2 replaced a 57-entry allowlist with a 24-entry one and silently made eleven units unrepresentable; any stored row using one would have aborted the migration. The fix is the pattern to copy: **freeze the old set in the new file and assert at module load** that every member still resolves. A review is not a substitute for an assertion.

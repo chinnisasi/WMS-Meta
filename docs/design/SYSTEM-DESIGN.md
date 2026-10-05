@@ -71,7 +71,7 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `movements` | counts, variances, stock adjustments' review, moves/transfer orders (epics 5, 15+) |
 | `replenishment` | the stock-intelligence spine (epic 6): the breach sweep + suggested-PO drafts (6-1, FR-22) and the expiry/aging batch-alert scan on the SAME tick (6-2, FR-23) — alerts are evidence; only a human submit orders |
 | `channels` | sales-channel connections, standing buffers, availability sync (7-1), webhook ingest + fulfillment writeback (7-2) |
-| `invoicing` | GST invoices (8-1): one per dispatched order, derived from dispatch facts over `order.dispatched`, exact paise/bps math, per-tenant FY numbering (per supplier GSTIN since 8-1b); the HSN summary shipped in 8-2a — a read model over issued invoices (`issued_at`, `invoice_lines.uom`) with one catalog read, via `CatalogFacade`, for the current-HSN hint; e-way bills remain for 8-2 |
+| `invoicing` | GST invoices (8-1): one per dispatched order, derived from dispatch facts over `order.dispatched`, exact paise/bps math, per-tenant FY numbering (per supplier GSTIN since 8-1b); the HSN summary shipped in 8-2a — a read model over issued invoices (`issued_at`, `invoice_lines.uom`) with one catalog read, via `CatalogFacade`, for the current-HSN hint; e-way bills (8-2b) queue off `invoice.issued`, export as NIC bulk JSON or generate through the `EwayGateway` port (unconfigured in production) |
 | `reporting` · `notifications` | spine placeholders for epic 9 |
 
 The api shell (`src/api/`) is where two modules' reads are joined — the device catalog snapshot composes across `inbound` and `outbound` there rather than making one module import the other.

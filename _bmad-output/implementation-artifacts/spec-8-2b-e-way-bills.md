@@ -2,8 +2,9 @@
 title: 'E-way bills — queue, NIC bulk JSON, recorded numbers, behind the EwayGateway port'
 type: 'feature'
 created: '2026-10-04'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'e4a66066ea6b7d96c2bfadd4c966fc720ae42aa8'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-8-context.md'
@@ -104,7 +105,7 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0056_eway_bills.sql` (+ journal/snapshot, schema.ts) -- three RLS tables and one global table, **no FKs**:
+- [x] `wms-be/drizzle/0056_eway_bills.sql` (+ journal/snapshot, schema.ts) -- three RLS tables and one global table, **no FKs**:
   - **`eway_national_thresholds`** (global, read-only): `effective_from date PK`, `threshold_paise`, `source`. Seed `('2018-04-01', 5000000, 'CGST Rule 138(1)')`.
   - **`eway_state_thresholds`**: `id uuid PK`, `tenant_id`, `state_code` (CHECK `^[0-9]{2}$`), `threshold_paise` (nullable, ≥ 0), `effective_from`, `created_by`, `created_at`. A `BEFORE UPDATE` trigger raises (append-only; deletes are tenant teardown only). Index `(tenant_id, state_code, effective_from desc, created_at desc)`.
   - **`eway_gstin_settings`**: `id uuid PK`, `tenant_id`, `gstin` (house CHECK), `e_invoice_applies`, `updated_by`, `updated_at`, `UNIQUE(tenant_id, gstin)`.
@@ -117,9 +118,9 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
     - tracking: `gateway_claimed_at`, `last_exported_at`, `last_exported_by`, `dismissed_reason`, `last_error`, timestamps.
 
     Two-way CHECKs: `generated` ⇔ number, date and source are set; `dismissed` ⇔ a reason is set. A partial `UNIQUE(tenant_id, ewb_no) WHERE ewb_no IS NOT NULL`. Index `(tenant_id, status, created_at, id)`.
-- [ ] `wms-be/src/modules/invoicing/eway-threshold.ts` + test -- `consignmentValuePaise(lines)` and `thresholdFor(tx, tenant, {supplyType, billFromState, istDate})`.
-- [ ] `wms-be/src/modules/invoicing/eway-json.ts` + test -- pure functions: `NIC_BULK_VERSION = '1.0.0621'` (a schema version, not a regulatory value), `ewbBillObject`, `ewbBlockers` and `bulkFile`. The mapping table is below, and the golden test asserts every key **and** its `typeof`.
-- [ ] `wms-be/src/modules/invoicing/eway-gateway.ts` -- the port:
+- [x] `wms-be/src/modules/invoicing/eway-threshold.ts` + test -- `consignmentValuePaise(lines)` and `thresholdFor(tx, tenant, {supplyType, billFromState, istDate})`.
+- [x] `wms-be/src/modules/invoicing/eway-json.ts` + test -- pure functions: `NIC_BULK_VERSION = '1.0.0621'` (a schema version, not a regulatory value), `ewbBillObject`, `ewbBlockers` and `bulkFile`. The mapping table is below, and the golden test asserts every key **and** its `typeof`.
+- [x] `wms-be/src/modules/invoicing/eway-gateway.ts` -- the port:
   - `EWAY_GATEWAY` token with `configuredFor(tenantId, gstin)` and `generate(tenantId, gstin, bill) → {ewbNo, generatedAt, validUntil|null}`;
   - typed errors `EwayGatewayRefusal` (business) and `EwayGatewayUnavailable` (transient);
   - **contract:** a live adapter must look up an existing EWB by (GSTIN, `INV`, docNo) before generating, so a retry never makes a duplicate.
@@ -130,8 +131,8 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
   - refuses when `transporterName` is `SANDBOX-REFUSE`.
 
   The `EWAY_GATEWAY` env value selects `sandbox` or `unconfigured` (default `unconfigured`). It is a mode, not a credential. The e2e suites default to `unconfigured`; the generate tests override the provider.
-- [ ] `wms-be/src/modules/invoicing/eway.delivery.ts` -- subscribe to `invoice.issued`. Decode `invoiceId` only. In a tenant tx: re-read the invoice (it must be `issued` with `issued_at`), compute the value and threshold, then `INSERT … ON CONFLICT (invoice_id) DO NOTHING`. Ack and log malformed or not-issued input; rethrow only transient faults. No audit.
-- [ ] `wms-be/src/modules/invoicing/eway.command.ts` + `facade.ts` -- full command skeleton (Idempotency-Key, audit row per bill, hash over the normalised body):
+- [x] `wms-be/src/modules/invoicing/eway.delivery.ts` -- subscribe to `invoice.issued`. Decode `invoiceId` only. In a tenant tx: re-read the invoice (it must be `issued` with `issued_at`), compute the value and threshold, then `INSERT … ON CONFLICT (invoice_id) DO NOTHING`. Ack and log malformed or not-issued input; rethrow only transient faults. No audit.
+- [x] `wms-be/src/modules/invoicing/eway.command.ts` + `facade.ts` -- full command skeleton (Idempotency-Key, audit row per bill, hash over the normalised body):
   - **`list`**: any member, `status` filter, cursor, at most 50 rows per page. Each row carries the invoice number, GSTIN, B2B flag, value, rule, Part B, `blockers[{code, terminal}]`, `gatewayAvailable` and `lastExportedAt`.
   - **`updateTransport`**: pending and not claimed. It **replaces** the whole Part B (null clears). Rules:
     - mode is required if any field is set;
@@ -151,21 +152,21 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
     5. A refusal writes `last_error`, clears the claim and returns 422. An `EwayGatewayUnavailable` keeps the claim (it expires) and returns 503.
   - **State thresholds**: list, and append. The state is checked against `gst_state_codes`, and 97 and 99 are refused (400).
   - **GSTIN settings**: list, and `PUT` (`assertGstinParam`; it must be the tenant's or one of its warehouses' GSTINs, otherwise 404).
-- [ ] `wms-be/src/modules/tenancy/permissions.ts` -- add `eway.manage` (owner, ops_manager, accountant) and `eway.configure` (owner). Update the accountant comment.
-- [ ] `wms-be/src/api/eway.controller.ts` + dto -- routes under `/tenants/{t}/eway`. Literal routes come before `:id`.
+- [x] `wms-be/src/modules/tenancy/permissions.ts` -- add `eway.manage` (owner, ops_manager, accountant) and `eway.configure` (owner). Update the accountant comment.
+- [x] `wms-be/src/api/eway.controller.ts` + dto -- routes under `/tenants/{t}/eway`. Literal routes come before `:id`.
   - `GET bills`; `POST bills/export`;
   - `PATCH bills/:id/transport`; `POST bills/:id/record`, `bills/:id/dismiss`, `bills/:id/generate`;
   - `GET|POST state-thresholds`; `GET gstin-settings`; `PUT gstin-settings/:gstin`.
 
   Re-export `openapi.json`.
-- [ ] `wms-be/test/eway.spec.ts` + an 0056 block in a migration spec -- every matrix row, plus:
+- [x] `wms-be/test/eway.spec.ts` + an 0056 block in a migration spec -- every matrix row, plus:
   - a golden bill built from a real issued invoice, asserting keys and types;
   - an integer reconciliation: `totalValue + cgst + sgst + igst + OthValue = totInvValue = payable`;
   - each blocker;
   - the generate claim race (record during a claim gives 409);
   - the CHECKs and the append-only trigger;
   - RLS.
-- [ ] `wms-fe`:
+- [x] `wms-fe`:
   - client wrappers and tests;
   - `lib/eway.ts` + test: reason mappers including the per-id 409 list, and the blocker copy;
   - `use-eway.ts`, which refetches on `EWAY_CHANGED_EVENT` and `INVOICES_CHANGED_EVENT`;
@@ -176,7 +177,7 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
     - Generated and Dismissed tabs;
     - an owner-only settings panel: the override history plus an add form (the copy says it does not re-evaluate bills already queued), and an e-invoicing toggle per GSTIN.
   - Capability mirror: add `eway.configure` to `OWNER_ONLY_CAPABILITIES`; the pins move to owner 36, ops_manager +1 and accountant 1.
-- [ ] Meta docs -- `invoicing.md` (the e-way section and flow), `API-SURFACE.md`, `PENDING.md` and both contracts. PENDING gets entries for:
+- [x] Meta docs -- `invoicing.md` (the e-way section and flow), `API-SURFACE.md`, `PENDING.md` and both contracts. PENDING gets entries for:
   - a live adapter (sealed per-GSTIN credentials, metering, the API key renames);
   - e-invoicing and IRN;
   - Part B update and the 15-day lapse of Part-A-only bills;
@@ -237,6 +238,9 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
 
 ## Implementation Notes
 
+- Baselines: wms-be `e4a66066ea6b7d96c2bfadd4c966fc720ae42aa8` (frontmatter `baseline_commit`); wms-fe `667874bf836a596f7004fa01e20a2fd3700eadd6`. Work happens on `feat/8-2b-e-way-bills` in both repos. Leave changes uncommitted; do not commit, push, or open PRs. Never run two jest invocations concurrently in wms-be (`bun run test -- <file>`; bare `bun test` hangs). NIC source copies: `/private/tmp/claude-502/-Users-sasidhar-Documents-WMS-Meta/cce72c77-089a-4cee-bfc4-8a5a14be09e3/scratchpad/attrs.xlsx`, `tool.xlsm`.
+- Shipped: WMS-BE #73 (`f0423a3`), WMS-FE #58 (`698a237`); design PR WMS-Meta #86.
+
 ## Spec Change Log
 
 ## Review Triage Log
@@ -267,6 +271,27 @@ The `EwayGateway` port ships now. It has a sandbox adapter for dev and test and 
 | 20 | medium | Terminal blockers can never clear; Part B rules incomplete | Terminal vs fixable; record/dismiss ignore blockers; NIC Part B rules listed |
 | 21 | medium | FE: refetch on the invoices event misses async rows; the mirror edit is understated | `EWAY_CHANGED_EVENT`, Refresh button, copy; `OWNER_ONLY_CAPABILITIES` and every pin named |
 | 22 | low | `mainHsnCode`, the 180-day boundary, PATCH semantics, GSTIN validation, export error arms, page size | All specified above |
+
+*Code review, 2026-10-05: three layers (blind, edge-case, verification-gap); 27 findings merged into 20, each verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | A transporter-ID-only Part A can never be saved, against the frozen matrix row "Part A only" | `partBProblems` (`eway-json.ts:295`) requires a mode when any field is set; the builder's `transMode ?? 1` is unreachable | patch: a transporter ID or name without a mode is valid Part A |
+| C2 | high | A gateway-issued EWB number can be lost: settle fails (claim expired, then recorded/dismissed; number taken), an unknown error releases the claim, or a malformed `validUntil` gives a 500 | `generate` settle path and `releaseClaim` | patch: persist and log the orphaned number in `last_error`; keep the claim on unknown errors (503); validate `validUntil` |
+| C3 | medium | Switching Part B from Road to Rail/Air/Ship still sends the hidden vehicle fields, giving a 400 the user can't clear | `parseTransportDraft` | patch |
+| C4 | medium | Export with uppercase UUIDs misses existing bills; a lowercase GSTIN filter or PUT matches nothing | `IsUUID`/`UUID_RE` are case-insensitive; stored values are lowercase uuids and uppercase GSTINs | patch: normalise case |
+| C5 | medium | `address-incomplete` checks the raw values, not the NIC-cleaned ones (a name or address that is entirely non-ASCII exports empty) | `ewbBlockers` vs `nicText` | patch |
+| C6 | medium | A missing or non-issued (future void) invoice is reported as `address-incomplete`, and some routes answer 404 for an existing bill | `invoiceFacts` returns null | patch: an `invoice-unavailable` terminal blocker; 409 instead of 404 |
+| C7 | medium | Test gaps: list status/GSTIN filters, page overlap, export refused while claimed, turning the e-invoicing flag off, the handler's ack and rethrow branches | Greps show no coverage; each mutation passes | patch: tests |
+| C8 | low | The sandbox gives no validity to Rail/Air/Ship bills with a transport document, and ignores the ODC rate | `eway-gateway.ts:105` | patch |
+| C9 | low | The FE copy hard-codes "₹50,000" | `EwaySettings` empty state | patch: generic copy |
+| C10 | low | Data faults ack silently, so the consignment gets no bill and appears nowhere | `eway.delivery.ts` | patch (docs): a PENDING entry, mirroring the invoice one |
+| C11 | low | `configuredFor` runs inside transactions; the port never says it must be local | `viewContextInTx` | patch (doc comment on the port) |
+| C12 | low | Services-only (SAC) invoices are not excluded | No SAC handling | patch (docs): PENDING |
+| C13 | low | Generate's malformed-result and taken-number arms are untested | The sandbox can't produce them | defer: test them with the live adapter |
+| C14 | low | The 409 `bills[]` extension is not in the OpenAPI schema | `problemJsonResponse` | rejected: documented in prose; a typed schema needs new shared surface |
+| C15 | low | An export replay returns the stale file | House idempotency semantics: a replay returns the original response | rejected: by design |
+| C16 | low | No index serves the unfiltered list; no DB CHECK for state 97/99 | The FE always filters by status; the command validates 97/99 | rejected |
 
 ## Design Notes
 

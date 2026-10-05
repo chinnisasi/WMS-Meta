@@ -1,6 +1,6 @@
 # Invoicing module
 
-> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. The HSN summary (8-2a, GSTR-1 Table 12) reads the issued invoices back per supplier GSTIN and period. E-way bills (8-2) and the 3PL client-billing model (21-5) extend this module.
+> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. The HSN summary (8-2a, GSTR-1 Table 12) reads the issued invoices back per supplier GSTIN and period. E-way bills (8-2b) queue off `invoice.issued` and leave as NIC bulk JSON or through the `EwayGateway` port. The 3PL client-billing model (21-5) extends this module next.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first. The command skeleton is followed closely here and is not repeated.
 
@@ -46,7 +46,7 @@ The module also writes `audit_events` and `idempotency_keys` (tenancy-owned, sha
 
 Party facts (tenant name and GSTIN, warehouse name, GSTIN and origin) come through `invoicePartyFactsInTx` in `tenancy.service.ts`. It is imported directly as an in-tx function (the `order.command` precedent: no DI cycle, no tenancy table write).
 
-`InvoiceDeliveryHandler` subscribes to `order.dispatched` at `onModuleInit`.
+`InvoiceDeliveryHandler` subscribes to `order.dispatched` at `onModuleInit`; `EwayDeliveryHandler` (8-2b) subscribes to `invoice.issued`. 8-2b also exports `EwayCommand` and provides the `EWAY_GATEWAY` port (see "E-way bills" below); the e-way reads (`listEwayBills`, `listEwayStateThresholds`, `listEwayGstinSettings`) are on `InvoicingFacade`.
 
 ---
 
@@ -213,6 +213,129 @@ sequenceDiagram
 
 ---
 
+## E-way bills (8-2b)
+
+An e-way bill (EWB) must exist before a consignment worth more than the threshold moves. 8-2b queues one per qualifying issued invoice, lets finance add transport details (Part B), export NIC's bulk-upload JSON per supplier GSTIN, upload it on the portal and record each returned number — or generate one bill through the `EwayGateway` port when a gateway is configured. **Production ships unconfigured: the system never calls out** (OQ3, decided 2026-10-04). Code: `eway-threshold.ts`, `eway-json.ts` (pure), `eway-gateway.ts`, `eway-view.ts`, `eway.delivery.ts`, `eway.command.ts`; HTTP `src/api/eway.controller.ts`.
+
+### Owns (migration 0056, hand-amended, no FKs, no backfill)
+
+| Table | Holds | Key invariants |
+|---|---|---|
+| `eway_national_thresholds` | **Global**, read-only: `effective_from` (PK), `threshold_paise`, `source`. Seeded `2018-04-01 → 5000000` (CGST Rule 138(1)) | No RLS (`gst_state_codes` precedent); a trigger refuses UPDATE and DELETE |
+| `eway_state_thresholds` | Per-tenant intra-state overrides: `state_code`, `threshold_paise` (NULL = none required), `effective_from`, `created_by/at` | **Append-only** (BEFORE UPDATE trigger raises; deletes are teardown only). Index `(tenant, state, effective_from desc, created_at desc)` |
+| `eway_gstin_settings` | `gstin`, `e_invoice_applies`, `updated_by/at` | `UNIQUE (tenant_id, gstin)`; GSTIN shape CHECK |
+| `eway_bills` | One per qualifying invoice: `invoice_id`, `origin_gstin`, `status` (`pending \| generated \| dismissed`), `consignment_value_paise`, `threshold_paise`, `threshold_rule` (`national` \| `state:NN`), Part B (`trans_mode` 1–4, `vehicle_no`, `vehicle_type` R/O, `transporter_id/name`, `trans_doc_no/date`, `distance_km` 0–4000), result (`ewb_no` 12 digits, `ewb_generated_at`, `ewb_valid_until` ≥ generated, `source` `manual \| gateway`), tracking (`gateway_claimed_at`, `last_exported_at/by`, `dismissed_reason`, `last_error`) | `UNIQUE (invoice_id)` (the queue's idempotency); partial `UNIQUE (tenant_id, ewb_no) WHERE ewb_no IS NOT NULL`; **two-way CHECKs** — generated ⇔ number + date + source (and a non-generated row carries no result column), dismissed ⇔ reason; `value > threshold`; export stamp paired |
+
+### The queue: `invoice.issued` → bill
+
+```mermaid
+sequenceDiagram
+    participant G as InvoiceGenerator (issue)
+    participant O as outbox_messages
+    participant R as OutboxRelay
+    participant B as RoutedEventBus
+    participant E as EwayDeliveryHandler
+    participant T as eway-threshold.ts
+    G->>O: append invoice.issued (in the issuing tx)
+    R->>O: drain
+    R->>B: publish(invoice.issued)
+    B->>E: deliver (first subscriber; 21-5 later)
+    E->>E: decode invoiceId ONLY (malformed → log + ACK)
+    E->>E: own tenant tx: re-read invoice — must be issued with issued_at (else ACK)
+    E->>T: consignmentValuePaise(lines) — Σ taxable+CGST+SGST+IGST over gst_bps > 0
+    E->>T: thresholdFor(supplyType, GSTIN prefix, IST issue date)
+    alt value > threshold
+        E->>E: INSERT … ON CONFLICT (invoice_id) DO NOTHING
+    end
+    alt data fault (4xx problem, ArithmeticOverflowError)
+        E-->>B: log + ACK
+    else transient
+        E-->>B: throw → relay retries
+    end
+```
+
+**The threshold** in force on the invoice's IST issue date: an **intra**-state supply takes the bill-from state's (GSTIN prefix) newest override with `effective_from ≤ date` (a same-date correction: the newest `created_at` wins), else national; an **inter**-state supply always takes national. A NULL override means none required. Overrides never re-evaluate anything already delivered. Event-driven writes are not audited (no actor).
+
+### Export → upload → record (the production path)
+
+```mermaid
+sequenceDiagram
+    participant W as /compliance (finance)
+    participant C as EwayController
+    participant M as EwayCommand
+    participant J as eway-json.ts
+    W->>C: PATCH bills/{id}/transport (whole Part B)
+    W->>C: POST bills/export {ids}
+    C->>M: export — eway.manage → replay → lock rows by id → replay under lock
+    M->>J: blockers per bill; reasons not-found / not-pending / claimed / mixed-gstin
+    alt any refusal
+        M-->>W: 409 eway-not-exportable, bills: [{id, reasons}] — nothing written
+    else all ready
+        M->>J: ewbBillObject(invoice, Part B) per bill → bulkFile
+        M->>M: stamp last_exported_at/by, audit eway.exported per bill, key
+        M-->>W: {file} → download, upload on the NIC portal
+    end
+    W->>C: POST bills/{id}/record {ewbNo, generatedAt, validUntil?}
+    C->>M: pending + unclaimed, number unused → generated / manual (final)
+```
+
+### Generate through the gateway (on demand, audited)
+
+1. Tx 1: `eway.manage` → replay → lock → replay under lock → pending (`409 eway-not-pending`) → no blockers (`409 eway-not-exportable`) → `configuredFor` (`501 gateway-unconfigured`) → claim older than 2 min (`409 eway-claimed`) → set `gateway_claimed_at`, commit.
+2. The call, **outside any transaction**.
+3. Tx 2: `UPDATE … WHERE status = 'pending'` → generated / gateway, claim cleared → audit `eway.generated` → key.
+4. `EwayGatewayRefusal` → `last_error`, claim cleared, `422 eway-gateway-refused`. `EwayGatewayUnavailable` **or any other failure** (outcome at NIC unknown) → claim **kept** (it expires), `503`. A malformed result (`ewbNo`, `generatedAt`, or `validUntil` not ≥ `generatedAt`) → claim cleared, `422`.
+5. If the settle cannot take the number (the bill is no longer pending, or the number is already recorded), the number NIC issued is **never dropped**: it is logged at error level and written to the bill's `last_error` ("gateway generated EWB … — cancel it on the portal") in its own transaction, then `409`.
+
+`configuredFor` must be local (no network I/O): it runs inside transactions holding row locks.
+
+**Why the claim:** a crash after a successful call would otherwise leave a bill pending that NIC already holds; the claim stops a manual record (or a second generate) racing the call, and the port's contract — a live adapter looks the EWB up by (GSTIN, `INV`, docNo) before generating — makes a retry after expiry safe.
+
+### Commands and guards
+
+All on the house skeleton: hash over the normalised body with a `kind` discriminator → authority → replay → lock → replay under the lock → guards → write → audit → key. Request-shape checks (uuids, the EWB number, instants, reason length, id list) run above the transaction.
+
+| Command | Capability | Guards (in order) |
+|---|---|---|
+| `updateTransport` | `eway.manage` | pending → unclaimed → every NIC Part B rule (`partBProblems`, one list also used by the blocker): mode required when a vehicle or transport document is set (a transporter id/name and distance alone are a valid Part A, exported as Road); Road vehicle `^[A-Z0-9]{4,15}$` with type R/O; Rail/Air/Ship doc no (≤ 15) + date, no vehicle; transporter id `^[0-9]{2}[A-Z0-9]{13}$`; name ≤ 25; doc date ≥ invoice IST date; distance 0–4000, ≤ 100 when pincodes are equal |
+| `record` | `eway.manage` | pending → unclaimed → `generatedAt` in [issued_at, now + 5 min] → number unused (`409 ewb-no-taken`, also the unique's arm). Blockers ignored |
+| `dismiss` | `eway.manage` | pending → unclaimed; reason 1–200. Blockers ignored |
+| `export` | `eway.manage` | ids 1–100, unique; per bill: found, pending, unclaimed, no blocker, the dominant GSTIN — else the whole request refuses |
+| `generate` | `eway.manage` | above |
+| `appendStateThreshold` | `eway.configure` | code on `gst_state_codes`, not 97/99 (`400`) |
+| `putGstinSetting` | `eway.configure` | `assertGstinParam`; the tenant's or a warehouse's GSTIN (`404`) |
+
+### The bill object (`ewbBillObject`, the ONE builder)
+
+Pure, from the frozen document, its lines and the Part B; export and the gateway both use it. **Bulk keys, not API keys** (`transType`, `actualFromStateCode`, `OthValue`, `TotNonAdvolVal` — a live adapter renames). Amounts are paise / 100; `totalValue = Σ taxable`, the per-tax values are summed from the lines (`document.totals` has no split), `OthValue = roundOff`, `totInvValue = payable` — so `totalValue + cgst + sgst + igst + OthValue = totInvValue` in integer paise (pinned). `actualFrom/ToStateCode` resolve from the **address text** (`resolveStateCode` with `gstin = null` — the GSTIN would otherwise outrank it); `toStateCode` is the place of supply. Text keeps only `A-Za-z0-9 @#-/,&.`, then truncates (names 100, address lines 120, place 50). A Part-A-only bill (no mode) exports as Road with `vehicleNo ""`, `vehicleType "R"`; distance 0 with equal pincodes is sent as 1. `transType` is always 1, `supplyType "O"`, `subSupplyType 1`, `docType "INV"`, the version `1.0.0621`.
+
+### Blockers (computed at read time, never stored)
+
+| Blocker | Kind | Condition |
+|---|---|---|
+| `invoice-unavailable` | terminal | the bill's invoice is missing or no longer `issued` (e.g. a future void); Part B then answers `409 eway-not-exportable`, never 404 |
+| `hsn-issue` | terminal | any line's HSN not 4/6/8 digits (the 8-2a `isValidHsn`) |
+| `doc-too-old` | terminal | IST issue date > 180 IST days before today |
+| `too-many-lines` | terminal | > 250 lines |
+| `address-incomplete` | terminal | an address null, a pincode malformed, or — after NIC's text rule — an empty seller name, buyer name, line1 or city |
+| `state-unresolved` | terminal | an address state off the CBIC list |
+| `ship-to-differs` | terminal | actual-to ≠ place of supply, or actual-from ≠ GSTIN state (the `pos-discrepancy` case; `transType` 2–4 are never exported) |
+| `unsupported-supply` | terminal | place of supply 97 or 99 |
+| `rate-not-standard` | terminal | `gst_bps` outside {0, 10, 25, 300, 500, 1200, 1800, 2800} + 4000 (GST 2.0) |
+| `needs-irn` | fixable | B2B and the GSTIN's e-invoicing flag is on |
+| `transport-incomplete` | fixable | Part B invalid, or neither Part B nor a transporter id |
+
+Terminal means the invoice is frozen and nothing here can clear it — generate on the portal, record the number.
+
+### E-way gotchas
+
+- **The bus stops at the first throw, and `invoice.issued` will have two subscribers** (21-5). The handler ACKs malformed payloads, not-issued invoices and data faults; only transient faults rethrow.
+- **Never trust the payload beyond `invoiceId`.** The test delivers events carrying deliberately wrong `invoiceNo`/`originGstin`.
+- **`resolveStateCode` lets the GSTIN outrank the address text.** For the *actual* states pass `gstin = null`, or a bill-to/ship-to mismatch disappears.
+- **The 409 export refusal carries structured data.** `ProblemException` gained an `extensions` argument and the filter renders extension members (`bills`); clients read them, never the prose.
+- **Ids and GSTINs are canonicalised at the command:** export ids lowercased before the dedupe, sort and hash; the list's `gstin` filter and the settings PUT path uppercased.
+- **A failing claim-race test must release its barrier in a `finally`,** or the open request hangs the suite instead of failing it.
+
 ## Invariants
 
 - Exactly one invoice per `(tenant, order)`; a lost insert race never produces a second row or a second tax.
@@ -229,7 +352,7 @@ sequenceDiagram
 |---|---|---|
 | `invoice.issued` (outbox, in-tx) | on the **first** flip to `issued` only (by either path); an issued invoice never changes again | `{invoiceId, orderId, warehouseId, originGstin, invoiceNo, fyLabel, revision, subtotalPaise, gstPaise, totalPaise, payablePaise, roundOffPaise}`: flat and client-agnostic (21-5 reads it). Built by ONE function, `invoiceIssuedPayload` (`events.ts`), for both emitters. **Consumers key on `(originGstin, invoiceNo)`** |
 
-No consumer exists yet (8-2, 21-5). Audit: `invoice.generated`, one row per manual call, with the actor and the idempotency key as reference.
+Consumers: the e-way queue (8-2b, first subscriber); 21-5 next. Audit: `invoice.generated`, one row per manual call, with the actor and the idempotency key as reference.
 
 ---
 
@@ -245,6 +368,6 @@ No consumer exists yet (8-2, 21-5). Audit: `invoice.generated`, one row per manu
 - **A partial unique index needs its predicate in `ON CONFLICT`** (8-1b design review #1). Without `where: origin_gstin is not null` Postgres cannot infer the arbiter and every first issuance errors with "no unique or exclusion constraint matching". It is invisible until the first insert of a series row.
 - **A migration's NOT NULL / CHECK before its backfill fails only on a non-empty table** — CI's databases are empty, so it is invisible there. 0054 orders guard → pre-flight → nullable ADD → backfill → rewrite → SET NOT NULL → CHECKs, and `invoicing-migration.spec.ts` runs it over seeded 0053 rows.
 - **Idempotency snapshots embed the response shape forever.** Changing a document shape without rewriting `idempotency_keys.response_snapshot` makes a pre-change key replay the old shape to a client that no longer reads it; 0054 rewrites them.
-- **Count pins move with this module**: capabilities 33 → 34 (`users.spec.ts`, FE `users.test.ts`), RLS policies 64 → 67 (`client-isolation.spec.ts`).
+- **Count pins move with this module**: capabilities 33 → 34 (`users.spec.ts`, FE `users.test.ts`), RLS policies 64 → 67 (`client-isolation.spec.ts`); 8-2b: capabilities 34 → 36, RLS 67 → 70.
 - **A route literal beside a `:param` route must be declared first** (8-2a). Express matches in declaration order, so `GET /invoices/hsn-summary` declared after `GET /invoices/:invoiceId` would answer `400 invoiceId must be a uuid`. The controller declares it first and `invoicing-hsn.spec.ts` pins both the behaviour and the method order.
 - **FE: keep `DataTable` mounted while a page loads.** Swapping it for a loading line on every page change remounts it onto page one, so Prev never enables. Likewise, a success banner rendered inside a subtree that remounts after the save vanishes on arrival; lift it above the remount, keyed to its invoice.
