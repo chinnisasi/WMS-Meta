@@ -601,3 +601,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-1c-web-gstin-and-price-inputs.md`
   summary: Cross-repo drift guard for the FE `GSTIN_RE` mirror against wms-be `src/shared/primitives/gstin.ts`.
   evidence: The mirror test compares against a literal; 8-2's regulatory pass will change the backend regex, so the guard belongs there.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-8-2b-e-way-bills.md`
+  summary: E-way generate's malformed-gateway-result arm and its taken-EWB-number arm have no tests; the sandbox adapter can produce neither (code review C13).
+  evidence: Verified by grep in test/eway.spec.ts. Add the tests with the first live EwayGateway adapter, which is where those results become reachable.
