@@ -8,12 +8,14 @@ Companion to `SPEC.md`. What a 3PL charges for, where each number comes from, an
 
 ## Charge codes and their bases
 
-| Charge code | Basis | Metered from | Note |
-|---|---|---|---|
-| `storage` | `per_unit_per_day` | `storage_snapshots` | The only charge needing **duration**, not events |
-| `inbound_handling` | `per_receipt_line` | `grn.received` | Per line, not per unit — unloading cost scales with lines |
-| `pick` | `per_pick` | `pick.picked` | The floor's unit of work |
-| `outbound_handling` | `per_order` | `order.dispatched` | Per shipment, independent of line count |
+| Charge code | Basis | One unit is | Metered from | Note |
+|---|---|---|---|---|
+| `storage` | `per_thousand_units_per_day` | 1,000 SKU base units held for a day | `storage_snapshots` (base milli-units ÷ 1,000,000) | The only charge needing **duration**, not events |
+| `inbound_handling` | `per_receipt_line` | a distinct GRN line received | `grn.received` — **excluding** the re-emit on an over-receipt approval | Per line, not per unit — unloading cost scales with lines |
+| `pick` | `per_pick` | a distinct picklist line picked | `pick.picked` — which the ledger emits once per batch arm or serial, so count lines, not events | The floor's unit of work |
+| `outbound_handling` | `per_order` | a distinct order dispatched | `dispatch.dispatched` — emitted once per order **line**, so count orders, not events | Per shipment, independent of line count |
+
+*(Amended by story 21-3: the event names are the ledger's real ones — there is no `order.dispatched` ledger event (that is the outbox event); each count is of distinct documents, not raw events. Storage is priced per 1,000 base units per day in whole paise, decision 1.)*
 
 Both `charge_code` and `basis` are **closed vocabularies**, TS tuple plus migration CHECK, pinned together by an e2e test — the repo's pattern across its other ten enums.
 
@@ -27,13 +29,15 @@ A daily job writes one `storage_snapshots` row per (client, warehouse, day): the
 
 **This is a projection, not a book.** Replaying the ledger must reproduce every snapshot exactly, and a rebuild is the test (AD-25). It is a cache for a number that is otherwise expensive to compute, and it is how 3PL contracts are written anyway — in storage *days*.
 
-**What "billable units" counts** is the first open question in `SPEC.md`: units, pallets, bins or volume. The rate card can express any of them; the onboarding flow has to propose one. Once story 10-3 lands handling units, per-pallet becomes the natural default, because a pallet is the thing a 3PL actually rents space to.
+**What "billable units" counts** was the first open question in `SPEC.md`. **Settled by story 21-3 (decision 1): SKU base units, priced per 1,000 per day.** Pallet or bin storage waits for a real pallet concept — 10-3's handling units are catch-weight cases with no location, client or ledger events, so there is nothing to count (`docs/design/PENDING.md` §billing). Summing unlike base units (`kg` beside `each`) is a known limit, also PENDING.
 
 ## Rate cards
 
 Versioned by effective date, never edited in place. A rate change writes a **new card** and closes the old one.
 
-**Why versioning is load-bearing:** an invoice issued in March, re-rendered in June after an April rate change, must still show March's numbers. Recording `rate_card_id` **on the invoice** — rather than looking up the live card — is what makes that true, and it is why CAP-4's success criterion is "the previous month's issued invoice stays byte-identical".
+**Why versioning is load-bearing:** an invoice issued in March, re-rendered in June after an April rate change, must still show March's numbers. Recording `rate_card_id` **on each invoice line** — rather than looking up the live card — is what makes that true, and it is why CAP-4's success criterion is "the previous month's issued invoice stays byte-identical". A card may take effect on any date, so a period spanning a change splits each affected line in two (story 21-3, decision 5).
+
+**The lifecycle** (story 21-3, `docs/design/modules/billing.md`): `draft` (editable, undated) → `active` from an IST-midnight date (frozen by database triggers) → `superseded` when a later card takes over from its own date. A card whose date has not arrived can be `cancelled` — never in force — which reopens the card it superseded. A first card may start today (IST); a replacement starts tomorrow at the earliest. Owner and accountant edit (`rates.manage`); every member reads.
 
 **Flat rates only.** Tiered pricing (first 100 pallets at X, above at Y) is a stated non-goal: it multiplies the calculation surface, and every tier boundary becomes a dispute.
 

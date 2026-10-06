@@ -21,6 +21,7 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **movements** | [`movements.md`](movements.md) | Planned stock movement — transfer orders (5-1): two-leg ledger legs, the IN-TRANSIT system bin, in-transit ATP exclusion, the device inbound confirm. Adjustments, counts and variance review grow here |
 | **replenishment** | [`replenishment.md`](replenishment.md) | Reorder points (per-warehouse policy over the SKU defaults), the worker breach sweep (three-phase; ATP strictly via the facade, fail-closed), breach alerts + suggested-PO drafts, the human-triggered PO submit (6-1) |
 | **channels** | [`channels.md`](channels.md) | The sealed-credential connection vault + the frozen-three provider registry, standing buffers held through the reservation core (AD-13), and the outbox availability sync with the RN-5 breaker (7-1) |
+| **billing** | [`billing.md`](billing.md) | Client billing (AD-25, Epic 21): rate cards (21-3) — versioned per-client prices, frozen after activation by DB triggers; the in-force and period-segments reads metering (21-4) and client invoices (21-5) build on |
 | **invoicing** | [`invoicing.md`](invoicing.md) | GST invoices (8-1): one per dispatched order derived from dispatch facts, exact paise/bps tax math, per-tenant FY numbering, the `order.dispatched` delivery (first subscriber — ACKs data faults) and the manual price/regenerate command |
 
 ## Planned
