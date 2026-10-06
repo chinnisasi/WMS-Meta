@@ -229,6 +229,22 @@ Backend first, always. A story spanning repos lands the additive backend change,
 
 ---
 
+## 7a. The one read-only exception: reporting (story 9-1, decision 6)
+
+AD-6's rule — a sibling reads another module only through its facade — has **exactly one named exception**: the reporting module's dashboard tiles (`src/modules/reporting/kpis.ts`) read the owning modules' tables directly, in read-only SQL. A KPI routed through a facade would need a bespoke "count my rows in this window" method per tile, each a second definition of the KPI free to drift from the first. The terms, all guarded by `test/architecture.spec.ts`:
+
+- **Reporting writes nothing** — no Drizzle `.insert/.update/.delete`, no raw `INSERT`/`UPDATE … SET`/`DELETE`/`TRUNCATE` anywhere under `src/modules/reporting`;
+- **only the api shell imports it** (plus the root `app.module.ts` composition) — no module may build on a read model that bypasses facades;
+- **it owns no table** — the facts it needed (`pack_verification_failures`, `ingest_backorder_refusals`) are owned and written by **outbound**, the module whose refusals they record.
+
+This is not a precedent. A new read model that wants the same freedom takes its own human decision and its own guard block. A new KPI belongs in `kpis.ts`, names its source and its drill, and is either `reconciles: true` (proven by paging its drill in `test/reporting.spec.ts`) or says why not. Details: `modules/reporting.md`.
+
+**List windows (9-1).** A list that takes a time window uses `src/shared/primitives/instant-range.ts`: `@IsInstant()` (an ISO-8601 instant **with** a zone designator — a bare local time is refused), `assertInstantRange(from, to)` in the controller (`from ≥ to` → `400 validation-failed`), `@BooleanFlag()` + `@IsBoolean()` for a flag (exactly `'true'`/`'false'`, anything else refused by name), `@RepeatableParam()` for `?type=a&type=b`. The window is half-open `[from, to)` on a **server-stamped** column, and the list's cursor must carry the full-precision instant (`fullPrecisionInstant`) — a drill paged to exhaustion is a promise, and a truncated cursor silently breaks it.
+
+**Best-effort side facts (9-1).** A fact recorded *about a refusal* (a failed pack verification, a reject-policy refusal) is written **after** the refused work rolled back or released — never in a second transaction while the first holds its locks (pool deadlock, outbound Gotcha 10) — in its own `try/catch` that logs, so the caller gets exactly the refusal it always got. Throw a **typed** subclass of `ProblemException` that renders the identical problem and carries the fact's fields (`PackMismatchError`), and catch it around the one transaction every entry path reaches.
+
+---
+
 ## 8. Before you say it's done
 
 ```bash

@@ -55,7 +55,7 @@ HTTP → Controller (api shell)  ── thin: auth guard, tenant match, DTO vali
 
 Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.** The 3PL client dimension (Epic 21, story 21-1) adds the fourteenth: `clients`, whose table is written by the other stamping modules only through `ensureSelfClientInTx`.
 
-`test/architecture.spec.ts` scans source for writes and past-the-facade imports, but **it covers four module table-sets, not fourteen**: stock/ledger, order/wave/pick, carrier, and (21-1) clients — plus one `int4` guard. **`tenancy`, `catalog`, `inbound` and `putaway` table ownership is unenforced**, and `bins` — the one table deliberately shared by column between tenancy and putaway — is the least-guarded case of all. Adding a module block when you add a module is the standing rule; four modules predate it.
+`test/architecture.spec.ts` scans source for writes and past-the-facade imports, but **it covers four module table-sets, not fourteen**: stock/ledger, order/wave/pick, carrier, and (21-1) clients — plus one `int4` guard, and (9-1) the reporting block: reporting writes nothing and only the api shell imports it. **`tenancy`, `catalog`, `inbound` and `putaway` table ownership is unenforced**, and `bins` — the one table deliberately shared by column between tenancy and putaway — is the least-guarded case of all. Adding a module block when you add a module is the standing rule; four modules predate it.
 
 | Module | Owns |
 |---|---|
@@ -72,7 +72,8 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `replenishment` | the stock-intelligence spine (epic 6): the breach sweep + suggested-PO drafts (6-1, FR-22) and the expiry/aging batch-alert scan on the SAME tick (6-2, FR-23) — alerts are evidence; only a human submit orders |
 | `channels` | sales-channel connections, standing buffers, availability sync (7-1), webhook ingest + fulfillment writeback (7-2) |
 | `invoicing` | GST invoices (8-1): one per dispatched order, derived from dispatch facts over `order.dispatched`, exact paise/bps math, per-tenant FY numbering (per supplier GSTIN since 8-1b); the HSN summary shipped in 8-2a — a read model over issued invoices (`issued_at`, `invoice_lines.uom`) with one catalog read, via `CatalogFacade`, for the current-HSN hint; e-way bills (8-2b) queue off `invoice.issued`, export as NIC bulk JSON or generate through the `EwayGateway` port (unconfigured in production) |
-| `reporting` · `notifications` | spine placeholders for epic 9 |
+| `reporting` | the operational dashboard (9-1, FR-27): a read model with **no tables** — ten per-warehouse KPI tiles computed live over the owning modules' records (the ONE named read-only exception to the facade rule, decision 6 — `IMPLEMENTATION-GUIDE.md` §7a), each figure carrying the list route behind it. The audit trail and exports (9-3) join it next |
+| `notifications` | spine placeholder for epic 9 (9-2) |
 
 The api shell (`src/api/`) is where two modules' reads are joined — the device catalog snapshot composes across `inbound` and `outbound` there rather than making one module import the other.
 

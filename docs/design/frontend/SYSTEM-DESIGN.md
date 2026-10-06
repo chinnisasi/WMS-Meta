@@ -41,7 +41,7 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 
 | Route | Surface | State |
 |---|---|---|
-| `/` | Overview | **Partial.** Server component, `dynamic = 'force-dynamic'`. Four KPI tiles: three hold a literal `—`, the fourth renders a live `/health` probe behind a 3-second `AbortSignal.timeout` (`page.tsx:16-22`). Below it an intentionally empty `DataTable` |
+| `/` | Overview | **Real (9-1).** `page.tsx` stays a thin server component (the 3-second `/health` probe, now a small "API health" status line) around the client `OverviewDashboard` (`components/overview/overview-dashboard.tsx`): ten KPI tiles from `GET …/warehouses/{w}/reporting/overview` via `useReportingOverview(warehouseId)` (`ResourceState`, keyed on the warehouse; reloads only on a warehouse switch or Refresh — **no polling**). The warehouse is the active one, else the first; none → an empty state linking to Settings. Each tile shows today's figure over the 7-day one (live figures have no 7-day line), `Unavailable` as text, and an "Open <screen>" link carrying the drill's full query in the href (`lib/drill-routes.ts`, the one apiPath → route map; drills with no web screen — picklist lines, pack failures, backorder refusals — get no link; the screens reading the query are 9-1b). The main number is labelled "Today (IST)". "As of HH:MM" always shows; the warning-tone stale banner (with Refresh) shows when the response is `stale` or `asOf` is over 5 minutes old — one timer re-renders the page at asOf + 5 min (no refetch). Copy and derivations in `lib/overview.ts` |
 | `/inventory` | Inventory | `SurfacePlaceholder` |
 | `/inbound` | Inbound | **Real** — `InboundCards`: purchase orders, goods receipts, QC holds (place + release, gated on `qc.manage`) |
 | `/outbound` | Outbound | **Real** — `Outbound`: one warehouse picker shared by the orders surface (4.2b) and the waves surface (4.2c); the order detail groups exploded kit lines parent-over-children and sums totals over top-level lines only (11.6) |
@@ -54,7 +54,7 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 | `/reports` | Reports / Audit | `SurfacePlaceholder` |
 | `/settings` | Settings | **Real** — a `SurfacePlaceholder` header above nine working cards: setup checklist, warehouse create, zones/bins setup, catalog import, products (11.6), SKU table (with the kit editor, 11.6), users, warehouse list, devices (`settings/page.tsx:15-25`) |
 
-Four of twelve are still `SurfacePlaceholder` (the `/settings` header counts its own placeholder section, not the surface) — a two-prop component rendering a heading and a sentence (`src/components/shell/surface-placeholder.tsx`). The IA is complete; the surfaces are not.
+Four of twelve are still `SurfacePlaceholder` (the Overview stopped being partial at 9-1) (the `/settings` header counts its own placeholder section, not the surface) — a two-prop component rendering a heading and a sentence (`src/components/shell/surface-placeholder.tsx`). The IA is complete; the surfaces are not.
 
 ### `(auth)` — outside the shell (`src/app/(auth)/layout.tsx`, a centred card)
 
@@ -218,9 +218,9 @@ The guard resolves `../../../backend/wms-be/src/modules/tenancy/permissions.ts` 
 
 **`CommandPalette`** — ⌘K, Esc closes, Enter commits, arrows select. Touch users reach it from the header button; hover-only affordances are banned.
 
-**`KpiTile`** — 28px semibold tabular numerals on the `.kpi` class. The comment (`kpi-tile.tsx:4`) states the rule the tile exists to keep: values reconcile to the ledger, and **there is no secondary "estimated" state**.
+**`KpiTile`** — 28px semibold tabular numerals on the `.kpi` class. The comment (`kpi-tile.tsx:4`) states the rule the tile exists to keep: values reconcile to the ledger, and **there is no secondary "estimated" state**. 9-1 added optional `href` (next/link), `secondary`, `unavailable` (the word, never colour alone) and an accessible name of label plus value; with none set, the tile renders byte-identically to before (pinned by `kpi-tile.test.tsx`).
 
-**`FeedbackBanner`** — glyph + word + one reason line, `role="status"` when accepted and `role="alert"` when rejected. Two tones only; never colour alone.
+**`FeedbackBanner`** — glyph + word + one reason line, `role="status"` when accepted and `role="alert"` when rejected; 9-1 added a third, `warning` tone (the existing `--warning` amber, `role="status"`) with an optional action slot — the Overview's stale banner and its Refresh button. Never colour alone.
 
 **`components/outbound/shell.tsx`** — the six shared class constants, `Section` (whose heading renders in *every* state, including a failed read) and `ReadFailure` (banner + Retry, never progress copy). Its header comment records why it exists: orders and waves each carried a byte-identical copy *and their own* `useOutboundWarehouses()` call, so `/outbound` rendered two warehouse pickers that could disagree.
 

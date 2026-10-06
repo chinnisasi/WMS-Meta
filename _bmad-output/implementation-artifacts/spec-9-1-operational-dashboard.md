@@ -2,8 +2,9 @@
 title: 'Operational dashboard — per-warehouse KPIs as ledger projections'
 type: 'feature'
 created: '2026-10-06'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '049ace4506155fd31675bf65fbff7d2637a4311f'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-9-context.md'
@@ -126,17 +127,17 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0058_reporting_facts.sql` (+ journal, snapshot, schema.ts) -- guarded; RLS hand-appended (0047 pattern); no FKs:
+- [x] `wms-be/drizzle/0058_reporting_facts.sql` (+ journal, snapshot, schema.ts) -- guarded; RLS hand-appended (0047 pattern); no FKs:
   - **Index** `ledger_events (tenant_id, warehouse_id, type, recorded_at)`. A plain build: no `CONCURRENTLY` inside drizzle's transaction. The lock window is acceptable before launch; the header states it, and PENDING records a `CONCURRENTLY` runbook for a live deploy.
   - **`pack_verification_failures`** (owned by outbound): `id`, `tenant_id`, `warehouse_id`, `order_id`, `entry` (`tenant|device|sync`), `actor_user_id`, `mismatch` jsonb, `created_at`. One row per failed attempt.
   - **`ingest_backorder_refusals`** (owned by outbound): `id`, `tenant_id`, `warehouse_id`, `integration_id`, `external_event_id`, `lines` jsonb (sku, requested and available milli-units), `created_at`, with `UNIQUE (tenant_id, integration_id, external_event_id)`.
   - An `app_metadata` row `reporting_facts_since = now()`.
   - Indexes `(tenant_id, warehouse_id, created_at)`.
-- [ ] `wms-be` outbound -- fact writes:
+- [x] `wms-be` outbound -- fact writes:
   - **Pack:** `assertScanMatchesPicked` throws a typed `PackMismatchError` that carries `{warehouseId, orderId, mismatch}` and maps to today's problem. `packOrder` catches it **after** the outer transaction, writes the row in a fresh tenant transaction (best-effort), and rethrows the unchanged problem. This covers all three entry paths.
   - **Ingest:** the `BackorderRejectedError` arm writes the refusal with `ON CONFLICT DO NOTHING` (best-effort).
   - The outbound facade gets list reads: pack failures, refusals, short picklist lines.
-- [ ] `wms-be/src/modules/reporting/` -- the files:
+- [x] `wms-be/src/modules/reporting/` -- the files:
   - `window.ts`: IST windows from the shared `IST_OFFSET_MS`;
   - `kpis.ts`: one function per tile, each `(tx, scope, window)`, using direct read-only SQL per decision 6;
   - `reporting.facade.ts`: the warehouse check, then a runner with concurrency 3, the per-tile `statement_timeout`, the 1.8 s deadline, the 57014/deadline mapping and logging.
@@ -170,8 +171,8 @@ context:
       - eligible = e-way bills created in the window for this warehouse's invoices, excluding dismissed and excluding voided invoices;
       - `gatewayShare` = those `generated` with `source='gateway'` (`null` when there are none eligible). Drill: e-way bills (`warehouseId`, `from`, `to`, `source`) (`true`).
       - Secondary: the share of invoices issued in the window with no `manual` rate-source line. Drill: invoices (`warehouseId`, `from`, `to`) (`false`).
-- [ ] `wms-be/src/api/reporting.controller.ts` + DTO -- `GET /tenants/{t}/warehouses/{w}/reporting/overview` returns `{asOf, stale, window: {todayFrom, d7From, to}, tiles}`. There is one flat DTO class per tile: a `state` enum; figures nullable (`null` when `unavailable` or no data); nullable enums written `enum: [...X, null]`; `drill` always present. Re-export `openapi.json`.
-- [ ] `wms-be` list filters (additive, all optional):
+- [x] `wms-be/src/api/reporting.controller.ts` + DTO -- `GET /tenants/{t}/warehouses/{w}/reporting/overview` returns `{asOf, stale, window: {todayFrom, d7From, to}, tiles}`. There is one flat DTO class per tile: a `state` enum; figures nullable (`null` when `unavailable` or no data); nullable enums written `enum: [...X, null]`; `drill` always present. Re-export `openapi.json`.
+- [x] `wms-be` list filters (additive, all optional):
   - **The ledger timeline:**
     - `type`, repeatable; a single value is transformed to an array and validated against the registry;
     - `from` and `to` on `recorded_at`;
@@ -187,12 +188,12 @@ context:
   - **New routes:** picklist-lines (`status`, `from`, `to`), pack failures, refusals.
 
   Refusals are 400 `validation-failed` with named details: an unknown type, a bad ISO instant, `from ≥ to`, a non-boolean flag.
-- [ ] `wms-be/test` -- every matrix row, plus:
+- [x] `wms-be/test` -- every matrix row, plus:
   - **reconciliation:** each `reconciles: true` figure equals its drill paged to exhaustion;
   - **the architecture guard:** reporting writes no table, only `src/api` imports it, and both fact tables are in outbound's ownership list;
   - **an 0058 migration block:** the guard, RLS, the unique constraint and the `app_metadata` row;
   - **a load check:** `scripts/loadtest-overview.ts` seeds about 25k ledger events in 7 days for one warehouse through the inventory facade in batches, plus matching `picks`, GRN and putaway rows, then reports the overview's p95. It is reported, not a CI gate.
-- [ ] `wms-fe`:
+- [x] `wms-fe`:
   - **Overview:** a client `OverviewDashboard` with `useReportingOverview(warehouseId)` (`ResourceState`, keyed on the warehouse; reloads only on switch or Refresh). The warehouse is the active one, else the first. When there is no warehouse, an empty state links to Settings.
   - **`KpiTile`:**
     - gains `href` (`next/link`), `secondary`, `unavailable` (shown as text, not only colour), and an accessible name of label plus value;
@@ -202,7 +203,7 @@ context:
   - **API health** moves to a small status line.
   - **Links:** tiles link to the screen for their drill. An `apiPath` → web route map lives in one file; the full drill query is carried in the `href` now, so 9-1b only adds URL-reading.
   - Tests for each.
-- [ ] Meta docs and status:
+- [x] Meta docs and status:
   - a new `modules/reporting.md`: tile definitions, drills, the runner, decision 6 as a named exception, and the 21-8 hook;
   - `IMPLEMENTATION-GUIDE.md`: the read-only exception;
   - `API-SURFACE.md`, the module notes, both contracts, and the FE system design (the Overview is no longer a placeholder);
@@ -218,6 +219,9 @@ context:
 - Given the full BE and FE suites, when run, then they pass.
 
 ## Implementation Notes
+
+- Baselines: wms-be `049ace4506155fd31675bf65fbff7d2637a4311f` (frontmatter `baseline_commit`); wms-fe `1344c167fb77a560fe24a825d962245636c21582`. Work happens on `feat/9-1-operational-dashboard` in both repos. Leave changes uncommitted; do not commit, push, or open PRs. In wms-be run jest via `bun run test -- <file>` (bare `bun test` hangs) and never two jest invocations concurrently. Local dev needs `OUTBOX_RELAY_POLL_MS` set for dispatch-driven flows.
+- Shipped: WMS-BE #75 (`0523148`), WMS-FE #60 (`1776c39`); design PR WMS-Meta #92.
 
 ## Spec Change Log
 
@@ -251,6 +255,31 @@ context:
 | 22 | medium | Blind GRNs (FR-27) missing | Blind-GRN figure added |
 | 23 | medium | Fact table ownership, RLS and the 404-before-tiles order implicit | Outbound owns; RLS hand-appended; warehouse check first |
 | 24 | low | The load check's harness and seeding were unspecified; FE states (no warehouse, health tile, a11y); 9-1b not in sprint-status | `loadtest-overview.ts`, reported; FE states listed; 9-1b registered |
+
+*Code review, 2026-10-06: three layers (blind, edge-case, verification-gap); 38 findings merged into 24, each verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | Sync health uses its own rules: it ignores `connectionHealth()` (half-open breaker, `lastError`, SLO lag, never synced), drops disconnected connections, and counts successful cancellations (`released`), `ignored` and policy refusals (`rejected`) as failures. A healthy channel reads Degraded, and a "prevented" oversell degrades its channel. | `kpis.ts:744-796`; `channels.view.ts:164`; `channels.ingest.command.ts` (`recordIngestOutcome`: refusals are decisions, not failures) | patch: reuse `connectionHealth`; disconnected = error; failures = only transport and processing failures; a test classifying every `INTEGRATION_CALL_STATUSES` member |
+| C2 | high | The pool is unprotected: concurrency 3 is per request, the deadline doesn't stop stragglers, and multi-statement tiles can hold a connection about 6 s, so a few concurrent viewers take all 10 connections | `reporting.facade.ts:26-178`; `db.ts:12` | patch: a process-wide semaphore (3 tile transactions in total); each statement's timeout = min(1500 ms, remaining deadline) |
+| C3 | high | The age-based stale banner never fires; nothing re-renders after load | `overview-dashboard.tsx:137` | patch: a timer re-renders at `asOf` + 5 min |
+| C4 | medium | Retries of one failed pack (same key, or a repeated sync apply) add rows, inflating SM-3 | `pack.command.ts` `recordPackFailure` | patch: dedupe on the idempotency key or sync op id (0058 isn't deployed) |
+| C5 | medium | A refused channel event later redelivered and accepted still counts as "prevented" | `recordBackorderRefusal` | patch: exclude refusals whose `(integration, external_event_id)` now has an order, in the tile and the drill |
+| C6 | medium | Timeline `orderId` in uppercase silently matches nothing; a non-boolean `shortPick` in any reference doc fails the read with a 500 | `inventory.facade.ts` filters | patch: compare as uuid; text comparison, no cast |
+| C7 | medium | The picklist-lines list pages on the mutable `updated_at`, so rows skip or repeat | `fact-lists.ts:234` | patch: keyset on `(created_at, id)`, window on `updated_at` |
+| C8 | medium | Test gaps: windows never discriminated (every row seeded "today"); no full-precision-cursor tie group; `shortPick=true` never returns a row; e-way `warehouseId` scoping untested; the inverted window tested on 2 of 10 routes; invoices 404 untested; FE failed-read and warehouse-switch states untested | `reporting.spec.ts`; `overview-dashboard.test.tsx` | patch: tests |
+| C9 | medium | The load check seeds only ledger, picks, GRN and putaway; the other tiles' tables are empty at volume | `scripts/loadtest-overview.ts` | patch: seed orders, picklist lines, alerts and invoices/e-way at volume; report per-tile timings |
+| C10 | low | Tiles don't say the big number is "Today (IST)"; "as of" is in local time | FE tile | patch: label |
+| C11 | low | The window DTO omits `lastHourFrom`/`last24hFrom`, which drills use | `ReportingWindowDto` | patch |
+| C12 | low | The controller casts `as unknown as` and re-implements the tenant/uuid guards inline | `reporting.controller.ts` | patch: typed mapping; shared helpers |
+| C13 | low | Links to screens that ignore the drill query (until 9-1b); three drills have no screen | `drill-routes.ts` | patch: drills with no screen get no link; the link text says "Open <screen>" |
+| C14 | low | Duplicate `IsBoolean` imports, import order, `void DAY_MS`, unchecked statuses in the load script | as cited | patch |
+| C15 | low | "Counting since" is the migration time, not the first write | 0058 | patch (doc): migrations and code ship in one release; noted in `reporting.md` |
+| C16 | medium | Ledger drill paging isn't served by the new index (sort on `created_at`); `orderId` has no expression index under tenant | timeline query | defer: PENDING (drill-page performance; tile reads unaffected) |
+| C17 | low | The SM-3 numerator mixes short lines and attempts with a dispatched-lines denominator | `kpis.ts` | rejected: it is the PRD formula (decision 5); documented in `reporting.md` |
+| C18 | low | `gatewayGenerated` reconciles only while no invoice is voided | `kpis.ts` | rejected: void is not built (PENDING tracks it) |
+| C19 | low | A sub-millisecond `from`/`to` compare | `instant-range.ts:88` | rejected: clients send ms instants; theoretical |
+| C20 | low | 0058's `IF NOT EXISTS` would accept an INVALID index left by a failed `CONCURRENTLY` | 0058 | rejected: the runbook drops the invalid index first (noted in PENDING) |
 
 ## Design Notes
 
