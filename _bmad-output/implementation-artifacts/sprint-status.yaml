@@ -355,7 +355,12 @@ development_status:
   epic-8-retrospective: done
 
   epic-9: in-progress
-  9-1-operational-dashboard: ready-for-dev
+  9-1-operational-dashboard: done
+  # Split out of 9-1 by decision 3 (2026-10-06, human): 9-1 ships every
+  # backend list filter, each tile's exact drill and tiles that link to their
+  # screens with the full drill query in the href; 9-1b is FE-only — the
+  # Ledger page and the existing screens reading those filters from the URL.
+  9-1b-dashboard-click-through: backlog
   9-2-notification-panel-and-pushes: backlog
   9-3-global-audit-trail-and-async-export: backlog
   epic-9-retrospective: optional

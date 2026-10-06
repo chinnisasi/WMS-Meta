@@ -202,7 +202,7 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 
 ### Reads
 
-`listEvents` :292 (keyset, newest first), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :430, `exportDigest` :453.
+`listEvents` :292 (keyset, newest first; **9-1** adds the dashboard drill filters — `types` (registry-validated at the DTO via `registeredLedgerEventTypes()`), `from`/`to` on the server-stamped `recorded_at`, `orderId` (`reference_doc ->> 'orderId'`), `shortPick` — served by 0058's `ledger_events (tenant_id, warehouse_id, type, recorded_at)` index, a plain build; see PENDING's reporting runbook), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :430, `exportDigest` :453.
 
 In-transaction reads for composing callers: `stockByBinsInTx` :706, `batchOnHandByBinsInTx` :791, `batchOnHandForBinInTx` :827, `binStateEpochInTx` :744, `binStateEpochsInTx` :760, `qcScopeOnHandInTx` :1047, `qcHeldArmsInTx` :1092, `serialsLocatedInBinInTx` :1132, `onHandInBinInTx` :1882 (every (sku, quantity>0) arm in one bin, ordered by SKU — 12-5's excursion sweep), plus the 12-6 by-ref ledger feeds the cold-chain read composes: `ledgerEventsByOrderRefInTx` (pick + dispatch events by `reference_doc->>'orderId'` — carries the `? 'orderId'` qual 0039's partial index needs; see the compliance gotcha), `ledgerEventsByScopeRefsInTx` (complete batch/serial histories by ref lists; empty lists short-circuit), `ledgerExcursionEventsBySkuInTx` (separate because the excursion arm carries no batch/serial).
 
