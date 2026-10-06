@@ -211,7 +211,7 @@ Creates the tenant + its Owner user + the idempotency row in one transaction.
 
 1. Normalize email (`trim().toLowerCase()`), hash the payload over `{name, ownerEmail}` — **never password material** `:68`.
 2. Replay lookup **by `key` alone** on `AUTH_DATABASE` `:74-84`. This is the one command with no tenant context, so the normal `(tenant_id, key)` predicate is impossible; a foreign key-holder fails the payload-hash comparison and 422s.
-3. `hashPassword` **after** the replay check `:86` — a replay must not pay the ~100 ms scrypt round.
+3. `normalizeGstin(gstin)` (8-1; prefix check 8-1d) behind the replay check, then `hashPassword` — a replay must not pay the ~100 ms scrypt round, nor be refused by a rule added after it committed. The optional `gstin` joins the hash in its lenient form (`normalizeGstinInput`, `?? null`).
 4. Insert `tenants` (with `tenantId = id`), then `users` with `role: 'owner'`; a `users_email_unique` violation → 409 `duplicate-email` `:107-114`.
 
 Writes: `tenants`, `users`, `idempotency_keys`. Emits `tenant.registered`.
@@ -231,9 +231,11 @@ Returns the token plus `user {id,email,role,status}`. The role in that body is *
 
 ### `WarehouseCommand.create` / `ZoneCommand.create`
 
-Guards in order: `warehouse.create` / `zone.create` → replay → (zone only) `assertWarehouseInTenant` → insert. Duplicate code → 409 `duplicate-warehouse-code` / `duplicate-zone-code` naming the code. Emits `warehouse.created` / `zone.created`.
+Guards in order: `warehouse.create` / `zone.create` → replay → (zone only) `assertWarehouseInTenant` → (warehouse only) `assertAddress(origin)` → `normalizeGstin(gstin)` → insert. Duplicate code → 409 `duplicate-warehouse-code` / `duplicate-zone-code` naming the code. Emits `warehouse.created` / `zone.created`.
 
 Note the ordering difference: `WarehouseCommand` has no parent assert; `ZoneCommand` runs its parent assert **after** the replay lookup (`zone.command.ts:97`).
+
+**The GSTIN gate — `normalizeGstin` (`tenancy.service.ts`).** Trim + uppercase (blank → absent), then refuse `400 validation-failed` on (1) a shape other than `GSTIN_RE` and (2) — **8-1d** — a two-digit prefix that is not a GST registration state code (`GSTIN_STATE_CODES`, `src/shared/primitives/gstin.ts`: `01–24, 26, 27, 29–38, 97`; never 25 (merged into 26), 28 (pre-GST AP) or 99 (Centre Jurisdiction)). It is **synchronous and DB-free on purpose**: registration runs it outside any transaction and seed/adapter paths call it too, so the code list is a pure constant pinned against `gst_state_codes` by `test/issuance-gate-parity.spec.ts`. Every caller runs it behind its replay lookup. The order create command applies the same predicate to `consigneeGstin`. Not validated anywhere: the PAN segment, the entity code and the checksum (PENDING). A warehouse GSTIN whose state differs from its origin state is **accepted** (the web warns; invoices warn `pos-discrepancy`). GSTINs are create-only.
 
 ### `BinCommand.createBin` (`bin.command.ts:201`)
 

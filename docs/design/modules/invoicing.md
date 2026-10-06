@@ -17,7 +17,7 @@ The module exists for two invariants. **Until it issues, an invoice is derived, 
 | `invoices` (`schema.ts:3753`) | One row per `(tenant_id, order_id)`: `status` (`awaiting-data \| issued \| voided`), `invoice_no` / `fy_label` / `series_seq` (null until first issuance), `origin_gstin`, `consignee_gstin`, `place_of_supply` (two-digit code), `supply_type` (`intra \| inter`), `subtotal_paise` / `gst_paise` / `total_paise` (exact), `payable_paise` / `round_off_paise` (8-1b, the stored rupee rounding), `revision`, `document` (jsonb), `issued_at` (8-2a, read model) | **`invoices_tenant_order_unique`**: the one-invoice rule, and the race arbiter. `invoices_tenant_gstin_invoice_no_unique` on `(tenant_id, origin_gstin, invoice_no) WHERE invoice_no IS NOT NULL` (8-1b; two GSTINs may share a number). CHECKs: `subtotal + gst = total`; (0054) `payable = total + round_off`, `round_off BETWEEN -49 AND 50`, `payable % 100 = 0`, `payable >= 0`, and `status <> 'issued' OR (invoice_no IS NOT NULL AND origin_gstin IS NOT NULL)` |
 | `invoice_lines` (`:3804`) | The computation's output for the current revision: SKU code/name/HSN snapshots, `uom` (8-2a, read model), `qty_milli`, `rate_paise`, `rate_source` (`order_line \| manual`), `taxable_paise`, `gst_bps`, `cgst/sgst/igst_paise`, `hsn_gap` | Rebuilt whole on every content change (delete then insert). It carries no identity of its own. `invoice_lines_invoice_order_line_unique` on `(invoice_id, order_line_id)` (0055) |
 | `invoice_series` (`:3842`) | One row per `(tenant_id, origin_gstin, fy_label)`, holding `last_seq` (8-1b) | `invoice_series_tenant_gstin_fy_unique`, **partial** `WHERE origin_gstin IS NOT NULL`; `last_seq` is advanced only under the row's `FOR UPDATE` lock. **The NULL invariant:** a NULL `origin_gstin` marks a legacy 8-1 per-tenant series (`FY-2627-000001` format) — kept as history, never allocated from again, never deleted. Every row this build writes has a GSTIN; issuance cannot happen without one (the issued CHECK above) |
-| `gst_state_codes` (`:3865`) | **Global** reference data: the CBIC state-code list, 38 rows (`26` = Dadra & Nagar Haveli and Daman & Diu, `37` = Andhra Pradesh, `38` = Ladakh, `97` = Other Territory, `99` = Other Country; `25` and `28` are absent) | Hand-seeded in 0053. **No RLS**: it is India-wide law, not tenant data (the `app_metadata` precedent). The count is pinned by `invoicing.spec.ts`'s seed proof, and the FE mirrors it in `GST_STATE_NAMES` |
+| `gst_state_codes` (`:3865`) | **Global** reference data: the CBIC state-code list, 38 rows (`26` = Dadra & Nagar Haveli and Daman & Diu, `37` = Andhra Pradesh, `38` = Ladakh, `97` = Other Territory, `99` = "Other Country" — **mislabelled**: 99 is Centre Jurisdiction and Other Country is 96, see PENDING; `25` and `28` are absent) | Hand-seeded in 0053. **No RLS**: it is India-wide law, not tenant data (the `app_metadata` precedent). The count is pinned by `invoicing.spec.ts`'s seed proof, and the FE mirrors it in `GST_STATE_NAMES`. **8-1d:** the registration codes a GSTIN prefix may carry are this table minus 99 — `GSTIN_STATE_CODES` (`src/shared/primitives/gstin.ts`), a pure constant pinned against the table by `issuance-gate-parity.spec.ts` |
 
 CHECKs, RLS and the seed live only in `drizzle/0053_invoicing_core.sql`, hand-amended; 8-1b's columns, CHECKs, index swaps and data rewrites are `drizzle/0054_invoice_regulatory_pass.sql` (hand-written, proven by `test/invoicing-migration.spec.ts` on a scratch database). 8-2a's two read-model columns are `drizzle/0055_hsn_summary_columns.sql` (see "The HSN summary" below). Policies follow the guide's shape (`invoices_tenant_isolation`, …), and **the `client-isolation` RLS count pin moved 64 → 67**.
 
@@ -28,9 +28,10 @@ CHECKs, RLS and the seed live only in `drizzle/0053_invoicing_core.sql`, hand-am
 | `tenants.gstin` | tenancy — registration (create-only) | the supplier GSTIN fallback |
 | `warehouses.gstin` | tenancy — warehouse create (create-only) | the supplier GSTIN, preferred |
 | `orders.consignee_gstin` | outbound — order create | the buyer's registration; its prefix is the place of supply |
+| `orders.consignee_legal_name` (8-1d) | outbound — order create | the buyer's legal / trade name; `buyer.name` when set, else the destination contact |
 | `order_lines.rate_paise` | outbound — order create | the rate **frozen at acceptance**; never written after create |
 
-All four GSTIN columns carry a shape CHECK (`^[0-9]{2}[A-Za-z0-9]{13}$`). The canonical form is uppercase, and every write path normalizes first (`src/shared/primitives/gstin.ts`).
+All four GSTIN columns carry a shape CHECK (`^[0-9]{2}[A-Za-z0-9]{13}$`). The canonical form is uppercase, and every write path normalizes first (`src/shared/primitives/gstin.ts`). Since 8-1d every write path also refuses a prefix outside `GSTIN_STATE_CODES` (400, behind the replay lookup); the columns' CHECKs do not (legacy rows stay as they are, and issuance warns on them).
 
 The module also writes `audit_events` and `idempotency_keys` (tenancy-owned, shared). `test/architecture.spec.ts` pins the ownership: no invoice-table write outside `invoicing/`, and no outbound or tenancy table write from inside it.
 
@@ -132,8 +133,9 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 
 `rate_source` is `order_line` when (1) applied, otherwise `manual`.
 
-**Place of supply.** `resolveStateCode` (`generator.ts:215`) handles both sides. A GSTIN's first two digits ARE the state code and outrank the address text. Text resolution (normalized: trim, lowercase, `&` → `and`, then the alias map `orissa`/`pondicherry`/`uttaranchal`) exists for GSTIN-less (B2C) parties.
-- A GSTIN/text mismatch is a `pos-discrepancy` **warning**, raised independently for each side; the GSTIN wins.
+**Place of supply.** `resolveStateCode` handles both sides. A GSTIN's first two digits ARE the state code and outrank the address text. Text resolution (normalized: trim, lowercase, `&` → `and`, then the alias map `orissa`/`pondicherry`/`uttaranchal`) exists for GSTIN-less (B2C) parties.
+- **8-1d:** the generator builds the prefix map from **registration codes only** (`isGstinStateCode` — the predicate entry refuses on), so a legacy `92…` or `99…` GSTIN does not resolve; the side falls back to its address text and warns `gstin-prefix-unknown`. Address text still resolves against all 38 rows. `resolveStateCode` gained two additive fields: `gstinKnown` (a GSTIN was given and its prefix resolved) and `textUnresolved` (non-blank text off the list); `eway-json.ts` calls it with `gstin = null` and is unaffected.
+- A GSTIN/text mismatch is a `pos-discrepancy` **warning**, raised independently for each side; the GSTIN wins. Its detail names the side ("dispatch-from" for the origin, "ship-to" for the destination) and the e-way consequence: NIC's actual states come from the address text, so the bill is blocked `ship-to-differs` — "if an e-way bill is required it will be blocked (ship-to-differs); generate it on the portal".
 - Origin GSTIN = warehouse GSTIN, else tenant GSTIN.
 - Supply type = `intra` when origin code = destination code, otherwise `inter`.
 
@@ -144,8 +146,20 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 | `unpriced-line` | blocking (parks `awaiting-data`) | line (carries `orderLineId`) |
 | `place-of-supply` | blocking | invoice (either side unresolvable) |
 | `supplier-gstin` | blocking | invoice (neither warehouse nor tenant has a GSTIN) |
-| `hsn-gap` | warning | line (carries `orderLineId`) |
-| `pos-discrepancy` | warning | invoice |
+| `hsn-gap` | warning | line (carries `orderLineId`) — the HSN is **null** |
+| `pos-discrepancy` | warning | invoice — per side, the detail names `ship-to-differs` |
+| `hsn-invalid` (8-1d) | warning | line (carries `orderLineId`) — non-null but, after `normalizeHsn`, blank or not 4/6/8 digits; exclusive with `hsn-gap` |
+| `gstin-prefix-unknown` (8-1d) | warning | invoice — a side's stored GSTIN prefix is not a registration code; the side resolved from its text (the origin detail names `ship-to-differs`) |
+| `state-text-unknown` (8-1d) | warning | invoice — a side's address state is off the list, or missing (no address, or a blank state); the side resolved from its GSTIN (the detail names `state-unresolved`, or `address-incomplete` without an address) |
+| `party-name-unprintable` (8-1d) | warning | invoice — the seller or buyer name has no character `nicText` keeps (seller first, then buyer), so the e-way bill blocks `address-incomplete` |
+
+**Gap order is pinned by tests** (`invoicing.spec.ts` compares ordered arrays): the party block first — `place-of-supply` (destination, origin), `supplier-gstin`, `pos-discrepancy` (origin, destination), then `gstin-prefix-unknown`, then `state-text-unknown` (each origin before destination), then `party-name-unprintable` (seller, buyer) — then the line loop, where `hsn-invalid` sits exactly where `hsn-gap` would. An unpriced line is skipped before its HSN is checked, so it carries no HSN gap. New warnings appear only on a side that RESOLVED; an unresolvable side is the blocking `place-of-supply`, whose detail names the case (no GSTIN, or a GSTIN whose prefix is not a state code). A new kind is appended to `GAP_KINDS` (the tuple's order is the OpenAPI enum's).
+
+**One HSN rule (8-1d, `hsn.ts`):** `normalizeHsn` trims **spaces only** (what SQL `btrim` strips — JS `trim()` would also strip tabs and NBSPs) and reads `''` as null; `isValidHsn` is `^[0-9]{4}([0-9]{2}){0,2}$` on the normalised value. The generator, the HSN summary (re-exported from `hsn-summary.ts`) and the e-way builder share it, so a padded `' 0910 '` is valid everywhere and `'HSN 0910'` is an issue everywhere.
+
+**The buyer (8-1d).** `buyer.name` = `consigneeLegalName ?? destination.contactName` — the legal entity on a B2B invoice, so NIC's `toTrdName` is it too. Without a legal name nothing changed.
+
+**Awaiting invoices pick up new warnings once.** `documentsEqual` compares gap details, so the first re-derive of an awaiting invoice after a deploy that adds or rewords warnings bumps its revision once; the next one is a no-op. Issued invoices are frozen and never change.
 
 `orderLineId` is structured (WMS-BE #70) so a client acts on gaps without parsing `detail` prose. The FE pricing panel offers exactly the `unpriced-line` ids.
 
@@ -203,13 +217,15 @@ sequenceDiagram
 
 **Aggregation.** SQL over `invoices ⨝ invoice_lines`: `status = 'issued'`, tenant, `origin_gstin = $gstin` (exact, no case folding), `issued_at` in range, grouped by B2B (`consignee_gstin IS NOT NULL`), `nullif(btrim(hsn), '')`, `uom`, `gst_bps`, with `sum(…)::bigint` → `Number()` + `isSafeInteger`. Then in TS: `uom → uqcFor → UQC`, and rows sharing (section, HSN, UQC, rate) merge in integers; a row records its `sourceUoms` and `mixedUnits` (only `OTH` can merge). Order: HSN ascending with issue rows last, then UQC, then rate. `invoiceCount` is `count(*)` over `invoices` (a lineless issued invoice counts).
 
-**HSN issues are kept.** Validity is `HSN_PATTERN = ^[0-9]{4}([0-9]{2}){0,2}$` on the SQL-normalized value `nullif(btrim(hsn), '')` (whitespace-only is a blank, i.e. null), ONE pattern used by the TS row check (no second JS trim) and the SQL issue-line filter. The summary's three reads run in one REPEATABLE READ transaction so rows, counts and issue lines share a snapshot; the `status = 'issued'` predicate is a literal so the partial index stays usable under a generic plan. An issue row stays in the totals (so they reconcile to the invoices), is listed line by line in `issueLines` with the SKU's current catalog HSN (a hint — the invoice is never rewritten), and the web leaves it out of the CSV.
+**HSN issues are kept.** Validity is `HSN_PATTERN = ^[0-9]{4}([0-9]{2}){0,2}$` on the SQL-normalized value `nullif(btrim(hsn), '')` (whitespace-only is a blank, i.e. null), ONE pattern used by the TS row check (no second JS trim) and the SQL issue-line filter. Since 8-1d the pattern, `normalizeHsn` (the JS twin of `nullif(btrim(…), '')`) and `isValidHsn` live in `hsn.ts` and are re-exported here. The summary's three reads run in one REPEATABLE READ transaction so rows, counts and issue lines share a snapshot; the `status = 'issued'` predicate is a literal so the partial index stays usable under a generic plan. An issue row stays in the totals (so they reconcile to the invoices), is listed line by line in `issueLines` with the SKU's current catalog HSN (a hint — the invoice is never rewritten), and the web leaves it out of the CSV.
+
+**Rate issues (8-1d).** A row whose `gstBps` is not on `GST_RATE_MASTER_BPS` {0, 10, 25, 100, 150, 300, 500, 600, 750, 1200, 1800, 2800, 4000} carries `rateIssue: true`: in the totals, left out of the CSV by the web, and added once to the on-screen shortfall (only when it is not already an `hsnIssue` row). The list is India Compliance's e-invoice (IRP) master; its equality with Table 12's rate dropdown is **assumed, not verified**. It differs from e-way's `NIC_RATE_BPS` on purpose (NIC's e-way table lacks 1.5 % and 7.5 %), and e-way's blockers are unchanged.
 
 **Exactness.** Every figure is the paise sum of frozen lines; nothing is rounded per row and the invoice round-off is never spread (Table 12's values are taxable + tax). The reconciliation test compares the totals to Σ `invoices.subtotal_paise` / Σ `gst_paise` read independently.
 
 **UoM → UQC (`uqc.ts`).** `UOM_TO_UQC: Record<Uom, Uqc>` covers all 35 units (a missing entry is a compile error; the suite also asserts completeness over the runtime tuple). No scaling ever: where no UQC means the same unit it maps to `OTH` (`case`, `pallet`, `crate`, `tin`, `jar`, `tray`, `sheet`, `bar`, `cylinder`, `keg`, `mm`); an unknown stored unit is `OTH` with `exact: false`. The UQC *descriptions* (`KGS-KILOGRAMS`) and the pinned CSV header live on the web (`wms-fe/src/lib/hsn-summary.ts`).
 
-**Not modelled** (PENDING): credit/debit-note netting, cess (always 0), HSN-master validation.
+**Not modelled** (PENDING): credit/debit-note netting, cess (always 0), HSN-master validation, the 6-digit AATO rule (stated on screen, not enforced).
 
 ---
 
@@ -332,6 +348,7 @@ Terminal means the invoice is frozen and nothing here can clear it — generate 
 - **The bus stops at the first throw, and `invoice.issued` will have two subscribers** (21-5). The handler ACKs malformed payloads, not-issued invoices and data faults; only transient faults rethrow.
 - **Never trust the payload beyond `invoiceId`.** The test delivers events carrying deliberately wrong `invoiceNo`/`originGstin`.
 - **`resolveStateCode` lets the GSTIN outrank the address text.** For the *actual* states pass `gstin = null`, or a bill-to/ship-to mismatch disappears.
+- **Issuance warns about what e-way will block (8-1d).** `hsn-invalid` ↔ `hsn-issue`, `state-text-unknown` ↔ `state-unresolved` / `address-incomplete`, `party-name-unprintable` ↔ `address-incomplete`, `pos-discrepancy` and an origin `gstin-prefix-unknown` ↔ `ship-to-differs` (a destination one says NIC may refuse the buyer GSTIN). Not yet warned: `rate-not-standard`, `unsupported-supply`, `too-many-lines` (PENDING). `nicText` lives in `src/shared/primitives/nic-text.ts` (re-exported by `eway-json.ts`) so outbound can apply it at entry. The warnings never block issuance; the blockers stay terminal on the frozen invoice.
 - **The 409 export refusal carries structured data.** `ProblemException` gained an `extensions` argument and the filter renders extension members (`bills`); clients read them, never the prose.
 - **Ids and GSTINs are canonicalised at the command:** export ids lowercased before the dedupe, sort and hash; the list's `gstin` filter and the settings PUT path uppercased.
 - **A failing claim-race test must release its barrier in a `finally`,** or the open request hangs the suite instead of failing it.
@@ -364,6 +381,8 @@ Consumers: the e-way queue (8-2b, first subscriber); 21-5 next. Audit: `invoice.
 - **An invoice issued with no supplier GSTIN.** The origin resolved from address text, so nothing blocked it. That is now the blocking `supplier-gstin` gap.
 - **Raw Postgres timestamps on the wire.** The views passed `timestamptz` text through, so the list's own `nextCursor` failed its cursor regex and page 2 answered 400. Views use `canonicalInstant`, and the cursor uses `fullPrecisionInstant(created_at::text)` (millisecond truncation skips same-millisecond rows).
 - **Nullable union ApiProperties need `type: String`** (the channels gotcha, again): `TenantResponse.gstin` / `WarehouseResponse.gstin` tripped the OpenAPI drift guard.
+- **A warning added after invoices exist bumps every awaiting invoice once** (8-1d) — `documentsEqual` includes gap details by design; pinned by the "re-derives ONCE" test. Issued invoices never move.
+- **Issue-time and downstream rules must be ONE rule.** 8-1 warned only on a null HSN while 8-2a/8-2b checked the shape, so a malformed HSN issued silently and was then blocked for good (epic-8 retro S1). Shared rules now live in one module (`hsn.ts`; `GSTIN_STATE_CODES` for prefixes); a new downstream check must start from the shared one.
 - **Gaps that name a line must carry its id structurally.** The first document shape put the unpriced line's id only in `detail` prose. The FE (which never parses prose) could not price anything, and a follow-up PR added `orderLineId`. When pinning a document shape, ask who acts on each field.
 - **A partial unique index needs its predicate in `ON CONFLICT`** (8-1b design review #1). Without `where: origin_gstin is not null` Postgres cannot infer the arbiter and every first issuance errors with "no unique or exclusion constraint matching". It is invisible until the first insert of a series row.
 - **A migration's NOT NULL / CHECK before its backfill fails only on a non-empty table** — CI's databases are empty, so it is invisible there. 0054 orders guard → pre-flight → nullable ADD → backfill → rewrite → SET NOT NULL → CHECKs, and `invoicing-migration.spec.ts` runs it over seeded 0053 rows.

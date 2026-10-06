@@ -160,6 +160,13 @@ Plus **an e2e test pinning the TS list against the DB constraint** (`orders.spec
 
 **Changing the representation of a hashed field is a cross-deploy break.** Idempotency payload hashes and `source_payload_hash` are computed over command fields; change a field's *units* or shape and no key written by the deployed build can replay — it answers `422`, or `order-source-conflict` for a channel redelivery. 10.2 did this across nine commands in five modules. Decide it explicitly, record it, and pin it.
 
+**Adding an optional field to a hashed payload: the conditional-key exception (8-1d).** The house convention is an always-present key (`destination: … ?? null`, `consigneeGstin`), and each one added that way was an accepted, pinned break — every in-flight key answered `422`, every channel redelivery `order-source-conflict`. For a field almost no request carries, that break buys nothing, so 8-1d's `consigneeLegalName` joins **both** order hashes (`payloadHash` and `sourcePayloadHash`) **only when present**: normalised first (JS trim, blank = absent), then spread in at a fixed position (right after `consigneeGstin`) as `...(name === null ? {} : { consigneeLegalName: name })`. A request without it hashes byte-for-byte as before. Rules if you reuse it:
+- normalise *before* deciding presence, so `''` and `'   '` hash as absent, never as a different key;
+- fix the key's position, so a request with it always hashes the same;
+- pin it with a **golden** test that writes the expected JSON out key by key (`test/issuance-gate-parity.spec.ts`), so an always-present key — the default instinct — fails loudly;
+- every refusal of the field (here: no GSTIN beside it, over 100 code points) stays behind the replay lookup, never in the DTO.
+Use the exception only for a genuinely optional field; a field that changes what the command *does* for every request still belongs in the always-present form.
+
 **Never retarget a test that failed because of your change.** First establish what it was pinning. 10.2 edited the repo's only cross-version replay guard to match the new convention, which destroyed its only purpose. If the old behaviour is genuinely gone, the test asserts the *new* expectation and says so — it is not quietly re-aimed.
 
 No `pgEnum` for new vocabularies — `userRoleEnum` exists but extending a Postgres enum needs `ALTER TYPE`, where a CHECK is dropped and re-added like everything else here.

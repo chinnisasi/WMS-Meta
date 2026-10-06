@@ -344,11 +344,11 @@ development_status:
   7-2-channel-order-ingestion-and-fulfillment-writeback: done
   epic-7-retrospective: done
 
-  epic-8: in-progress
+  epic-8: done
   8-1-gst-compliant-invoicing: done
   8-1b-invoice-regulatory-pass: done
   8-1c-web-gstin-and-price-inputs: done
-  8-1d-issuance-gate-parity: ready-for-dev
+  8-1d-issuance-gate-parity: done
   8-2a-hsn-summary: done
   8-2b-e-way-bills: done
   8-2-e-way-bills-and-hsn-summary: done
