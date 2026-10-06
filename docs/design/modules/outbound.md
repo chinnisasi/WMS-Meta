@@ -514,3 +514,13 @@ Each of these has actually cost something.
 - **`pick-unresolvable`'s `title` does not reach the wire.** `ProblemDetailsFilter` renders the wire `title` from the exception message, which `ProblemException` sets to the *detail*. So the distinct cause names (`'Hold expired…'`, `'Wave was cancelled'`, …) are in-process only today; the causes stay distinguishable through `detail`. Fixing the filter is repo-wide and was explicitly deferred (`pick.command.ts:1926-1937`).
 - **`cancelOrder` does not reset `order_lines.status`.** It zeroes `reserved_qty` and nulls `reservation_id` (`order.command.ts:647-650`) but leaves the line reading `open` or `backordered`. Whether that is intended is not stated anywhere in the module.
 - **A wholly-`unfulfillable` order packs to an empty parcel.** Its lines are settled (not `planned`) and not all `cancelled`, so completeness passes, an empty scan matches zero picked units, and the order flips to `ready_to_dispatch` with `totalUnits: 0` — then dispatches with nothing retired (its `held` holds having been swept by the pack dead-hold release). The code comments the all-`cancelled` case at length and say nothing about this one; treat it as unverified intent rather than a designed path.
+
+---
+
+## Client attribution (story 21-2b)
+
+**An order's client is derived from its SKUs, never chosen.** `createOrder`'s preflight reads each line SKU's and each kit component's `client_id` with the existence check (`assertSkuIdsInTenant` now returns `{uom, clientId}`), then — **after** the kit-component assertion and **after** the channel dedup pre-check (a redelivery re-serves its first order whatever its SKUs say today) — `assertSingleClientInTx` either yields the one client or refuses **409 `mixed-client`** naming the codes, before any grant moves. Phase 3 stamps the preflight's client on `orders.client_id`.
+
+- `OrderSnapshot.order.clientId`, `OrderEntry.clientId` and the DTOs carry it (optional/nullable on the snapshot — a replay stored pre-21-2b lacks it).
+- `orderInvoiceFactsInTx` carries `clientSystemOwned` (through `clients.facade.ts` `getClientsInTx`; a missing client row reads as NOT the tenant's own — fail closed). Invoicing skips client orders (`invoicing.md`).
+- Residual race (PENDING): the order path does not lock SKU rows, so a client correction committing between the preflight read and the write could leave the order on the SKU's old client. The correction itself only succeeds while the SKU has no order line.

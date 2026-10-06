@@ -2,8 +2,9 @@
 title: 'Client admin and attribution — create clients, SKUs carry their client, orders and POs inherit it'
 type: 'feature'
 created: '2026-10-06'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '0523148cecaa05931911833de98e8819b1e5bc34'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -147,14 +148,14 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0059_client_admin.sql` (+ journal, snapshot, schema.ts) -- guarded. The pre-flight **RAISEs**, listing every offender at once.
+- [x] `wms-be/drizzle/0059_client_admin.sql` (+ journal, snapshot, schema.ts) -- guarded. The pre-flight **RAISEs**, listing every offender at once.
   - Normalise existing non-system codes to uppercase.
   - CHECKs:
     - `code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$' OR system_owned` (`self` stays lowercase);
     - `code <> 'SELF' AND code <> 'self' OR system_owned`;
     - `char_length(btrim(name))` between 1 and 200.
   - Add `catalog_imports.client_id uuid NULL`, backfilled with each tenant's self client, then NOT NULL.
-- [ ] `wms-be/src/modules/clients/` -- the module:
+- [x] `wms-be/src/modules/clients/` -- the module:
   - **`clients.command.ts`:**
     - `create`: code trimmed and uppercased; a 23505 on `(tenant, code)` → 409 `duplicate-client-code`.
     - `rename`: `self` → 400; unknown → 404.
@@ -162,8 +163,8 @@ context:
   - **`clients.facade.ts`:** `listClients` (all clients, `system_owned` desc then code; bounded at 500, documented), `assertClientInTenantInTx`, and the bulk `getClientCodesInTx`.
   - A Nest module.
   - `permissions.ts` gains `clients.manage` (owner-only).
-- [ ] `wms-be/src/api/clients.controller.ts` + DTO -- `GET /tenants/{t}/clients` (member-open), `POST /tenants/{t}/clients`, `PATCH /tenants/{t}/clients/{clientId}`. Name is 1–200 characters.
-- [ ] `wms-be` catalog:
+- [x] `wms-be/src/api/clients.controller.ts` + DTO -- `GET /tenants/{t}/clients` (member-open), `POST /tenants/{t}/clients`, `PATCH /tenants/{t}/clients/{clientId}`. Name is 1–200 characters.
+- [x] `wms-be` catalog:
   - **Import:**
     - an optional multipart `clientId`, uuid-checked at the controller (400), with the 404 behind the replay lookup;
     - `client-required` (400) when there is more than one client and none is given;
@@ -176,15 +177,15 @@ context:
   - **Kit API:** components must share the kit's client. **SKU PATCH:** attaching to a product whose SKUs belong to another client → 409.
   - **New `POST /catalog/skus/{skuId}/client`** (`{clientId}`, owner, `clients.manage`): allowed only when the SKU has no ledger event, order line or PO line, else 409 `sku-has-history`; the check runs under a lock on the SKU row; audited `sku.client-corrected`.
   - `CatalogSkuIdentity` and `SkuResponse` gain `clientId`.
-- [ ] `wms-be` outbound and inbound:
+- [x] `wms-be` outbound and inbound:
   - Both `assertSkuIdsInTenant` return each SKU's client.
   - Order create derives the client and refuses `mixed-client` after the kit-component assertion and after the dedup pre-check.
   - PO create derives the client; amend refuses another client's line.
   - The order and PO snapshots and list rows gain `clientId`, optional and nullable, because replays of pre-21-2b snapshots lack it.
-- [ ] `wms-be` channels -- the ingest's `findSku` loop refuses mapped SKUs that span clients as `config-invalid` (422). `mapIngestRejection` maps `mixed-client` to `validation-failed`.
-- [ ] `wms-be` invoicing -- the delivery handler (and the manual generate command) skip an order whose client is not `system_owned`: they ack and log, with no invoice and no outbox event. The order invoice facts gain `clientSystemOwned`.
-- [ ] `wms-be/src/modules/inventory/ledger.service.ts` -- `appendMovement` reads the SKU's `client_id` by tenant and id, and throws an internal `Error` when the SKU is missing. Re-pin the architecture tests (`:873-875`), pin `clients.command.ts` as a client writer, and add a guard that only the correction command updates `skus.client_id`.
-- [ ] `wms-be` tests:
+- [x] `wms-be` channels -- the ingest's `findSku` loop refuses mapped SKUs that span clients as `config-invalid` (422). `mapIngestRejection` maps `mixed-client` to `validation-failed`.
+- [x] `wms-be` invoicing -- the delivery handler (and the manual generate command) skip an order whose client is not `system_owned`: they ack and log, with no invoice and no outbox event. The order invoice facts gain `clientSystemOwned`.
+- [x] `wms-be/src/modules/inventory/ledger.service.ts` -- `appendMovement` reads the SKU's `client_id` by tenant and id, and throws an internal `Error` when the SKU is missing. Re-pin the architecture tests (`:873-875`), pin `clients.command.ts` as a client writer, and add a guard that only the correction command updates `skus.client_id`.
+- [x] `wms-be` tests:
   - every matrix row, in a new `test/clients.spec.ts`;
   - a movement sweep across all ledger types;
   - the invoicing skip (an `ACME` order dispatched → no invoice, no e-way);
@@ -192,7 +193,7 @@ context:
   - an 0059 migration block (the pre-flight, uppercasing, CHECKs, the `catalog_imports` backfill);
   - `client-isolation.spec.ts`: correct the comment only.
   - Re-export `openapi.json`.
-- [ ] `wms-fe`:
+- [x] `wms-fe`:
   - **Data:** `useClients` (house loader) plus `CLIENTS_CHANGED_EVENT`; reason mappers in `src/lib/` (clients card, order create, import including `not-found`/`client-required`, kit and PATCH), tested.
   - **Settings:**
     - a `ClientsCard` (gated like `sku-table.tsx`) before Import: a list with status, plus create and rename for owners, and `self` shown as the tenant's own company;
@@ -206,7 +207,7 @@ context:
     - an owner "Correct client" action on SKUs with no history.
   - **Capabilities:** add `clients.manage` to `CAPABILITIES` and `OWNER_ONLY_CAPABILITIES`; the owner pin becomes 37.
   - Tests.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `clients.md`: the API and attribution rules; "every writer calls `ensureSelfClientInTx`" is no longer true; the stale cite fixed;
   - the catalog, outbound, inbound, inventory, invoicing and channels module notes;
   - `API-SURFACE.md` and both contracts;
@@ -225,6 +226,9 @@ context:
 - Given the full BE and FE suites, when run, then they pass.
 
 ## Implementation Notes
+
+- Baselines: wms-be `0523148cecaa05931911833de98e8819b1e5bc34` (frontmatter `baseline_commit`); wms-fe `1776c394ccb5ea614b754a85717ff0abd3163367`. Work happens on `feat/21-2b-client-admin-and-attribution` in both repos. Leave changes uncommitted; do not commit, push, or open PRs. In wms-be run jest via `bun run test -- <file>` (bare `bun test` hangs) and never two jest invocations concurrently. Meta doc edits go in /Users/sasidhar/Documents/WMS-Meta/docs (you may edit existing files there).
+- Shipped: WMS-BE #76 (`0edd61b`), WMS-FE #61 (`738984e`); design PR WMS-Meta #94.
 
 ## Spec Change Log
 
@@ -256,6 +260,32 @@ context:
 | 20 | low | The list filtered to active, with order and bound unstated | All statuses; ordered; bounded |
 | 21 | low | Code case vs warehouse codes; audit names | Uppercase (like warehouse codes), `self` exempt; actions named |
 | 22 | low | Discoverability (import hint, Settings copy, the "self" label) | Hint line; description; the label shows the tenant name |
+
+*Code review, 2026-10-06: three layers (blind, edge-case, verification-gap); 45 findings merged into 24, each verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | A wrong client on a kit or product family can never be corrected: moving one member is always refused (`mixed-client`) | `sku-client.command.ts:111-125` | patch: the correction moves the SKU **with its kit partners and product siblings** as one group when every member is history-free; the response lists every SKU moved |
+| C2 | high | The "history" check probes only ledger, order lines and PO lines (about 26 tables have `sku_id`); a mapped SKU can move and silently make its connection's mappings mixed-client | `skuHistoryInTx` | patch: history adds transfer lines, adjustment pendings, count lines, batches, serials, reservations and channel mappings (the refusal names the reason) |
+| C3 | medium | A correction races with a product attach or import product pass: the product row is not locked | `sku-client.command.ts` vs `sku.command.ts:690`, `import.command.ts:422` | patch: lock the product row before reading siblings |
+| C4 | medium | The channel mappings PUT accepts a mixed-client set; the failure only shows later as failed deliveries | channels mappings command | patch: refuse 409 `mixed-client` |
+| C5 | medium | A missing client row is reported as "client brand" and silently acked by the invoicing skip | `orderInvoiceFactsInTx` | patch: a missing row is a data fault (its own error, the failure path), not the skip |
+| C6 | medium | Client consignments leave above the e-way threshold with no e-way bill and no warning | invoice skip ⇒ no `invoice.issued` | patch (docs): PENDING records who generates the client consignment's e-way bill; noted in invoicing.md |
+| C7 | medium | The FE fix-mode lock uses this card's last run, but the server inherits from the tenant's latest run (another user or tab ⇒ a 400 with a locked wrong client) | `import-catalog.tsx` `lastRunClientId` | patch: send no `clientId` in fix mode and show the server's inherited client from the result |
+| C8 | medium | A channel redelivery of an already-accepted order is refused 422 if the mappings changed since | `channels.ingest.command.ts:1381-1392` | patch: skip the mixed-client pre-check when the event already has an order (replay) |
+| C9 | medium | The order command's 409 `mixed-client` (kit components) reaches the channel unmapped | `mapIngestRejection` | patch: map to the typed ingest refusal |
+| C10 | medium | The correction's audit keeps no before/after client | audit row | patch: record `from → to` in the audit reference |
+| C11 | medium | Test gaps: kit PUT replace; product-split correction; order-line-only history; channel kit `mixed-client` metering; import card submits `clientId`; 0059 no-self pre-flight; replay of a pre-21-2b snapshot | greps | patch: tests |
+| C12 | low | Per-row client-code lookups inside import loops | `getClientCodesInTx` in loops | patch: resolve once per run |
+| C13 | low | Refusal details print the raw `self` code; `client-order-not-invoiced` is unmapped in the FE `generateReason` | details, FE mappers | patch: details name `<tenant name> (your company)` for self; FE mapper |
+| C14 | low | Stale docs: SYSTEM-DESIGN :56; FE SYSTEM-DESIGN card count and stale-card list; no IMPLEMENTATION-GUIDE rule "derive the client via `assertSingleClientInTx`" | docs | patch |
+| C15 | low | FE double-submit (Create, Correct), whitespace-rename feedback, UTF-16 `maxLength` vs code points, clients-read failure without retry | FE components | patch |
+| C16 | low | No-op correction and no-op rename write audit rows | commands | patch: return without writing |
+| C17 | low | Contract nits: `CatalogImportResponse.clientId` typing; `ClientDto.status` type; the `permission-denied` copy | DTOs, FE | patch |
+| C18 | low | Order-form single-client filter untested at component level | `outbound-orders.tsx` | defer: the server 409 is tested |
+| C19 | low | Import or correction to a non-active client | statuses unreachable (no transitions) | rejected: no status change exists in this story |
+| C20 | low | More than 500 clients: list bound | documented bound | rejected: documented |
+| C21 | low | The correction is offered on every SKU (no history flag) | FE | rejected: the server decides; the refusal is shown |
 
 ## Design Notes
 

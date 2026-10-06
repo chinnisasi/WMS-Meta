@@ -352,3 +352,13 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 9. **An all-rejected GRN still records.** `settled.length === 0` skips only the line insert (`receiving.command.ts:495`); the header, the outbox event, and the idempotency key are still written. A caller that treats "no lines" as failure will mis-handle a stale-cache receipt.
 
 10. **`carriedFromPoId` has no FK and no cascade.** It is a bare uuid validated in-command; the `purchase_orders_tenant_carried_from_idx` index is what makes the chain walkable.
+
+---
+
+## Client attribution (story 21-2b)
+
+- **PO create derives its client from its lines' SKUs** (`assertSkuIdsInTenant` returns `{uom, clientId}`; `assertSingleClientInTx`) — lines spanning clients are **409 `mixed-client`** before any write. Replenishment's suggested-PO submit reuses `createInTx`, so it inherits the rule.
+- **PO amend never moves the PO's client:** a line set naming another client's SKU is 409 `mixed-client` (the PO's own code named first).
+- **The carried successor copies the original's `client_id`** (unchanged from 21-1).
+- `PurchaseOrderSnapshot.purchaseOrder.clientId`, `PurchaseOrderEntry.clientId` and `PurchaseOrderDto.clientId` carry it (optional/nullable on the DTO — a replay stored pre-21-2b lacks it).
+- GRNs and putaway carry no client column — their ledger events take the SKU's client at append (`inventory.md`).

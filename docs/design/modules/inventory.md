@@ -582,3 +582,13 @@ These have all caused, or were caught one review short of causing, a real defect
 18. **The write-side refusals sit BELOW the threshold branch.** `assertAdjustableInTx` checks identity, arms and shape — but the ledger fold's `insufficient-on-hand`, serial-elsewhere and the HU write-off 409 all run in `applyAdjustmentInTx`, below the branch. So an over-threshold draw beyond on-hand **pends (202)** where the same at-threshold request gets the fold's 422 — pinned by a boundary test. The decision re-runs the write-side refusals; their rollback leaves the row pending (rollback-leaves-pending). Comments or specs claiming "only an adjustment that would have applied can pend" are wrong about this half — only the command-tier guards answer before the pend. `inventory.command.ts` threshold-branch comment.
 
 19. **Keyset cursors encode the FULL-precision instant, not `canonicalInstant`'s.** Postgres holds timestamptz to microseconds while `canonicalInstant` truncates to ms via JS `Date` — and rows appended in ONE transaction share one `now()` to the microsecond (a multi-serial adjustment appends its per-serial events in a single transaction), so a ms-truncated cursor's strict `<` predicate skipped the whole tail of the tie group on the next page. The ledger-timeline and pending-queue reads select the raw `::text` instant in a second pass and encode cursors from `fullPrecisionInstant` (`src/shared/primitives/time.ts`); responses still surface the ms-canonical instant. A regression back to canonical cursors is silent until a tie group spans a page boundary.
+
+---
+
+## Client attribution on the ledger (story 21-2b)
+
+`appendMovement` (`ledger.service.ts`) stamps `ledger_events.client_id` with **the SKU's `client_id`**, read by tenant + id in the append's own transaction — replacing 21-1's `ensureSelfClientInTx` stamp, which attributed every movement to the tenant. A missing SKU row throws a loud internal `Error` (`… no client to attribute the <type> event to`) and **never falls back to `self`**: a silent fallback would bill a client's movements to the tenant. Every registered event type is swept by `test/clients.spec.ts`.
+
+- `event_hash` still excludes `client_id` — an ACME event recomputes to its stored hash and `verifyChain` passes.
+- `test/architecture.spec.ts` re-pins this: the ledger must read `skus.clientId` and must not call `ensureSelfClientInTx`.
+- Reconcile and rebuild do not touch `client_id`; no `client_id` index yet (21-4).

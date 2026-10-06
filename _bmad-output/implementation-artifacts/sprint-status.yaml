@@ -214,7 +214,7 @@ development_status:
   21-2-client-isolation-rls: done
   # Found while starting 21-3 (2026-10-06, human): nothing could create a client or
   # attribute goods to one; 21-2b lands client admin + attribution before billing.
-  21-2b-client-admin-and-attribution: ready-for-dev
+  21-2b-client-admin-and-attribution: done
   21-3-rate-cards: backlog
   21-4-metering-and-storage-snapshots: backlog
   21-5-client-invoices: backlog

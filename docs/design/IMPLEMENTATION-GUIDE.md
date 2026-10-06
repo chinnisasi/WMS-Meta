@@ -245,6 +245,10 @@ This is not a precedent. A new read model that wants the same freedom takes its 
 
 ---
 
+## 7b. Client attribution (story 21-2b)
+
+**Documents and ledger rows derive their client from their SKUs — never stamp `self`.** The SKU is the source of truth for ownership (AD-23). A writer of `orders`, `purchase_orders`, `ledger_events` (or any future client-scoped document — an ASN, a client invoice) reads its SKUs' `client_id` and calls `assertSingleClientInTx(tx, tenantId, clientIds, subject)` (`modules/clients/clients.facade.ts`), which returns the one client or refuses **409 `mixed-client`** naming the clients. `ensureSelfClientInTx` is for registration and the single-client import default only; a writer that reaches for it attributes a client's goods to the tenant, silently. The ledger append reads the SKU row and throws on a missing one — it never falls back. A refusal that names a client prints the tenant's own as "<tenant name> (your company)" (`getClientLabelsInTx`), never the internal `self` code. Details: `modules/clients.md`.
+
 ## 8. Before you say it's done
 
 ```bash

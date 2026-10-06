@@ -85,7 +85,7 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 **No location column, by design** — a serial's location is derived from its latest `ledger_events` row via the `(tenant_id, serial_ref, seq)` index. The ledger is the only source of serial location and history.
 
 ### `catalog_imports`
-`mode` text NOT NULL (`initial \| fix`) · `committed_rows` / `failed_rows` / `skipped_rows` integer NOT NULL — **counts, not quantities**, deliberately unscaled.
+`mode` text NOT NULL (`initial \| fix`) · `committed_rows` / `failed_rows` / `skipped_rows` integer NOT NULL — **counts, not quantities**, deliberately unscaled · `client_id` uuid NOT NULL (21-2b, 0059 — the client the run imported for; backfilled to `self`).
 
 ### `catalog_import_errors`
 `import_id` · `row_number` integer NOT NULL · `sku_code` text **nullable** (null when the row failed before a code could be read) · `reason_code` NOT NULL · `reason_detail` NOT NULL.
@@ -335,6 +335,8 @@ Because each run's failures form the next run's fix set, repeated fix rounds com
 
 A fix upload is a full file, not a delta — the operator re-submits the corrected spreadsheet.
 
+**21-2b: a fix run inherits the latest run's client** (`catalog_imports.client_id`). Omitting `clientId` inherits it; naming the same client is fine; naming a different one is 400 `validation-failed`. This is what stops a corrected row landing under a different client than its first attempt (decision 3).
+
 ### Row error reporting
 
 `rowNumber` is the **1-based data-row index with the header excluded**, and it is renumbered in `finalizeRows` (`:639-653`) after blank rows are dropped — so it is gap-free and identical between CSV and XLSX, even though CSV's `skip_empty_lines` already compresses blanks while XLSX rows carry sheet-row gaps.
@@ -469,3 +471,17 @@ Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the 
 **`getSkuSummariesInTx` derives `uomPrecision` in process, never from a table** (`catalog.facade.ts:191-194`). There is no per-SKU precision to select. Adding a lookup read there is the nested-pool shape described above.
 
 **`assertComponentsAreNotKits` probes only the command's component ids, never the kit itself** (11.4). Its first draft probed the whole `componentById` map, which carries the KIT SKU alongside the components — and on PUT the kit is by definition already a kit, so every edit answered 409 `kit-component-is-kit` and no kit could ever be edited. The guard now passes `componentIds` (the command's own list) to `getKitSkuIdsInTx`. The general shape: a "these must not have property X" guard must be fed the list it is guarding, not a map that happens to include the subject of the command.
+
+---
+
+## Client attribution (story 21-2b)
+
+A SKU's client is **set at creation** by the import and is the source of truth every SKU-referencing row inherits (`clients.md`).
+
+- **Import names its client** — optional multipart `clientId` (DTO `@IsUUID` → 400 above the transaction; unknown/foreign → 404 behind the replay lookup). Once the tenant holds more than one client, an import without it is **400 `client-required`** — there is no default to mis-attribute to; with one client the run is `self`'s. `self` may be named explicitly. The response carries `clientId`. The CSV format is unchanged.
+- **Fingerprint:** `clientId` joins `hashCommandPayload({fileSha256, mode, …})` only when present (after `mode`) — an import without it hashes as before (golden test, `test/clients.spec.ts`).
+- **`duplicate-sku-code` names the owner client** — codes and barcodes stay unique across the tenant (decision 2), so the clash may be another client's SKU.
+- **Product pass:** a row attaching this run's client to a product whose existing variants belong to another client fails per row `mixed-client`. **Kit pass:** an existing component of another client fails the kit row `mixed-client`.
+- **Kit API** (`assertKitSharesOneClient`, against the locked rows) and **SKU PATCH attach** (siblings under the product lock) refuse 409 `mixed-client`.
+- **`POST /catalog/skus/{skuId}/client`** — `SkuClientCommand.correct` (`sku-client.command.ts`), owner-only `clients.manage`. A kit and a product never span clients, so the correction moves the SKU's **group** — the closure over kit partners and product siblings — as one: client exists (404) → SKU exists (404) → product row(s) `.for('update')` (product before SKU, the attach PATCH's order) → the group's SKU rows `.for('update')` in id order → the group re-read under the locks (changed → 409 `conflict`, retry) → already on that client → return, write nothing → **every member history-free** (ledger events, order/PO/transfer lines, pending adjustments, count task lines, batches, serials, reservations, channel mappings — else 409 `sku-has-history` naming the member and what it carries) → update each → one audit row per SKU (`sku.client-corrected`, reference `from <client> → to <client> (key …)` — `audit_events` has no payload column) → key LAST. Response `{skus}`, the named SKU first. The ONLY writer of `skus.client_id` after creation (architecture guard).
+- `SkuResponse` and `CatalogSkuIdentity` carry `clientId` (optional/nullable on the response: an edit replay stored pre-21-2b lacks it).
