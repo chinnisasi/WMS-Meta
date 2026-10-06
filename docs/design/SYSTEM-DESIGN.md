@@ -53,7 +53,7 @@ HTTP → Controller (api shell)  ── thin: auth guard, tenant match, DTO vali
 
 ## Modules (AD-6)
 
-Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.** The 3PL client dimension (Epic 21, story 21-1) adds the fourteenth: `clients`, whose table is written by the other stamping modules only through `ensureSelfClientInTx`.
+Thirteen modules, each owning its tables exclusively. **Siblings communicate only through a facade or an event — never by touching another module's tables.** The 3PL client dimension (Epic 21, story 21-1) adds the fourteenth: `clients`. Its table is written only inside the module — registration reaches it through `ensureSelfClientInTx`, and since 21-2b the owner's admin commands create and rename clients. The other modules never write it: they **read** it through `clients.facade.ts`, and documents and ledger rows **derive** their `client_id` from their SKUs (`assertSingleClientInTx`) rather than stamping `self` (`modules/clients.md`).
 
 `test/architecture.spec.ts` scans source for writes and past-the-facade imports, but **it covers four module table-sets, not fourteen**: stock/ledger, order/wave/pick, carrier, and (21-1) clients — plus one `int4` guard, and (9-1) the reporting block: reporting writes nothing and only the api shell imports it. **`tenancy`, `catalog`, `inbound` and `putaway` table ownership is unenforced**, and `bins` — the one table deliberately shared by column between tenancy and putaway — is the least-guarded case of all. Adding a module block when you add a module is the standing rule; four modules predate it.
 

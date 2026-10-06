@@ -390,3 +390,16 @@ Consumers: the e-way queue (8-2b, first subscriber); 21-5 next. Audit: `invoice.
 - **Count pins move with this module**: capabilities 33 → 34 (`users.spec.ts`, FE `users.test.ts`), RLS policies 64 → 67 (`client-isolation.spec.ts`); 8-2b: capabilities 34 → 36, RLS 67 → 70.
 - **A route literal beside a `:param` route must be declared first** (8-2a). Express matches in declaration order, so `GET /invoices/hsn-summary` declared after `GET /invoices/:invoiceId` would answer `400 invoiceId must be a uuid`. The controller declares it first and `invoicing-hsn.spec.ts` pins both the behaviour and the method order.
 - **FE: keep `DataTable` mounted while a page loads.** Swapping it for a loading line on every page change remounts it onto page one, so Prev never enables. Likewise, a success banner rendered inside a subtree that remounts after the save vanishes on arrival; lift it above the remount, keyed to its invoice.
+
+---
+
+## Client orders are not invoiced (story 21-2b, decision 5)
+
+A 3PL holds a brand's goods; the brand sells them and invoices its own customer, while the 3PL bills the brand for services (21-5, SAC codes). So **only an order whose client is the tenant's own (`system_owned`) gets a tax invoice.**
+
+- `OrderInvoiceFacts.clientSystemOwned` (outbound's facts read). The generator's `generateCoreInTx` throws `ClientOrderNotInvoicedError` — 409 `client-order-not-invoiced` — right after the dispatched-status check, before anything is computed or written.
+- **The `order.dispatched` delivery handler acks it with a log line** (not the data-fault arm): no invoice row, no `invoice.issued`, therefore **no e-way bill** — and the channel writeback still runs after it.
+- **The manual `POST /invoices`** answers the 409.
+- **A missing client row is not the skip:** `clientSystemOwned` is `null` and the generator throws 409 `order-client-missing` — a data fault the delivery handler logs at error and acks (fix the data, then `POST /invoices`).
+- Invoicing on a client's behalf is PENDING; 21-5's client invoices are a separate code path.
+- **Compliance gap (PENDING):** with no invoice there is no `invoice.issued`, so **no e-way bill** is queued for a client consignment — even above the threshold. Who generates it (the brand, or the 3PL on the brand's GSTIN) is open.

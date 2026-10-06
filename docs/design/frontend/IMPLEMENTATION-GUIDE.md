@@ -264,7 +264,7 @@ const role = useSyncExternalStore(
 
 The reason is written at four call sites (`outbound.tsx:64-65`, `over-receipt-queue.tsx:67-68`, `inbound-cards.tsx:287-288`, `sku-table.tsx:59-63`): the `/me` bootstrap rewrites the role after mount, and an unsubscribed read never re-renders the affordances.
 
-**Five Settings cards do not yet do this.** `zone-bin-setup.tsx:117`, `devices-card.tsx:48`, `users-card.tsx:66`, `import-catalog.tsx:56` and `warehouse-create-form.tsx:58` subscribe only to session *presence* (`() => readSession() !== null`) and then read `readSession()?.user.role` at render. A role change that the `/me` bootstrap writes back does not change presence, so those affordances do not re-render until something else does. `sku-table.tsx` is the corrected sibling in the same directory — copy that one.
+**Four Settings cards do not yet do this.** `zone-bin-setup.tsx:117`, `devices-card.tsx:48`, `users-card.tsx:66` and `warehouse-create-form.tsx:58` subscribe (`import-catalog.tsx` was converted in 21-2b; `clients-card.tsx` was written subscribed) only to session *presence* (`() => readSession() !== null`) and then read `readSession()?.user.role` at render. A role change that the `/me` bootstrap writes back does not change presence, so those affordances do not re-render until something else does. `sku-table.tsx` is the corrected sibling in the same directory — copy that one.
 
 ### The known crash
 
