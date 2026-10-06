@@ -215,7 +215,7 @@ development_status:
   # Found while starting 21-3 (2026-10-06, human): nothing could create a client or
   # attribute goods to one; 21-2b lands client admin + attribution before billing.
   21-2b-client-admin-and-attribution: done
-  21-3-rate-cards: backlog
+  21-3-rate-cards: ready-for-dev
   21-4-metering-and-storage-snapshots: backlog
   21-5-client-invoices: backlog
   21-6-advance-shipment-notices: backlog
