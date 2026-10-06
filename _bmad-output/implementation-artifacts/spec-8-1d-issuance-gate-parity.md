@@ -2,8 +2,9 @@
 title: 'Issuance-gate parity — validate GST data at entry, warn at issue, buyer legal name'
 type: 'feature'
 created: '2026-10-05'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'f0423a325fca021a30b2989d9388647eb45cf42b'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-8-context.md'
@@ -116,21 +117,21 @@ All of them issue silently. Because issued invoices are frozen, they then stay f
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/src/shared/primitives/gstin.ts` + test -- add `GSTIN_STATE_CODES`, `isGstinStateCode`, and the truthful comment (shape + state prefix; PAN and checksum not validated). The test pins the constant equal to `gst_state_codes` minus `99`, read from the DB in an e2e suite.
-- [ ] `wms-be` tenancy `normalizeGstin` + `order.command.ts:377` -- refuse a bad prefix with 400 `validation-failed` ("`92` is not a GST registration state code"), behind the replay lookup.
-- [ ] `wms-be/drizzle/0057_order_consignee_legal_name.sql` (+ journal, snapshot, schema.ts) -- `orders.consignee_legal_name text NULL` with a CHECK: NULL, or `char_length(...)` between 1 and 100 and `consignee_gstin IS NOT NULL`. Guarded like 0056; no backfill.
-- [ ] `wms-be/src/modules/outbound/*` -- `consigneeLegalName` on the order. Normalised (JS trim; blank = absent) before hashing. It joins **both** hashes as a conditional spread after `consigneeGstin`. Refused, behind the replay lookup, when there is no GSTIN or when it exceeds 100 code points (`[...s].length`). It is persisted and added to `OrderInvoiceFacts`. Record the conditional-key hash exception in `IMPLEMENTATION-GUIDE.md`.
-- [ ] `wms-be/src/modules/invoicing/hsn.ts` -- `normalizeHsn` + `isValidHsn`, re-exported from `hsn-summary.ts` and used by `eway-json.ts`.
-- [ ] `wms-be/src/modules/invoicing/generator.ts`:
+- [x] `wms-be/src/shared/primitives/gstin.ts` + test -- add `GSTIN_STATE_CODES`, `isGstinStateCode`, and the truthful comment (shape + state prefix; PAN and checksum not validated). The test pins the constant equal to `gst_state_codes` minus `99`, read from the DB in an e2e suite.
+- [x] `wms-be` tenancy `normalizeGstin` + `order.command.ts:377` -- refuse a bad prefix with 400 `validation-failed` ("`92` is not a GST registration state code"), behind the replay lookup.
+- [x] `wms-be/drizzle/0057_order_consignee_legal_name.sql` (+ journal, snapshot, schema.ts) -- `orders.consignee_legal_name text NULL` with a CHECK: NULL, or `char_length(...)` between 1 and 100 and `consignee_gstin IS NOT NULL`. Guarded like 0056; no backfill.
+- [x] `wms-be/src/modules/outbound/*` -- `consigneeLegalName` on the order. Normalised (JS trim; blank = absent) before hashing. It joins **both** hashes as a conditional spread after `consigneeGstin`. Refused, behind the replay lookup, when there is no GSTIN or when it exceeds 100 code points (`[...s].length`). It is persisted and added to `OrderInvoiceFacts`. Record the conditional-key hash exception in `IMPLEMENTATION-GUIDE.md`.
+- [x] `wms-be/src/modules/invoicing/hsn.ts` -- `normalizeHsn` + `isValidHsn`, re-exported from `hsn-summary.ts` and used by `eway-json.ts`.
+- [x] `wms-be/src/modules/invoicing/generator.ts`:
   - Add the non-blocking kinds `hsn-invalid`, `state-text-unknown` and `gstin-prefix-unknown`, and update the doc comment.
   - Filter `codeByGstinPrefix` by `isGstinStateCode`.
   - Add the `resolveStateCode` fields; emit the gaps in the order above.
   - Write the `place-of-supply` detail per case.
   - Write the `pos-discrepancy` detail per side: origin "dispatch-from", destination "ship-to", plus "— if an e-way bill is required it will be blocked (`ship-to-differs`); generate it on the portal". `state-text-unknown` gets the matching e-way note (`state-unresolved`).
   - `buyer.name` = `consigneeLegalName ?? contactName`.
-- [ ] `wms-be/src/modules/invoicing/hsn-summary.ts` + DTO + route description -- add `GST_RATE_MASTER_BPS` {0, 10, 25, 100, 150, 300, 500, 600, 750, 1200, 1800, 2800, 4000} (comment: e-invoice master via India Compliance; Table 12 equality unverified) and a `rateIssue` flag per row. Re-export `openapi.json`.
-- [ ] `wms-be` tests -- every matrix row, plus golden hashes (`payloadHash` and `sourcePayloadHash`) for a body without the legal name, and an 0057 migration block.
-- [ ] `wms-fe`:
+- [x] `wms-be/src/modules/invoicing/hsn-summary.ts` + DTO + route description -- add `GST_RATE_MASTER_BPS` {0, 10, 25, 100, 150, 300, 500, 600, 750, 1200, 1800, 2800, 4000} (comment: e-invoice master via India Compliance; Table 12 equality unverified) and a `rateIssue` flag per row. Re-export `openapi.json`.
+- [x] `wms-be` tests -- every matrix row, plus golden hashes (`payloadHash` and `sourcePayloadHash`) for a body without the legal name, and an 0057 migration block.
+- [x] `wms-fe`:
   - **Prefix check and state list:**
     - `lib/gst-states.ts`: `GST_STATE_NAMES` (moved) and `GSTIN_STATE_CODES`, mirrored and pinned by a test.
     - `lib/gstin.ts`: the prefix check ("not a GST state code") and the comment truth.
@@ -156,7 +157,7 @@ All of them issue silently. Because issued invoices are frozen, they then stay f
     - tests use fake timers.
   - **E-way hint:** `blockerHint(blocker, canConfigure)`. When false, the hint says "ask an owner to turn the flag off". Update both call sites.
   - **Tests** for each.
-- [ ] Meta docs -- `invoicing.md`, `outbound.md`, `tenancy.md`, `IMPLEMENTATION-GUIDE.md` (the hash exception), `API-SURFACE.md`, and both contracts. `PENDING.md`:
+- [x] Meta docs -- `invoicing.md`, `outbound.md`, `tenancy.md`, `IMPLEMENTATION-GUIDE.md` (the hash exception), `API-SURFACE.md`, and both contracts. `PENDING.md`:
   - close "Issuance is looser…", keeping residuals for unverified GSTIN anatomy/checksum and the 6-digit AATO and HSN-master rules;
   - update the dispatch-from row;
   - add "`gst_state_codes` labels 99 'Other Country' (99 is Centre Jurisdiction; Other Country is 96)", affecting POS and e-way.
@@ -167,6 +168,9 @@ All of them issue silently. Because issued invoices are frozen, they then stay f
 - Given the full BE and FE suites, when run, then they pass.
 
 ## Implementation Notes
+
+- Baselines: wms-be `f0423a325fca021a30b2989d9388647eb45cf42b` (frontmatter `baseline_commit`); wms-fe `698a23798a80fe8721c29e8aa32ac95396377eb3`. Work happens on `feat/8-1d-issuance-gate-parity` in both repos. Leave changes uncommitted; do not commit, push, or open PRs. In wms-be run jest via `bun run test -- <file>` (bare `bun test` hangs) and never two jest invocations concurrently. The India Compliance source copies cited in the Code Map are in `/private/tmp/claude-502/-Users-sasidhar-Documents-WMS-Meta/cce72c77-089a-4cee-bfc4-8a5a14be09e3/scratchpad/` (`const_init.py`, `transaction_data.py`).
+- Shipped: WMS-BE #74 (`049ace4`), WMS-FE #59 (`1344c16`); design PR WMS-Meta #89.
 
 ## Spec Change Log
 
@@ -196,6 +200,29 @@ All of them issue silently. Because issued invoices are frozen, they then stay f
 | 18 | low | Legal-name length units ambiguous | 100 code points after JS trim, in the command |
 | 19 | low | FE tests and import direction (`gstin.ts` → `invoices.ts`) | `setSelect`; `lib/gst-states.ts` |
 | 20 | low | Shortfall could double-count; stale doc comments | `rateIssue && !hsnIssue`; comments in the Code Map; AATO 6-digit rule in PENDING |
+
+*Code review, 2026-10-06: three layers (blind, edge-case, verification-gap); 24 findings merged into 18, each verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | A legal name with no Latin letters or digits (e.g. Devanagari) is stripped to `""` by `nicText`, so the frozen invoice gets a permanent e-way `address-incomplete` block. This is the class of defect the story exists to close. | `eway-json.ts:208-211`; order command accepts any Unicode | patch: refuse at order create when `nicText(name, 100)` is empty; warn at issue when the printed buyer name is NIC-empty |
+| C2 | medium | Control characters (U+0000 and the rest) in the legal name pass `trim()`; NUL fails the insert with a 500 | `normalizeConsigneeLegalName` | patch: refuse control characters (400) |
+| C3 | medium | A side that resolves from its GSTIN but has a null address or a blank state issues silently, then e-way blocks (`state-unresolved`/`address-incomplete`) | `resolveStateCode` blank arm; `actualStateOf` | patch: `state-text-unknown` also fires for a null address or blank state on a GSTIN-resolved side |
+| C4 | medium | Gap details print on the customer's tax invoice, and 8-1d adds internal advice to them | `invoices.tsx:332` (`data-print-root`), `:438` | patch: gaps hidden in print |
+| C5 | medium | The web warehouse warning misses the main case: no warehouse GSTIN, tenant GSTIN in another state | `gstinStateMismatch(gstin, origin.state)` only | patch: compare against the session tenant GSTIN when the warehouse GSTIN is blank |
+| C6 | low | The order form has no GSTIN-vs-destination state warning | form | patch: same inline helper |
+| C7 | low | FE error text says `"99" (Other Country)`, the mislabel the story documents | `lib/gstin.ts` + test | patch: name the code only |
+| C8 | low | `maxLength` counts UTF-16 units before trim, so the client cap is not the backend's | `outbound-orders.tsx` | patch: drop `maxLength`, check code points after trim in the parser |
+| C9 | low | The 0057 CHECK lets a whitespace-only or padded name through at the storage layer | 0057 | patch: `char_length(btrim(...)) BETWEEN 1 AND 100` (not yet deployed) |
+| C10 | low | The destination `gstin-prefix-unknown` detail omits that NIC may refuse that `toGstin` | generator detail | patch: one clause |
+| C11 | medium | Test gaps: no registration replay arm for "prefix behind the replay lookup"; the per-case `place-of-supply` detail branches are never run (GSTIN with an unknown prefix and off-list text) | `issuance-gate-parity.spec.ts`; `invoicing.spec.ts` | patch: tests |
+| C12 | low | No way to read back the create-only legal name before issue | design (#7 dropped view exposure) | patch (docs): PENDING row |
+| C13 | low | Issue time is still silent on other terminal e-way blockers (`rate-not-standard`, `unsupported-supply`, `too-many-lines`) and the generator has no rate-master warning | `eway-json.ts` blockers | patch (docs): PENDING row; out of the human-decided scope |
+| C14 | low | A legacy 99/25 GSTIN with off-list state text now parks `awaiting-data` on re-derive (previously resolved to 99) | prefix-map filter | accepted: by design (review #3). Place of supply is genuinely unknown, and the detail names the GSTIN cause |
+| C15 | low | The AC's "e-way export `toTrdName`" is unreachable for that order (the HSN blocker refuses export); the test uses the builder | `eway.spec.ts:916-934` | accepted: the builder is the one source of the export file; the AC wording is noted |
+| C16 | low | Allowed characters (`'`, `()`) are silently stripped in the e-way file | `nicText` | rejected: NIC's charset; cosmetic |
+| C17 | low | The bills debounce stops at about 10 s; a slow relay stays stale | `use-eway.ts` | rejected: the Refresh button exists |
+| C18 | low | PENDING cites S1–S5, S7 without S6 | docs | rejected: S6 is its own PENDING row (odd paisa) |
 
 ## Design Notes
 
