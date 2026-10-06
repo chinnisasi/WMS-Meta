@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-05-2026 09:01
+last_updated: 10-06-2026 07:50
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -958,14 +958,14 @@ action_items:
       flag non-NIC rates in the HSN CSV; optional buyer legal name used as toTrdName
       (S1-S5, S7)"
     owner: "epic-8 patch story (BE then FE)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
   - id: "epic-8-retro-item-80-fe-e-way-follow-up-stop-refetching-setti"
     epic: 8
     action: "FE e-way follow-up: stop refetching settings lists on INVOICES_CHANGED_EVENT,
       delay or drop the bills refetch; role-aware needs-irn hint (S8-S9)"
     owner: "the A1 FE PR"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
   - id: "epic-8-retro-item-81-doc-spec-reconciliation-in-the-retro-pr"
     epic: 8
@@ -975,7 +975,7 @@ action_items:
       close stale PENDING:117/:118; refresh deferred-work GSTIN_RE rationale; gstin.ts
       comment truth; 8-2a matrix typo"
     owner: "retro PR (immediate)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
   - id: "epic-8-retro-item-82-manual-format-checks-before-real-filings"
     epic: 8
@@ -1007,5 +1007,5 @@ action_items:
     action: "Dev runbook: local .env sets OUTBOX_RELAY_POLL_MS=2000; dispatch-driven
       flows stall silently without it"
     owner: "Claude (immediate)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
