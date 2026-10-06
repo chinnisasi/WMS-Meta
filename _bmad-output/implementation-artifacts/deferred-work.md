@@ -609,3 +609,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md`
   summary: The GSTIN_RE FE↔BE drift guard is still missing, and the earlier deferral's rationale ("8-2's regulatory pass will change the backend regex") no longer holds — 8-1b and 8-2 left both regexes unchanged (BE `shared/primitives/gstin.ts`, FE `lib/gstin.ts`).
   evidence: Verified at the epic-8 retro (R6). Folded into retro action A5 (one FE↔BE constants drift guard) and A1 (GSTIN state-prefix validation changes both files together).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-1-operational-dashboard.md`
+  summary: 9-1b dashboard click-through (frontend only) — the Ledger page at /inventory (URL-driven filters by event type, date range, reference doc and shortPick, with views for pack-verification failures and reservation refusals) and URL filters on /replenishment (alert kind/status), /outbound (order status), /conflicts (queue incl. over-receipts) and /channels.
+  evidence: Split from 9-1 at the human's request (2026-10-06) to halve the review surface; 9-1 ships every backend list filter and drill definition, so 9-1b is frontend-only and needs no backend or migration change.
