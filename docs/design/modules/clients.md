@@ -35,6 +35,7 @@ Commands: `ClientsCommand.create` / `.rename` (`src/modules/clients/clients.comm
 - `clients.facade.ts` — the read seam, file-level `…InTx` functions on the caller's transaction (the `ensureReceivingBinInTx` shape) plus the injectable `ClientsFacade.listClients`:
   - `assertClientInTenantInTx` → 404 `not-found`
   - `getClientsInTx` (bulk `{id, code, systemOwned}`), `getClientLabelsInTx` (bulk id → refusal label: a client's code, the tenant's own as "<tenant name> (your company)" — never `self`), `listClientsInTx`
+  - `lockClientInTx` (21-3) — the client row `FOR UPDATE` plus its status, 404 when absent: billing's rate-card activate/cancel serialise every dated transition of one client on it (a lock, never a write); `getClientStatusInTx` is the unlocked read the draft create uses
   - `assertSingleClientInTx(tx, tenant, clientIds, subject)` — **the one attribution rule**: one distinct client or 409 `mixed-client` naming the codes (`mixedClient()`)
 
 ## Attribution (story 21-2b) — derived, never chosen

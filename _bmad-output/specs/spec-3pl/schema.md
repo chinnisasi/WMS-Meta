@@ -39,18 +39,25 @@ created_at, updated_at
 ```
 rate_cards
   id, tenant_id, client_id not null
-  effective_from   timestamptz not null
-  effective_to     timestamptz            -- null = open-ended
-  status           text not null          -- 'draft' | 'active' | 'superseded'
+  status           text not null          -- 'draft' | 'active' | 'superseded' | 'cancelled'
+  effective_from   timestamptz            -- an IST midnight; NULL exactly for drafts
+  effective_to     timestamptz            -- set exactly when superseded (the successor's effective_from)
+  created_by, created_at, updated_at
+  activated_by, activated_at              -- null exactly for drafts
+  cancelled_by, cancelled_at              -- set exactly when cancelled
 
 rate_card_lines
-  id, tenant_id, rate_card_id not null
+  id, tenant_id, client_id not null, rate_card_id not null    -- client stamped for the AD-24 clause
   charge_code      text not null          -- closed vocabulary, see billing-model.md
-  basis            text not null          -- 'per_unit_per_day' | 'per_receipt_line' | 'per_pick' | 'per_order'
-  amount_paise     bigint not null        -- integer paise, AD-9
+  basis            text not null          -- 'per_thousand_units_per_day' | 'per_receipt_line' | 'per_pick' | 'per_order'
+  amount_paise     bigint not null        -- integer paise per unit of basis, GST-exclusive, 0..10,000,000
+  unique (rate_card_id, charge_code)
 ```
-- **Versioned by effective date, never edited in place.** A rate change writes a new card and closes the old one, so an issued invoice stays reproducible (CAP-4).
-- `charge_code` and `basis` are closed vocabularies enforced by CHECK — the same TS-tuple-plus-migration-CHECK pattern the repo uses for its other ten enums.
+- **Versioned by effective date, never edited in place.** A rate change activates a new card, which closes the old one from its own date, so an issued invoice stays reproducible (CAP-4). A non-draft card and its lines are **frozen by database triggers**; only the three transitions (supersede, cancel, reopen-on-cancel) change one. *(Amended by story 21-3: drafts carry no date; `cancelled` added — a card whose date has not arrived can be withdrawn, reopening its predecessor.)*
+- **Effective dates are IST midnights**, stored as the instant they begin (lookups are by an event's instant). A client's first card may start today (IST); a replacement starts tomorrow at the earliest, so no past hour is repriced.
+- **Each charge on exactly one basis** (a pair CHECK), any subset per card: no line = not billed, ₹0 = billed at zero. **Storage is priced per 1,000 SKU base units per day** in whole paise *(story 21-3 decision 1 — the old `per_unit_per_day` would have needed fractions of a paisa)*.
+- `charge_code` and `basis` are closed vocabularies enforced by CHECK — the same TS-tuple-plus-migration-CHECK pattern the repo uses for its other enums.
+- Partial unique: one `active` card with no `effective_to` per client. RLS carries the AD-24 client clause on both tables.
 
 ### `storage_snapshots`
 
@@ -72,10 +79,11 @@ client_invoices
   status           text not null     -- 'draft' | 'issued' | 'disputed' | 'settled' | 'void'
   issued_at        timestamptz
   subtotal_paise, tax_paise, total_paise   bigint not null
-  rate_card_id     uuid not null     -- the card in force, recorded not referenced live
 
 client_invoice_lines
   id, tenant_id, invoice_id not null
+  rate_card_id     uuid not null     -- the card that priced THIS line, recorded not referenced live
+  segment_from, segment_to   timestamptz not null   -- the stretch of the period that card covered
   charge_code      text not null
   basis            text not null
   quantity         bigint not null   -- events counted, or unit-days
@@ -83,7 +91,7 @@ client_invoice_lines
   sac_code         text              -- SERVICES, not HSN: a 3PL bills a service
 ```
 - **Immutable once issued** (CAP-7): the status CHECK permits no transition out of `issued` except to `disputed`, `settled` or `void`, and no edit of amounts after `issued_at` is set. A correction is a new document.
-- `rate_card_id` is **recorded on the invoice**, so re-rendering it later uses the card that actually applied.
+- `rate_card_id` is **recorded on each invoice line**, so re-rendering it later uses the card that actually applied. *(Amended by story 21-3, decision 5: a card may take effect on any date, so a period can span two cards — a mid-period rate change **splits the line**, one line per card segment. `BillingFacade`'s `rateCardSegmentsInTx(client, from, to)` returns exactly those segments, clipped and ordered.)*
 
 ### `advance_shipment_notices` / `asn_lines`
 

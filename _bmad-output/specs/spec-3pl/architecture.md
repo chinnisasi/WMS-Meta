@@ -71,7 +71,7 @@ billing   — rate cards, metering, storage snapshots, invoices. Owns its own ta
 inbound   — gains the ASN document beside the PO (same module, same GRN flow).
 ```
 
-`billing` must not write inventory tables, and `architecture.spec.ts` gets the same ownership block every other module has.
+`billing` must not write inventory tables, and `architecture.spec.ts` gets the same ownership block every other module has. *(Built in story 21-3: `billing` owns `rate_cards` / `rate_card_lines`; the block pins that only billing writes them, that billing writes no stock, ledger, client, SKU or order table and reaches the client entity only through `clients.facade.ts`, and that siblings import only its facade.)*
 
 ## Sequencing
 

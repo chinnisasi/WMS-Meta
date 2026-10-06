@@ -2,8 +2,9 @@
 title: 'Rate cards — versioned per-client prices with closed charge and basis vocabularies'
 type: 'feature'
 created: '2026-10-06'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '0edd61bea3689eee0420c78ad32aded37f884858'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -124,14 +125,14 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0060_rate_cards.sql` (+ journal, snapshot, schema.ts) -- guarded; RLS with the AD-24 client clause; no FKs.
+- [x] `wms-be/drizzle/0060_rate_cards.sql` (+ journal, snapshot, schema.ts) -- guarded; RLS with the AD-24 client clause; no FKs.
   - **`rate_cards`:** `id`, `tenant_id`, `client_id`, `status`, `effective_from` (null only for drafts), `effective_to`, `created_by`, `created_at`, `updated_at`, `activated_by`, `activated_at`, `cancelled_by`, `cancelled_at`.
     - CHECKs: the status vocabulary; IST midnight for both dates; `effective_to > effective_from`; draft ⇔ `effective_from` and `activated_at` null; superseded ⇔ `effective_to` set; cancelled ⇔ `cancelled_at` set.
     - A partial unique index: one open card (`status = 'active' AND effective_to IS NULL`) per `(tenant_id, client_id)`.
     - An index on `(tenant_id, client_id, effective_from)`.
   - **`rate_card_lines`:** `id`, `tenant_id`, `client_id`, `rate_card_id`, `charge_code`, `basis`, `amount_paise`, with CHECKs for the vocabularies, the pairs and the range, plus `UNIQUE (rate_card_id, charge_code)`.
   - **The triggers above**, with exact transition predicates. Every column except `status`, `effective_to`, the cancel stamps and `updated_at` must be `IS NOT DISTINCT FROM` its old value.
-- [ ] `wms-be/src/modules/billing/` -- the module:
+- [x] `wms-be/src/modules/billing/` -- the module:
   - `rate-cards.ts`: the vocabularies, the pair map, and the counting unit of each basis, stated for 21-4:
     - storage: the daily on-hand base milli-units ÷ 1,000,000;
     - receipt line: distinct GRN lines received, excluding over-receipt approval re-emits;
@@ -144,8 +145,8 @@ context:
     - A 23505 on the open-card index → 409.
   - `billing.facade.ts`: `listRateCards`, `getRateCard`, `rateCardInForceInTx(tx, t, client, instant)`, and **`rateCardSegmentsInTx(tx, t, client, from, to)`**, which returns `[{card, lines, from, to}]` clipped and ordered.
   - A Nest module.
-- [ ] `wms-be/src/modules/tenancy/permissions.ts` -- `rates.manage` for the owner and accountant. Update the accountant comment and the `users.spec.ts` pins (38 capabilities; accountant `['eway.manage','rates.manage']`), with a note on why 8-1's rationale is reversed.
-- [ ] `wms-be/src/api/rate-cards.controller.ts` + DTO -- re-export `openapi.json`. Dates are `YYYY-MM-DD`, checked in the DTO for shape and a real calendar date only.
+- [x] `wms-be/src/modules/tenancy/permissions.ts` -- `rates.manage` for the owner and accountant. Update the accountant comment and the `users.spec.ts` pins (38 capabilities; accountant `['eway.manage','rates.manage']`), with a note on why 8-1's rationale is reversed.
+- [x] `wms-be/src/api/rate-cards.controller.ts` + DTO -- re-export `openapi.json`. Dates are `YYYY-MM-DD`, checked in the DTO for shape and a real calendar date only.
   - `GET /tenants/{t}/clients/{c}/rate-cards`: drafts first, then `effective_from DESC`.
   - `POST /tenants/{t}/clients/{c}/rate-cards`.
   - `GET /tenants/{t}/rate-cards/{id}`.
@@ -155,7 +156,7 @@ context:
   - `DELETE /tenants/{t}/rate-cards/{id}`: drafts only; 204, and a repeat → 404.
   - `GET /tenants/{t}/clients/{c}/rate-cards/in-force?at=`: `at` is an optional UTC `Z` instant (default now); returns `{rateCard: RateCardDto | null, asOf}`.
   - Any unknown or foreign card or client → 404.
-- [ ] `wms-be/test/rate-cards.spec.ts` -- every matrix row, plus:
+- [x] `wms-be/test/rate-cards.spec.ts` -- every matrix row, plus:
   - the vocabulary pins and every charge × basis combination;
   - every trigger arm, via direct SQL;
   - the IST boundaries;
@@ -164,7 +165,7 @@ context:
   - the segments read;
   - RLS: the tenant policy and the client probe additions;
   - the 0060 migration block.
-- [ ] `wms-fe`:
+- [x] `wms-fe`:
   - **A `RateCardsCard` in Settings, after Clients:**
     - pick a non-`self` client;
     - its cards, with a state derived from the dates (Draft / Scheduled / In force / Ended / Cancelled). The "In force" highlight comes from the in-force endpoint, not the browser clock;
@@ -179,7 +180,7 @@ context:
   - **Plumbing:** `useRateCards` plus `RATE_CARDS_CHANGED_EVENT`; mappers for every code.
   - **The capability mirror:** an explicit ops-excluded set containing the owner-only capabilities plus `rates.manage`; the accountant pin moves.
   - Tests.
-- [ ] Meta docs:
+- [x] Meta docs:
   - a new `modules/billing.md`: the lifecycle and transitions, the in-force and segments contract, immutability, the basis counting units, and the rounding owner (21-4);
   - amend `_bmad-output/specs/spec-3pl/schema.md` and `billing-model.md` (the card per invoice line; the event names; per-1,000-unit storage);
   - `API-SURFACE.md`, the `SYSTEM-DESIGN.md` module map (billing), and both contracts;
@@ -190,6 +191,9 @@ context:
 - Given the full BE and FE suites, when run, then they pass.
 
 ## Implementation Notes
+
+- Baselines: wms-be `0edd61bea3689eee0420c78ad32aded37f884858` (frontmatter `baseline_commit`); wms-fe `738984e0232f51703aa5a330c7def7384bd667b9`. Work happens on `feat/21-3-rate-cards` in both repos. Leave changes uncommitted; do not commit, push, or open PRs. In wms-be run jest via `bun run test -- <file>` (bare `bun test` hangs) and never two jest invocations concurrently. Meta doc edits go in /Users/sasidhar/Documents/WMS-Meta (docs/ and _bmad-output/specs/spec-3pl/; you may edit existing files there).
+- Shipped: WMS-BE #77 (`2b5a459`), WMS-FE #62 (`91a3769`); design PR WMS-Meta #96.
 
 ## Spec Change Log
 
@@ -221,6 +225,25 @@ context:
 | 20 | low | The pair CHECK has no pin model | An every-combination insert test |
 | 21 | low | The amount cap vs 21-4's 2⁵³ arithmetic | Cap ₹1 lakh; 21-4 owns the BigInt/rounding (`billing.md`) |
 | 22 | low | Wire shapes and hash inputs; FE `parseRupees`, cap, IST minimum; the mirror; minimums, multiple drafts, activation ordering | All specified; minimums in Never/PENDING; multiple drafts allowed |
+
+*Code review, 2026-10-06: three layers (blind, edge-case, verification-gap); 26 findings merged into 19, each verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | A scheduled card already superseded by a later one (B 12-01 replaced by C 01-01) can't be cancelled, contrary to decision 3 ("a card whose date has not arrived can be cancelled") | `cancel` requires `status = 'active'` | patch: cancel any non-draft, non-cancelled card with `effective_from > now`; its predecessor's `effective_to` becomes the cancelled card's `effective_to` (null ⇒ reopens `active`); the trigger permits that one transition |
+| C2 | high | A client-scoped (portal) session may write its own rate cards under the copied 0041 `WITH CHECK` | `0060` RLS; `client-isolation.spec` asserts it | patch: the client clause is read-only (writes refused when `app.client_id` is set); the probe updated (0060 is not deployed) |
+| C3 | high | The `…InTx` facade reads return `[]`/`null` for an unknown or foreign client (a silent "not billed"); in-force doesn't normalise its instant | `billing.facade.ts:1051-1069` | patch: both assert the client in the tenant (404) and parse the instant to UTC |
+| C4 | medium | The FE next-change summary skips a superseded-but-not-started card | `rate-cards.ts:4793` | patch |
+| C5 | medium | Cancel copy assumes an in-force predecessor (a first card ⇒ nothing billed; a scheduled predecessor ⇒ not "in force") | FE copy | patch: wording by case |
+| C6 | medium | Siblings can read the raw tables past the facade (`rate-cards.ts` re-exports them) | the architecture allow-list | patch: stop re-exporting; add a raw-read guard |
+| C7 | medium | The 500-row list bound can push dated cards out behind drafts | `rate-card.command.ts:1404-1423` | patch: dated cards unbounded; drafts capped separately |
+| C8 | medium | Test gaps: segments after a cancel; activate after the client is suspended; FE Edit/Discard and refetch; cancelling a first card; the superseded-scheduled chain; cancel replayed after midnight; races (activate vs cancel; activate vs replaceDraftLines) | greps | patch: tests |
+| C9 | low | FE error copy: `idempotency-key-reuse` and `conflict` mislead | FE mappers | patch |
+| C10 | low | The activation date minimum uses the browser clock although `asOf` is loaded | FE | patch: derive from `asOf` |
+| C11 | low | Deleting a draft by direct SQL leaves orphan lines that the line trigger then refuses to delete | 0060 | patch: refuse a card delete while lines exist |
+| C12 | low | Docs: SYSTEM-DESIGN inconsistencies; IMPLEMENTATION-GUIDE lacks the new patterns (command clock; fail-closed parent triggers under RLS; primitives with module-typed wrappers); the draft-side client-status check is unserialised | docs | patch (docs, PENDING) |
+| C13 | low | The tomorrow rule applies whenever any card exists, even if it is only scheduled | the frozen rule says "≥ tomorrow otherwise" | rejected: implements the frozen rule as written |
+| C14 | low | A non-string `chargeCode` from a non-HTTP caller crashes the sort | `normalizeLines` | rejected: every caller goes through the validated DTO |
 
 ## Design Notes
 
