@@ -1,6 +1,6 @@
 # Billing module
 
-> What a 3PL charges each client brand, and from when (FR-77, CAP-4), and how much each one used (FR-78, CAP-5, CAP-6). Story 21-3 stands the module up with **rate cards**; story 21-4 adds **metering** and the **daily storage snapshots**; client invoices (21-5) join it. Billing is a projection over the ledger (AD-25): it reads, prices and records — it **writes no stock**.
+> What a 3PL charges each client brand, and from when (FR-77, CAP-4), and how much each one used (FR-78, CAP-5, CAP-6). Story 21-3 stands the module up with **rate cards**; story 21-4 adds **metering** and the **daily storage snapshots**; story 21-5 adds **client invoices** — a monthly services (SAC) GST tax invoice per client brand and supplying GSTIN, frozen at issue. Billing is a projection over the ledger (AD-25): it reads, prices and records — it **writes no stock**.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton, the migration checklist and the vocabulary pattern are assumed here, not repeated. The client entity is [`clients.md`](clients.md).
 
@@ -14,13 +14,18 @@ Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-
 | `rate_card_lines` | One priced charge: `charge_code`, `basis`, `amount_paise`, stamped with the card's `tenant_id` + `client_id` | `charge_code` ∈ `storage \| inbound_handling \| pick \| outbound_handling`; `basis` ∈ `per_thousand_units_per_day \| per_receipt_line \| per_pick \| per_order`; the **pair** CHECK (each charge on exactly one basis); `amount_paise` 0..10,000,000 (₹1 lakh), GST-exclusive; `UNIQUE (rate_card_id, charge_code)` |
 
 | `storage_snapshots` (21-4) | One client brand's closing stock in one warehouse on one IST day, per SKU base UoM: `snapshot_date`, `uom`, `on_hand_milli` | `on_hand_milli > 0` (a zero day has no row — the watermark says it was measured); `UNIQUE (tenant_id, client_id, warehouse_id, snapshot_date, uom)`. Written once by the job, never rewritten by it (the rebuild script is the only other writer). `drizzle/0061_storage_snapshots.sql` |
+| `client_invoices` (21-5) | One invoice of one client brand for one IST calendar month under one supplying GSTIN: `status`, `supplier_gstin` (the group key), `place_of_supply` / `supply_type`, the number (`invoice_no`, `fy_label`, `series_seq`), the totals (`subtotal`, `cgst`, `sgst`, `igst`, `tax`, `total`, `round_off`, `payable` paise), `gaps` / `warnings` / `party` (jsonb), `content_hash`, `replaces_invoice_id`, the issue and status stamps, `status_note` | `drizzle/0062_client_invoices.sql`. `status` ∈ `draft \| issued \| disputed \| settled \| void`; the period is the 1st to the month's last day; the 0054-style totals CHECKs (`subtotal + tax = total`, `cgst + sgst + igst = tax`, `payable = total + round_off`, `payable % 100 = 0`, `round_off ∈ [−49, 50]`); draft ⇔ no number ⇔ never issued; a non-draft row carries no gap; dispute/void carry a note. **Partial unique `client_invoices_one_live_per_group`** on `(tenant, client, period_start, coalesce(supplier_gstin, ''))` WHERE `status <> 'void'`; unique `(tenant, supplier_gstin, invoice_no)` |
+| `client_invoice_lines` (21-5) | One metered `(segment, charge, uom)` with quantity > 0 — unique `client_invoice_lines_invoice_segment_charge_uom_unique (invoice_id, segment_from, charge_code, coalesce(uom, ''))`: `rate_card_id`, `segment_from/to` (IST midnights), `charge_code`, `basis`, `uom`, `quantity` (bigint — milli-unit-days for storage, a count otherwise), `unit_amount_paise`, `amount_paise` (taxable), `sac_code`, `gst_bps`, `place_of_supply`, `supply_type`, `cgst/sgst/igst_paise` | The charge/basis pair CHECK; `(basis = per_thousand_units_per_day) = (uom IS NOT NULL)`; priced together and only by a card (rate, unit and amount null on a draft only); the tax split follows the supply type; SAC is six digits |
+| `client_invoice_series` (21-5) | `(tenant, supplier_gstin, fy_label)` → `last_seq` — the services series, never interleaved with invoicing's goods `invoice_series` | full unique on the triple; advanced only under the row's `FOR UPDATE` |
 | `storage_snapshot_progress` (21-4) | One row per (client, warehouse) scope: `last_day` (the watermark), `running` (jsonb uom → milli at the end of `last_day`), `drift_checked_on` (the IST day the drift check last ran) | `PK (tenant_id, client_id, warehouse_id)`; born only when the scope's first day is written under the commit guarantee; `last_day` only moves forward (`GREATEST` in the upsert). Indexes for metering: `storage_snapshots (tenant_id, client_id, snapshot_date)` and `ledger_events (tenant_id, client_id, type, recorded_at)` |
 
 Vocabularies: `src/modules/billing/rate-cards.ts` (`RATE_CARD_STATUSES`, `CHARGE_CODES`, `RATE_BASES`, `CHARGE_BASIS`, `BASIS_COUNTING_UNIT`), pinned against the CHECKs by `test/rate-cards.spec.ts`, which also inserts **every** charge × basis combination (4 admitted, 12 refused).
 
-RLS: **read-scoped, write operator-only.** Each table has a `FOR SELECT` policy with the AD-24 client clause (a portal session reads only its own client's cards and lines) and `FOR INSERT` / `FOR UPDATE` / `FOR DELETE` policies that require `app.client_id` to be **unset** — a client never edits its own price list, not even its own rows (split per command because a `FOR ALL` WITH CHECK does not cover DELETE). A portal session's card INSERT is refused `42501`; its line INSERT is refused by the freeze trigger first (`P0001` — the parent lookup cannot see the card); its UPDATE/DELETE bind zero rows. Pinned in `test/client-isolation.spec.ts` (`STAMPED_TABLES`, `READ_ONLY_CLIENT_TABLES`, policy count 80 → **88** with 0061, whose two tables carry exactly the same four-policy shape). No FKs.
+RLS: **read-scoped, write operator-only.** Each rate-card and snapshot table has a `FOR SELECT` policy with the AD-24 client clause (a portal session reads only its own client's cards and lines) and `FOR INSERT` / `FOR UPDATE` / `FOR DELETE` policies that require `app.client_id` to be **unset** — a client never edits its own price list, not even its own rows (split per command because a `FOR ALL` WITH CHECK does not cover DELETE). A portal session's card INSERT is refused `42501`; its line INSERT is refused by the freeze trigger first (`P0001` — the parent lookup cannot see the card); its UPDATE/DELETE bind zero rows. Pinned in `test/client-isolation.spec.ts` (`STAMPED_TABLES`, `READ_ONLY_CLIENT_TABLES`, policy count 80 → **88** with 0061, whose two tables carry exactly the same four-policy shape). No FKs.
 
-`test/architecture.spec.ts` pins: only `src/modules/billing` writes (or even names) the four tables; billing writes no stock, ledger, client, SKU or order table and reaches the client entity only through `clients.facade.ts`; nobody outside the api shell imports billing past `billing.facade` / `billing.module` / `rate-cards`; and (21-4) **billing never names `ledgerEvents`, `picks` or `goodsReceipt*`, nor reads `ledger_events` / `picks` / `goods_receipt_*` in raw SQL** — every count is a facade read on the module that owns the table.
+**Client invoices (0062)** follow the same four-policy shape with two differences: `client_invoices`' read clause is `client_id = app.client_id AND status <> 'draft'` — a portal session never sees a draft — and `client_invoice_lines` has no client column, so its read clause is an `EXISTS` on the parent (which runs under the parent's own policy: a line is visible exactly when its invoice is). `client_invoice_series` has one tenant policy that also requires `app.client_id` unset. Policy count 88 → **97**.
+
+`test/architecture.spec.ts` pins: only `src/modules/billing` writes (or even names) the seven tables; billing writes no stock, ledger, client, SKU or order table and reaches the client entity only through `clients.facade.ts`; nobody outside the api shell imports billing past `billing.facade` / `billing.module` / `rate-cards`; and (21-4) **billing never names `ledgerEvents`, `picks` or `goodsReceipt*`, nor reads `ledger_events` / `picks` / `goods_receipt_*` in raw SQL** — every count is a facade read on the module that owns the table.
 
 ## The lifecycle
 
@@ -223,9 +228,110 @@ Rows are written **once** (`ON CONFLICT DO NOTHING`) and the job never rewrites 
 | `countReceiptLinesInTx(tx, scope, from, to)` | inbound | GRN lines (`receiptLinesPredicate`) |
 | `countPicksInTx(tx, scope, from, to)` | outbound | picks rows (`picksPredicate`) |
 
+## Client invoices (story 21-5)
+
+`client-invoices.ts` — `ClientInvoiceService` (the commands and the reads) and the pure `computeClientInvoiceDraft`. A 3PL bills each client brand monthly for storage and handling with a **services tax invoice** (SAC, not HSN): one per (client, IST calendar month, **supplying GSTIN**), numbered in its own series, frozen at issue. Mutations need **`billing.invoice`** (owner + accountant — and it also gates the client tax-details write); reads are member-open, and a client-portal session is refused 403.
+
+### The groups (decision 2)
+
+Every tenant warehouse goes into exactly one group keyed by `warehouses.gstin ?? tenants.gstin` (a null key is one group that cannot issue — `supplier-gstin-missing`). Each group is metered over **all of its warehouses** with 21-4's `meterPeriodInTx(…, {warehouseIds})`: the storage scopes and sum, and the three count predicates take the list (`shared/db/warehouse-filter.ts` — `and <column> = any($ids::uuid[])`, absent = the 21-4 SQL byte for byte). The order count's "no earlier dispatch" probe stays tenant-wide, so an order is still attributed to its first dispatch. **The sum over a partition of the warehouses equals the unfiltered meter, charge by charge** (pinned in `test/client-invoices.spec.ts`). The narrowed read's own `storageCompleteThrough` (the minimum over the group's scopes) is **not** what the gap reads — see `storage-not-complete` below.
+
+### The draft (`computeClientInvoiceDraft`, pure)
+
+- **Lines** — one per metered `(segment, charge, uom)` with quantity > 0, in the order `(segment_from, CHARGE_CODES rank, uom — null first)`. Storage quantity is the metered base-unit-days as exact milli-unit-days (BigInt). `rate_card_id` is the segment's card; a no-card segment or a charge the card does not price, or a storage line in a not-fully-measured segment, is **unpriced** (rate, unit and amount null).
+- **SAC and rate (decision 4)** — `SAC_BY_CHARGE`: storage `996729`, the three handling charges `996719`; every line at 1,800 bps — frozen onto the line.
+- **Place of supply (decision 5)** — IGST Act s.12(2): the client GSTIN's state, else its billing state code; stored **per line**. Supply is `intra` when the supplier GSTIN's prefix equals it, `inter` otherwise, null (no tax) when either side is unknown.
+- **Tax** — `computeLineTax(1000, amount, 1800, supplyType)` per line (`shared/primitives/gst.ts` — taxable = amount; tax half up; CGST the floor half, the odd paisa to SGST); totals are sums of rounded lines, `assertInvoiceTotals`, then `roundToRupee` for `payable` / `round_off`.
+- **The party** — supplier: the tenant's name, the group GSTIN and its state (code + official name from `InvoicingFacade.gstStateResolverInTx`), and the `origin_*` address of the **lowest-code warehouse of the group with a full address** (decision 6); recipient: the client's code, name, legal name, GSTIN, state and billing address. A draft stores the party computed live; issue re-stamps it (equal by the hash) — the printed invoice reads only the stored party.
+- **Gaps** (block issue, in this order): `supplier-gstin-missing`, `supplier-address-missing`, `client-legal-name-missing`, `client-billing-address-missing` (line 1, city, state code, pincode), `storage-not-complete` (the **client's** `storageCompleteThrough` — the unfiltered watermark, `MeteringService.clientStorageCompleteThroughInTx` — is short of the month's last day; the snapshot commit guarantee also proves the counts complete. *Code review C1:* not the group's — a group with counts but no stock events, e.g. a receipt rejected in full, has no snapshot scope and would never issue), `line-unpriced` (per line, with `segmentFrom`; **none for storage lines while `storage-not-complete` fires**), `einvoice-required` (the GSTIN's e-invoicing flag — `InvoicingFacade.eInvoiceAppliesInTx` — and a registered client). **Warnings** never block: `supplier-state-differs` (a group warehouse whose origin state resolves to another state than the GSTIN's).
+- **The content hash (v1)** — sha256 over canonical JSON (keys sorted at every depth, bigint columns as decimal strings, lines in the canonical order, `"v": 1`) of everything the issued row stores **except** ids (the invoice's, the lines', the client's, the replaced invoice's), timestamps, status and lifecycle fields (number, FY, stamps, note). The rate card that priced a line IS content.
+
+### The flows
+
+```mermaid
+sequenceDiagram
+  participant W as /compliance (owner, accountant)
+  participant S as ClientInvoiceService
+  participant C as clients.facade
+  participant T as tenancy (supplier facts)
+  participant M as MeteringService
+  participant I as InvoicingFacade
+  W->>S: POST clients/{c}/invoices {month}
+  S->>S: billing.invoice → replay → month shape (400)
+  S->>C: lockClientInTx (404) → replay under lock
+  S->>S: self → 409 client-not-billable; month not ended (clock) → 409 period-not-ended
+  S->>T: clientInvoiceSupplierFactsInTx → groups by GSTIN
+  loop each group
+    S->>M: meterPeriodInTx(month, {warehouseIds})
+    S->>I: eInvoiceAppliesInTx(gstin), gstStateResolverInTx
+    S->>S: computeClientInvoiceDraft
+    alt a live invoice covers the group
+      S-->>S: existing[]
+    else usage and none live
+      S->>S: insert draft (+ replaces = latest unreplaced void), lines, audit
+    end
+  end
+  S-->>W: 201 {created, existing} — or 409 nothing-to-invoice when no group has usage
+  W->>S: POST client-invoices/{id}/issue (a NEW key per click)
+  S->>C: lock the client, then the invoice row; status draft (409 invoice-not-draft)
+  S->>M: re-meter → recompute the draft
+  alt hash ≠ stored
+    S->>S: store the fresh draft, audit, key — COMMIT
+    S-->>W: 200 {outcome: stale, invoice} (no number used)
+  else gaps
+    S-->>W: 409 invoice-has-gaps {gaps}
+  else
+    S->>S: series row ON CONFLICT → FOR UPDATE → seq; formatServiceInvoiceNo
+    S->>S: stamp issued_at/by, fy_label = fyLabelFor(issued_at), party; audit; key
+    S-->>W: 200 {outcome: issued, invoice}
+  end
+```
+
+### Commands (`ClientInvoiceService`, all `billing.invoice`)
+
+| Command | Hash | Locks | Guards (in order) | Writes / audit |
+|---|---|---|---|---|
+| `prepare` | `{arm:'prepare', tenantId, clientId, month}` | the client row | month `YYYY-MM` (400) → client exists (404) → not `self` (409 `client-not-billable`) → the month has ended on `clientInvoiceClock` (409 `period-not-ended`) → some group has usage (409 `nothing-to-invoice`) | drafts + lines; `client_invoice.prepared` per draft; 23505 on the live index → 409 `invoice-exists` |
+| `refresh` | `{arm:'refresh', …, invoiceId}` | the client row, then the invoice | draft (409 `invoice-not-draft`) | lines rewritten and row updated only when the hash moved; `client_invoice.refreshed` |
+| `issue` | `{arm:'issue', …}` | the client row, then the invoice | draft → hash equal (else **200 stale, committed**) → no gap (409 `invoice-has-gaps`, `gaps` extension) → ≥ 1 line (409 `nothing-to-invoice`) | number, stamps, party; `client_invoice.issued` |
+| `discard` | `{arm:'discard', …}` | the invoice | draft (409) | lines, then the row; `client_invoice.discarded`; 204 (a replay 204, a new key 404) |
+| `transition` (dispute / settle / void) | `{arm:verb, …, note}` | the invoice | note required for dispute/void, ≤ 500 (400, **above the tx** — request shape) → `issued → disputed \| settled \| void`, `disputed → settled \| void` (409 `invoice-transition-invalid`) | status, `status_note` (the transition's OWN note, or null — a settle never inherits the dispute's reason), the stamps; `client_invoice.disputed\|settled\|voided` with `reference = "note: … (key …)"` — the audit keeps every note |
+
+**Lock order:** client row → invoice row. Discard and the transitions lock only the invoice; nothing locks an invoice before its client, so there is no cycle. **The clock:** `clientInvoiceClock` (the `rateCardClock` precedent) decides "has the month ended" and the issue instant — the FY of the number is `fyLabelFor(issued_at)`, so a March invoice issued in April numbers in the next FY's series.
+
+### Frozen at issue — the triggers (0062, the 0060 precedent)
+
+- `client_invoices_frozen` (BEFORE UPDATE OR DELETE): the identity (id, tenant, client, period, supplying GSTIN, replaces, creator) never changes; a draft stays a draft or becomes `issued` — which needs the number, GSTIN and stamp, **refuses while any line is unpriced or has no place of supply**, and requires **at least one line, header subtotal / CGST / SGST / IGST equal to the lines' sums, and a non-empty `party`** (code review); a non-draft row never returns to draft and only moves `issued → disputed|settled|void`, `disputed → settled|void`, with a fresh `status_changed_at` and (dispute/void) a note — every other column compared as `to_jsonb(NEW) - [status columns] = to_jsonb(OLD) - […]`, so a column added later is frozen too. Only a draft is deleted, and only once its lines are gone.
+- `client_invoice_lines_frozen`: the old and new parent must be a draft (read `FOR SHARE`; missing or invisible = not a draft — fail closed), with the line's tenant.
+- `*_no_truncate` on both.
+
+### Printing — Rule 48(2)
+
+A services tax invoice is issued **in duplicate** (CGST Rule 48(2)): the web's `PrintableClientInvoice` prints an issued (or disputed, or settled) invoice twice — "ORIGINAL FOR RECIPIENT" and "DUPLICATE FOR SUPPLIER", a page break before the second (the duplicate is paper-only); a draft or a void prints once. The copies are a rendering of the one stored invoice — nothing on the backend records which copy was handed over.
+
+### Reads
+
+`list(tenant, actor, {clientId?, status?, cursor?, limit 1–100})` — keyset on `(created_at, id)` newest first, `fullPrecisionInstant` cursors (400 `invalid-cursor`); entries carry `gapCount` and the totals. `get(tenant, actor, id)` — the invoice with its lines (quantities as decimal strings: base-unit-days for storage), gaps, warnings and party. Both refuse a portal session (a user with `client_id`) 403 `role-denied`.
+
+### Facade reads client invoices use (AD-6)
+
+| Read | Owner | Contract |
+|---|---|---|
+| `lockClientInTx`, `getClientInTx` | clients | the row lock, then the snapshot with `taxDetails` |
+| `clientInvoiceSupplierFactsInTx` | tenancy | the tenant's name and GSTIN, every warehouse's code, GSTIN and raw `origin_*` columns, by code |
+| `eInvoiceAppliesInTx`, `gstStateResolverInTx` | invoicing (`InvoicingFacade`) | the 8-2b per-GSTIN flag; the CBIC list as `nameOf(code)` / `codeOfText(text)` |
+| `meterPeriodInTx(…, {warehouseIds})` | billing (21-4) | the group-narrowed metering read |
+
+### Gotchas
+
+- **Stale commits.** A stale issue is a 200 that WRITES (the fresh draft) and records the key; the web mints a new key per Issue click, or a retry would re-serve "stale" forever.
+- **The hash moves with the party.** Editing a client's legal name after preparing makes the next issue answer `stale` — by design: the operator approves what they saw.
+- **An empty draft** (a refresh after the usage vanished) cannot issue: 409 `nothing-to-invoice` — discard it.
+- **`ArithmeticOverflowError` is one class.** The tax helpers moved to `shared/primitives/gst.ts` with the error class itself; `invoicing/arith.ts` and `generator.ts` re-export the same objects, so the invoicing delivery handlers still ack it as a data fault (pinned by identity in the suite).
+
 ## API
 
-See [`../API-SURFACE.md`](../API-SURFACE.md) — `billing`. Reads are member-open (rate cards and **usage**, `GET /tenants/{t}/clients/{c}/usage?from=&to=` — 21-4); mutations need `rates.manage`. The 21-7 portal must **not** reuse the usage route: it is an operator read of commercial terms.
+See [`../API-SURFACE.md`](../API-SURFACE.md) — `billing`. Reads are member-open (rate cards and **usage**, `GET /tenants/{t}/clients/{c}/usage?from=&to=` — 21-4; client invoices — 21-5, portal sessions refused); rate-card mutations need `rates.manage`, client-invoice mutations and the client tax details `billing.invoice`. The 21-7 portal must **not** reuse the usage route: it is an operator read of commercial terms.
 
 ## Gotchas
 
