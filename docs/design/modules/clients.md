@@ -12,7 +12,7 @@ Story 21-1 stood up the table and the `self` client; 21-2 added the `app.client_
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `clients` (`src/shared/db/schema.ts`, the `clients` table) | One row per client of a tenant: `code`, `name`, `status`, `system_owned` | Exactly **one system-owned client per tenant** — partial unique `clients_tenant_system_owned_unique` (0040). `code` unique per tenant (`clients_tenant_id_code_unique`). `status` CHECK ∈ {`active`,`suspended`,`departed`}, `system_owned ⇒ NOT departed` (0040). **Since 0059:** `clients_code_format` — `code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$' OR system_owned` (codes stored UPPERCASE, `self` exempt); `clients_self_code_reserved` — `code` is never `SELF`/`self` unless system-owned; `clients_name_length` — `char_length(btrim(name))` 1..200 (the tenant name's own cap, because `self` mirrors it). Vocabulary mirrored in `src/modules/clients/clients.schema.ts` (`CLIENT_STATUSES`, `CLIENT_CODE_RE`, `CLIENT_NAME_MAX`, `MAX_CLIENT_LIST`) |
+| `clients` (`src/shared/db/schema.ts`, the `clients` table) | One row per client of a tenant: `code`, `name`, `status`, `system_owned` | Exactly **one system-owned client per tenant** — partial unique `clients_tenant_system_owned_unique` (0040). `code` unique per tenant (`clients_tenant_id_code_unique`). `status` CHECK ∈ {`active`,`suspended`,`departed`}, `system_owned ⇒ NOT departed` (0040). **Since 0059:** `clients_code_format` — `code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$' OR system_owned` (codes stored UPPERCASE, `self` exempt); `clients_self_code_reserved` — `code` is never `SELF`/`self` unless system-owned; `clients_name_length` — `char_length(btrim(name))` 1..200 (the tenant name's own cap, because `self` mirrors it). Vocabulary mirrored in `src/modules/clients/clients.schema.ts` (`CLIENT_STATUSES`, `CLIENT_CODE_RE`, `CLIENT_NAME_MAX`, `MAX_CLIENT_LIST`). **Since 0062 (21-5) — the tax details:** seven nullable columns `legal_name`, `gstin`, `billing_line1`, `billing_line2`, `billing_city`, `billing_state_code`, `billing_pincode`; CHECKs `clients_legal_name_format` (1..200, trimmed), `clients_gstin_format` (`^[0-9]{2}[A-Z0-9]{13}$`), `clients_billing_address_format` (the address ceilings, a 2-digit state code, a 6-digit pincode), `clients_gstin_matches_billing_state` (`left(gstin, 2) = billing_state_code` when both are set) |
 
 `catalog_imports.client_id` (NOT NULL since 0059, backfilled to each tenant's `self`) is catalog-owned but is this module's concept: the client a run imported for.
 
@@ -25,9 +25,10 @@ RLS: `clients_tenant_isolation` carries the `app.client_id` clause on `id` (21-2
 | `GET /tenants/{t}/clients` | member-open | every client, any status, `system_owned` first then by code; unpaginated, bounded at 500 |
 | `POST /tenants/{t}/clients` `{code, name}` | `clients.manage` (owner-only) | 201 `{client}`, code trimmed + uppercased, `active`; 400 `validation-failed` (shape, or the reserved `SELF`); 409 `duplicate-client-code` (sequential or concurrent — the unique index is the arbiter); 403 `role-denied`; 422 `idempotency-key-reuse` |
 | `PATCH /tenants/{t}/clients/{clientId}` `{name}` | `clients.manage` | 200 `{client}` (an unchanged name writes and audits nothing); 400 for the `self` client (its name mirrors the tenant); 404 unknown/foreign id; 400 malformed id |
+| `PATCH /tenants/{t}/clients/{clientId}/tax-details` (21-5) | **`billing.invoice`** (owner + accountant) | `{legalName?, gstin?, billingLine1?, billingLine2?, billingCity?, billingStateCode?, billingPincode?}` — absent = unchanged, `null` or blank = cleared → 200 `{client}` (every client read now carries `taxDetails`); 400 `validation-failed` for a malformed GSTIN or one whose prefix is not a registration code, a state code off `GSTIN_STATE_CODES`, a GSTIN in another state than the billing state (checked over the MERGED values), a bad pincode, an over-long field, or the `self` client (never invoiced); 404 unknown; an unchanged patch writes and audits nothing |
 | `POST /tenants/{t}/catalog/skus/{skuId}/client` `{clientId}` | `clients.manage` | catalog-owned — see `catalog.md`: `200 {skus}` (every SKU moved — the group); 409 `sku-has-history` naming the member with history |
 
-Commands: `ClientsCommand.create` / `.rename` (`src/modules/clients/clients.command.ts`) follow the house skeleton — normalise + hash before the tx; authority → replay → shape validation → write → audit (`client.created` / `client.renamed`, target type `client`, reference = the Idempotency-Key) → key LAST. **No outbox event** — nothing consumes a client's existence yet.
+Commands: `ClientsCommand.create` / `.rename` / (21-5) `.updateTaxDetails` (`src/modules/clients/clients.command.ts`) follow the house skeleton — normalise + hash before the tx; authority → replay → shape validation → write → audit (`client.created` / `client.renamed` / `client.tax-details-updated`, target type `client`, reference = the Idempotency-Key) → key LAST. **No outbox event** — nothing consumes a client's existence yet.
 
 ## The seams
 
@@ -35,7 +36,8 @@ Commands: `ClientsCommand.create` / `.rename` (`src/modules/clients/clients.comm
 - `clients.facade.ts` — the read seam, file-level `…InTx` functions on the caller's transaction (the `ensureReceivingBinInTx` shape) plus the injectable `ClientsFacade.listClients`:
   - `assertClientInTenantInTx` → 404 `not-found`
   - `getClientsInTx` (bulk `{id, code, systemOwned}`), `getClientLabelsInTx` (bulk id → refusal label: a client's code, the tenant's own as "<tenant name> (your company)" — never `self`), `listClientsInTx`
-  - `lockClientInTx` (21-3) — the client row `FOR UPDATE` plus its status, 404 when absent: billing's rate-card activate/cancel serialise every dated transition of one client on it (a lock, never a write); `getClientStatusInTx` is the unlocked read the draft create uses
+  - `lockClientInTx` (21-3) — the client row `FOR UPDATE` plus its status, 404 when absent: billing's rate-card activate/cancel serialise every dated transition of one client on it (a lock, never a write); `getClientStatusInTx` is the unlocked read the draft create uses. 21-5's client-invoice prepare, refresh and issue lock it too (client row → invoice row)
+  - `getClientInTx` (21-5) — one client's full snapshot including `taxDetails`, 404 when absent: the recipient a client invoice prints
   - `assertSingleClientInTx(tx, tenant, clientIds, subject)` — **the one attribution rule**: one distinct client or 409 `mixed-client` naming the codes (`mixedClient()`)
 
 ## Attribution (story 21-2b) — derived, never chosen
@@ -54,6 +56,8 @@ The SKU is the source of truth. Everything else **derives** its client:
 | Channel ingest (`channels/channels.ingest.command.ts`) | a FIRST delivery's mapped SKUs spanning clients is a mapping fault (a redelivery of an accepted order skips the pre-check and replays); the order command's kit-component `mixed-client` maps to the same refusal | 422 `ingest-config-invalid`, metered `validation-failed` |
 
 `test/architecture.spec.ts` pins: only the clients module writes `clients`; `clients.command.ts` and the ensure really write it; the ledger reads `skus.clientId` and no longer calls `ensureSelfClientInTx`; **only `sku-client.command.ts` updates `skus.client_id`** (Drizzle `.update(skus).set({…clientId…})`, patch-object assignment, raw SQL).
+
+**Tax details are `billing.invoice`'s, not `clients.manage`'s** (21-5 design review #7): the accountant who clears an invoice's recipient gaps must be able to fix them; the owner holds both. A client's tax details are live — an issued client invoice prints its frozen `party`, never these columns.
 
 Invoicing: a client brand's order is **not GST-invoiced** (decision 5) — `orderInvoiceFactsInTx` carries `clientSystemOwned`; the generator refuses 409 `client-order-not-invoiced`, which the dispatch delivery handler acks with a log line. See `invoicing.md`.
 

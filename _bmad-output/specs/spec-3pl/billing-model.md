@@ -61,13 +61,15 @@ draft ──issue──> issued ──> settled
 - **`disputed`** — the client contests it; the line's source events are what answers the dispute.
 - **`void`** — issued in error, superseded by a replacement that names it.
 
+*(Amended by story 21-5 — as built:)* the moves are `issued → disputed | settled | void` and **`disputed → settled | void`** (a dispute that ends in a correction voids the invoice; the diagram above omitted `disputed → void`). Dispute and void need a note; a void keeps its number and the next prepare of its month and GSTIN drafts a replacement naming it (`replaces_invoice_id`). **Drafts are hidden from the portal** — the RLS client clause shows a client only its non-draft invoices. Issue re-meters first: if the figures moved since the draft was computed, the fresh draft is stored and the answer is `stale` — nothing issued, no number spent. Billing ignores the client's status (a suspended client still owes for what it used).
+
 The immutability rule is the whole reason the model records its inputs rather than referencing them live.
 
 ## GST: services, not goods
 
 **Epic 8's invoicing path does not apply here.** It is built for selling goods: HSN codes, goods GST treatment, e-way bills for movement. A 3PL sells a **service** — storage and handling — which carries **SAC codes** and different GST treatment, and generates no e-way bill because nothing of the 3PL's is moving.
 
-Shared machinery (GST rates as basis points, integer paise, the invoice numbering discipline), separate code path. `client_invoice_lines.sac_code` exists for exactly this reason, and it is the clearest signal that client billing is not a variant of order invoicing.
+Shared machinery (GST rates as basis points, integer paise, the invoice numbering discipline), separate code path. *(Amended by story 21-5:)* the shared machinery is `shared/primitives/gst.ts` (`computeLineTax`, `roundToRupee`, `fyLabelFor`, and `formatServiceInvoiceNo` — `29/S2627/000001`, its own series per supplying GSTIN per FY). One invoice per client per month **per supplying GSTIN** (each registration invoices the work done in its warehouses); SAC `996729` storage and `996719` handling at 18 % (decision 4); place of supply = the client's state under IGST Act s.12(2), stored per line (decision 5 — the s.12(3) storage question is a CA check in PENDING). `client_invoice_lines.sac_code` exists for exactly this reason, and it is the clearest signal that client billing is not a variant of order invoicing.
 
 ## Two billing relationships, deliberately not conflated
 

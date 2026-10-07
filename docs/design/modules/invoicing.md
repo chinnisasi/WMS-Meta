@@ -1,6 +1,6 @@
 # Invoicing module
 
-> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. The HSN summary (8-2a, GSTR-1 Table 12) reads the issued invoices back per supplier GSTIN and period. E-way bills (8-2b) queue off `invoice.issued` and leave as NIC bulk JSON or through the `EwayGateway` port. The 3PL client-billing model (21-5) extends this module next.
+> GST invoices (story 8-1, regulatory pass 8-1b): one invoice per dispatched order, derived from persisted dispatch facts until it issues and **frozen** from then on, taxed in exact integer math with a stored rupee round-off, numbered in its **supplier GSTIN's** own series per financial year, and printed on the web's `/compliance` surface. The HSN summary (8-2a, GSTR-1 Table 12) reads the issued invoices back per supplier GSTIN and period. E-way bills (8-2b) queue off `invoice.issued` and leave as NIC bulk JSON or through the `EwayGateway` port. The 3PL client invoices (21-5) live in `billing`, not here — a separate services code path that shares this module's arithmetic (moved to `shared/primitives/gst.ts`) and reads two facts through `InvoicingFacade`.
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first. The command skeleton is followed closely here and is not repeated.
 
@@ -41,7 +41,7 @@ The module also writes `audit_events` and `idempotency_keys` (tenancy-owned, sha
 
 `InvoicingModule` imports `OutboundModule` (for `OutboundFacade.orderInvoiceFactsInTx` only) and exports three providers:
 
-- **`InvoicingFacade`**: the reads (`listInvoices` keyset page, `getInvoice`, the in-tx `getInvoiceForOrderInTx`). Reads are never capability-gated.
+- **`InvoicingFacade`**: the reads (`listInvoices` keyset page, `getInvoice`, the in-tx `getInvoiceForOrderInTx`). Reads are never capability-gated. **21-5 adds two in-tx reads for billing's client invoices:** `eInvoiceAppliesInTx(tx, tenant, gstin)` (the 8-2b per-GSTIN flag, false when unset) and `gstStateResolverInTx(tx)` (the CBIC list as `nameOf(code)` / `codeOfText(text)` — `normalizeStateName` + the aliases, GSTIN-less). `BillingModule` imports `InvoicingModule` for exactly these; invoicing imports nothing back.
 - **`InvoicingCommand`**: the manual generate/regenerate, consumed by `src/api/invoicing.controller.ts`.
 - **`InvoiceGenerator`**: the one computation (`generateCoreInTx`) both generation paths run inside their own tenant transaction.
 
@@ -163,7 +163,7 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 
 `orderLineId` is structured (WMS-BE #70) so a client acts on gaps without parsing `detail` prose. The FE pricing panel offers exactly the `unpriced-line` ids.
 
-**Arithmetic** (`arith.ts`). Integer paise, basis points and milli-units throughout; `computeLineTax` takes `Paise`/`GstBps`. Products run in BigInt, then:
+**Arithmetic** (`arith.ts`; since 21-5 the tax helpers — `computeLineTax`, `assertInvoiceTotals`, `roundToRupee`, `asPaise`, `asGstBps`, the round-off bounds and **the `ArithmeticOverflowError` class itself** — live in `shared/primitives/gst.ts` and `arith.ts` re-exports the same objects, so the delivery handlers' data-fault arm is unchanged; `divRound` stays here). Integer paise, basis points and milli-units throughout; `computeLineTax` takes `Paise`/`GstBps`. Products run in BigInt, then:
 - `taxable = halfUp(qtyMilli × ratePaise, 1000)`, then `tax = halfUp(taxable × bps, 10000)`, **per line**, never on totals.
 - Intra-state splits CGST = ⌊tax/2⌋ and SGST/UTGST = the remainder, so the odd paisa goes to SGST. Inter-state carries the whole tax as IGST. An unresolved supply charges zero.
 - Totals are sums of rounded lines, re-checked by `assertInvoiceTotals` (`subtotal + gst = total`, `cgst + sgst + igst = gst`).
@@ -172,7 +172,7 @@ The delivery handler runs the same core with no overrides. It writes **no audit 
 - **Downstream figures:** e-way's total invoice value and GSTR-1's invoice value read `payable`; e-way's "other value" carries `roundOff`; the HSN summary and per-tax figures stay exact.
 
 **Numbering (8-1b: one consecutive series per supplier GSTIN).** It happens only on the flip to `issued`, with one clock read for both the FY and `issuedAt`.
-- `fyLabelFor` reads the IST clock (April–March): `FY-2627`.
+- `fyLabelFor` reads the IST clock (April–March): `FY-2627`. (21-5: `fyLabelFor`, `formatInvoiceNo` and `INVOICE_NO_MAX_LENGTH` moved to `shared/primitives/gst.ts` beside the services formatter `formatServiceInvoiceNo` — `29/S2627/000001` — and `generator.ts` re-exports them.)
 - `allocateSeriesSeq(tenant, originGstin, fy)` locks (or creates, then re-locks) the GSTIN's series row and increments it. Its `ON CONFLICT DO NOTHING` names the partial unique's predicate (`target: [tenantId, originGstin, fyLabel], where: origin_gstin is not null`) — Postgres only infers a partial index as the arbiter when the predicate matches.
 - `formatInvoiceNo` gives `29/2627/000001`: the **GSTIN's own** first two characters (never `resolveStateCode`'s answer), the FY digits, the 6-digit sequence — 14 chars, asserted ≤ 16 (Rule 46's limit; a 7-digit sequence still fits).
 - Each GSTIN starts at `000001`, which cannot collide with a legacy `FY-…` number; legacy series rows (NULL GSTIN) stop allocating.
@@ -369,7 +369,7 @@ Terminal means the invoice is frozen and nothing here can clear it — generate 
 |---|---|---|
 | `invoice.issued` (outbox, in-tx) | on the **first** flip to `issued` only (by either path); an issued invoice never changes again | `{invoiceId, orderId, warehouseId, originGstin, invoiceNo, fyLabel, revision, subtotalPaise, gstPaise, totalPaise, payablePaise, roundOffPaise}`: flat and client-agnostic (21-5 reads it). Built by ONE function, `invoiceIssuedPayload` (`events.ts`), for both emitters. **Consumers key on `(originGstin, invoiceNo)`** |
 
-Consumers: the e-way queue (8-2b, first subscriber); 21-5 next. Audit: `invoice.generated`, one row per manual call, with the actor and the idempotency key as reference.
+Consumers: the e-way queue (8-2b, the only subscriber — 21-5's client invoices do not consume it; they are billing's own documents with their own series). Audit: `invoice.generated`, one row per manual call, with the actor and the idempotency key as reference.
 
 ---
 

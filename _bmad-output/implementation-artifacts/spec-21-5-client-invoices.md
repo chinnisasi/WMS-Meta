@@ -2,7 +2,7 @@
 title: 'Client invoices — monthly services tax invoices to a client brand, frozen at issue'
 type: 'feature'
 created: '2026-10-07'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 baseline_commit: 'dba77cc6aa49eff7759311a86a244aec5441ce43'
 review_loop_iteration: 0
@@ -207,21 +207,21 @@ Each **line** carries `quantity` (a decimal string, base-unit-days for storage, 
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0062_client_invoices.sql` (with journal, snapshot and `schema.ts`). Guarded, with no FKs:
+- [x] `wms-be/drizzle/0062_client_invoices.sql` (with journal, snapshot and `schema.ts`). Guarded, with no FKs:
   - the `clients` columns and their CHECKs;
   - `client_invoices`, `client_invoice_lines` and `client_invoice_series`, with the columns, CHECKs (status, totals, period starts on the 1st, basis/uom pairing, a non-draft row requires its number) and indexes from Boundaries;
   - the guard, lines and no-truncate triggers;
   - RLS with the draft-hidden client clause;
   - a post-migration assertion.
-- [ ] `wms-be/src/shared/primitives/gst.ts` -- the moved helpers and `formatServiceInvoiceNo`.
-- [ ] `wms-be` metering, inbound, outbound and inventory -- the warehouse filter.
-- [ ] `wms-be` tenancy facade -- the party read.
-- [ ] `wms-be/src/modules/clients` -- `updateTaxDetails` (audit `client.tax-details-updated`).
-- [ ] `wms-be/src/modules/billing/client-invoices.ts` -- the commands, plus a pure `computeClientInvoiceDraft` (lines, tax, totals, gaps, warnings, hash).
-- [ ] `wms-be/src/modules/tenancy/permissions.ts` -- `billing.invoice`.
-- [ ] `wms-be/src/api/client-invoices.controller.ts` -- with its DTOs; then re-export `openapi.json`.
-- [ ] `wms-be` architecture and isolation tests -- `BILLING_TABLES` and the probe count.
-- [ ] `wms-be/test/client-invoices.spec.ts`. Cover:
+- [x] `wms-be/src/shared/primitives/gst.ts` -- the moved helpers and `formatServiceInvoiceNo`.
+- [x] `wms-be` metering, inbound, outbound and inventory -- the warehouse filter.
+- [x] `wms-be` tenancy facade -- the party read.
+- [x] `wms-be/src/modules/clients` -- `updateTaxDetails` (audit `client.tax-details-updated`).
+- [x] `wms-be/src/modules/billing/client-invoices.ts` -- the commands, plus a pure `computeClientInvoiceDraft` (lines, tax, totals, gaps, warnings, hash).
+- [x] `wms-be/src/modules/tenancy/permissions.ts` -- `billing.invoice`.
+- [x] `wms-be/src/api/client-invoices.controller.ts` -- with its DTOs; then re-export `openapi.json`.
+- [x] `wms-be` architecture and isolation tests -- `BILLING_TABLES` and the probe count.
+- [x] `wms-be/test/client-invoices.spec.ts`. Cover:
   - every matrix row;
   - every legal and illegal transition at the trigger;
   - the group-sum equality;
@@ -231,7 +231,7 @@ Each **line** carries `quantity` (a decimal string, base-unit-days for storage, 
   - the hash being stable across reads;
   - the 0062 migration;
   - the vocabulary pinned against the CHECK.
-- [ ] `wms-fe`:
+- [x] `wms-fe`:
   - **Capability mirror:** add `billing.invoice` to the owner and accountant, and to the ops-excluded list; the count goes from 38 to 39; add a holder test.
   - **Tax details:** a form on the clients card (state select over the codes), editable under `billing.invoice`.
   - **`ClientInvoices` on `/compliance`:** client and month pickers; Prepare; a list of status, number, client, month, supplier GSTIN and payable; an expanded detail showing lines, gaps and warnings, with the actions Refresh, Issue (stale → banner "Figures changed — review and issue again"), Discard, Dispute, Settle, and Void (note, plus the warning "if already reported in GSTR-1, a credit note is the correct fix — not supported yet").
@@ -244,7 +244,7 @@ Each **line** carries `quantity` (a decimal string, base-unit-days for storage, 
     - totals, round-off, the amount in words, and an "Authorised signatory" block.
   - **Usage preview:** an invoiced month shows "Invoiced as <no.>" with a note that live figures may differ.
   - **Code:** mappers and hooks, with tests.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `billing.md`, `clients.md`, `invoicing.md`;
   - `frontend/SYSTEM-DESIGN.md:53` (the `/compliance` row);
   - amend the 3PL `schema.md` (nullable draft columns, per-line place of supply, payable, series table) and `billing-model.md` (adds `disputed → void`; drafts are hidden from the portal);
@@ -274,6 +274,20 @@ Each **line** carries `quantity` (a decimal string, base-unit-days for storage, 
 
 ## Spec Change Log
 
+- **2026-10-07, code review — fixes:** the issue trigger also requires ≥ 1 line, header subtotal/CGST/SGST/IGST = the lines' sums and a non-empty party; a unique index makes one line per (invoice, segment, charge, uom); the note ceiling counts code points at the DTO too; an issued invoice prints in duplicate (Rule 48(2)); Issue is disabled on a draft with gaps.
+- **2026-10-07, implementation — interpretations taken where the spec was silent (no intent changed; each is in `modules/billing.md`).**
+  - **The draft carries a `party` too** (computed live), so a draft prints ("DRAFT — not a tax invoice"); issue re-stamps it — equal by construction, since the party is inside the hash, so a client tax-details edit after prepare makes the next issue answer `stale`.
+  - **Hash "excluding ids"** is read as the row ids (invoice, lines, client, replaced invoice); a line's `rate_card_id` is kept — it is the priced content CAP-4 records.
+  - **Line order** for the hash and the print is `(segment_from, CHARGE_CODES rank, uom — null first)`, not alphabetical by `charge_code`.
+  - ~~**`storage-not-complete` uses the GROUP's `storageCompleteThrough`** (the minimum over the group's warehouses' scopes — what the narrowed metering read returns), not the client-wide one: one registration's lagging warehouse does not block another's invoice. The commit guarantee is time-based, so any measured scope still proves the counts complete.~~ **Reverted in code review C1:** the gap reads the CLIENT's (unfiltered) `storageCompleteThrough`, as the frozen Boundaries say — a group with counts but no stock events has no snapshot scope and could never have issued. The line quantities stay group-narrowed.
+  - **`existing` lists every live invoice of the month's groups**, whether or not the group has usage today; `nothing-to-invoice` fires only when no group has usage (the spec's rule).
+  - **Issuing a draft with no line** (a refresh after the usage vanished) is refused `409 nothing-to-invoice` (the prepare code reused) — not in the spec's arms.
+  - **Tax details on the tenant's own `self` client are refused 400** (it is never invoiced) — not in the spec's arms.
+  - **Dispute/void note presence is a request-shape check above the transaction** (400 before authority), like the other shape checks; ~~settle without a note keeps the previous `status_note`~~ (code review: each transition stores its own note or null); the audit `reference` is `note: … (key …)`.
+  - **RLS shapes:** `client_invoice_series` is one tenant policy that also requires `app.client_id` unset; the lines' read clause is an `EXISTS` on the parent. Policy count 88 → 97.
+  - **The gap `warehouseId` member** exists on the DTO but no gap sets it yet (no gap code is warehouse-scoped).
+  - **The tax helpers moved WITH `ArithmeticOverflowError`** into `shared/primitives/gst.ts` (one class, re-exported) rather than the 7c wrapper pattern — identity preserves invoicing's data-fault arm with no wrapper; pinned by an identity test.
+
 ## Review Triage Log
 
 *Design review, 2026-10-07: two code-verified reviewers (data/tax/concurrency; API/FE/fit). 29 findings were merged into 22. Two went to the human as decisions 5 and 6; the rest are folded in.*
@@ -302,6 +316,34 @@ Each **line** carries `quantity` (a decimal string, base-unit-days for storage, 
 | 20 | low | FY rule implicit; no S formatter | `fyLabelFor(issued_at)`; `formatServiceInvoiceNo` |
 | 21 | low | One quantity column, two units; order-count subquery | basis/uom CHECK, print units; outer filter only |
 | 22 | low | Loose ends: `period-not-ended` as a gap, double gaps, notes, deletes, docs row, cross-state warehouse, void after GSTR-1 | 409 only; storage-gap precedence; audit keeps notes; trigger refuses deletes; FE route row; `supplier-state-differs` warning; void warning plus PENDING |
+
+*Code review, 2026-10-07: three layers (blind, edge-case, verification-gap); 37 findings, each verified against the code; 21 merged into 12 patches, the rest rejected below.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | medium | `storage-not-complete` uses the GROUP watermark, not the client-wide one the frozen Boundaries name. A group with counts but no stock events (a receipt rejected in full) has no snapshot scope, so it could never issue. Partition sums also differ from the unfiltered read when watermarks differ | `client-invoices.ts:368`; `metering.ts:199-206` | patch: use the client-wide `storageCompleteThrough` (the spec's rule); test a no-scope group |
+| C2 | medium | The issue guard checks only for nulls: an empty invoice, header totals that don't equal the line sums, or `party '{}'` all pass at the DB | 0062 `client_invoices_guard`; isolation seed issues `party '{}'` | patch: on draft→issued the trigger requires ≥1 line, header subtotal/CGST/SGST/IGST = Σ lines, and a non-empty party |
+| C3 | low | No DB uniqueness for one line per (segment, charge, uom) | 0062 | patch: unique index `(invoice_id, segment_from, charge_code, coalesce(uom,''))` |
+| C4 | medium | Rule 48(2): a services invoice is issued in duplicate, marked ORIGINAL FOR RECIPIENT / DUPLICATE FOR SUPPLIER; the print carries neither | `PrintableClientInvoice` | patch: an issued invoice prints both copies, each marked |
+| C5 | low | Issue is offered on a draft with gaps; it can only 409 or answer stale | `client-invoices.tsx` | patch: disable Issue while gaps > 0, saying Refresh after fixing |
+| C6 | low | Settle without a note keeps the dispute's note, shown on a settled invoice | `note ?? row.statusNote` | patch: settle stores its own note or null |
+| C7 | low | The Prepare form keeps its key after a failed submit when the client or month changes, so the retry answers 422 `idempotency-key-reuse` | `PrepareForm` keyRef | patch: reset the key on client or month change |
+| C8 | low | The note DTO's `@MaxLength` counts UTF-16 units; the FE, service and CHECK count code points | `client-invoices.dto.ts` | patch: a code-point length check |
+| C9 | gap | "The replacement link is freed by a discard" is never asserted | `client-invoices.spec.ts:1328` | patch: void → prepare → discard → prepare names the void again |
+| C10 | gap | `warnings` from the real state resolver are never asserted over HTTP | `facade.ts` `codeOfText`; the spec uses a fake | patch: `warnings: []` on ACME/BETA/GAMMA, plus one positive `supplier-state-differs` |
+| C11 | gap | "A refresh with nothing changed rewrites nothing" can't be observed | `:1102-1108` | patch: assert `updated_at` and the line ids unchanged |
+| C12 | gap | The usage preview's invoice read is never checked for `clientId`/`limit`; a test title overstates (settle → dispute) | `rate-cards-card.test.tsx`; `:1140` | patch: assert the search params; correct the title |
+| R1 | false | A warehouse/tenant GSTIN change re-bills usage under a new group, or orphans a live draft | No command updates `tenants.gstin` or `warehouses.gstin` (`warehouse.command.ts`: set at create only) | rejected; PENDING: invoices don't record their warehouses, so a future GSTIN edit needs a guard |
+| R2 | false | `nothing-to-invoice` while live invoices exist | The frozen rule: 409 only when no group has usage | rejected |
+| R3 | low | The usage preview reads the first 100 of a client's invoices | 100 invoices is 8+ years at one GSTIN; the fix adds a list filter | rejected; PENDING |
+| R4 | low | A lost Issue response retried with a new key shows "no longer a draft" | New key per click is the spec's rule (a stale replay must not repeat); the list shows it issued | rejected |
+| R5 | low | No `total` in the totals DTO; the print sums subtotal + tax | The CHECK pins `total = subtotal + tax` | rejected |
+| R6 | low | A replacement doesn't print the replaced invoice's number | Not a Rule 46 field; the DTO links it | rejected; PENDING |
+| R7 | low | Rule 47's 30-day issue window is not warned | — | rejected; PENDING |
+| R8 | medium | Export, foreign and SEZ clients can't be represented (a foreign client can't be entered; an SEZ supply would be taxed) | `billing_state_code` must be a GST state | patch (docs): PENDING |
+| R9 | low | The tax-details audit records no before/after | Same shape as every other audit row | rejected |
+| R10 | low | The post-migration assertion matches trigger and index names without table or schema scoping | One schema | rejected |
+| R11 | low | `invoice-exists` (23505) is untested | Reachable only by a race the client lock prevents | rejected |
 
 ## Design Notes
 
