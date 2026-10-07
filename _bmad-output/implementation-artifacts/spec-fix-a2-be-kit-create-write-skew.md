@@ -1,7 +1,7 @@
 ---
 story: fix-a2-be-kit-create-write-skew
 title: "Fix A2: kit-create write-skew — lock the SKU row in the adjustment and over-receipt-approval paths"
-status: ready-for-dev
+status: done
 epic: null
 retro: epic-11-retro-2026-09-22 (F2, action item epic-11-retro-a2-fix-be-kit-write-skew)
 context:
