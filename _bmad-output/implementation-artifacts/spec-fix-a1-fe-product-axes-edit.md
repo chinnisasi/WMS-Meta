@@ -1,7 +1,7 @@
 ---
 story: fix-a1-fe-product-axes-edit
 title: "Fix A1: product edit prefills display grammar but parses comma-separated — axes silently corrupted on save"
-status: ready-for-dev
+status: done
 epic: null
 retro: epic-11-retro-2026-09-22 (F1, action item epic-11-retro-a1-fix-fe-axes-edit-corruption)
 context:

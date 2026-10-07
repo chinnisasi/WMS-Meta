@@ -2,8 +2,9 @@
 title: 'Metering and storage snapshots — per-client billable usage from the ledger, priced by the rate card in force'
 type: 'feature'
 created: '2026-10-07'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '2b5a459e22fe3db1fb480412e93e67bff5e8b436'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -49,11 +50,15 @@ These are FR-78, CAP-5 and CAP-6. Client invoices (21-5) need that usage, derive
 - **On-hand per (client, warehouse) at instant `T`** is the ledger fold over events with `recorded_at < T`. An event counts `+|δ|` when it has only a destination bin, `−|δ|` when it has only a source bin, and 0 otherwise.
   - This is the replay rule, and it holds for every registered event type: relocations, QC holds and same-warehouse transfers net to zero; picks draw; pack, dispatch and excursion events are 0.
   - On-hand is grouped by `ledger_events.client_id` and by the SKU's (immutable) `uom`.
-- **Commit guarantee.** Day `D` (where `T` = the IST midnight ending `D`) is written only when both hold:
+- **Commit guarantee** (*renegotiated by the human, 2026-10-07, after implementation proved the snapshot-xmax proof unsound and the xid proof leaky*). Day `D` (`T` = the IST midnight ending `D`) is written only when both hold:
   - (a) `now ≥ T + 15 min` (margin for clock skew); and
-  - (b) no transaction that started before `T` is still open, proved by a recorded `pg_current_snapshot()` xmax taken at a tick at or after `T` being ≤ the current snapshot's xmin.
+  - (b) **no session in `pg_stat_activity` has an open transaction with `xact_start < T`**.
 
-  Snapshots are written once and never rewritten. A **drift check** re-folds the last 7 written days each tick and logs any mismatch loudly; a mismatch should never occur.
+  Every ledger, GRN and pick stamp is taken inside a transaction that began no later than the stamp, so this also proves the handling counts complete up to `T`.
+
+  If the job's database role cannot see the app's other sessions, it **refuses to write and logs an error**; it never guesses. A deploy must keep all app connections on one role or grant `pg_read_all_stats`.
+
+  Snapshots are written once and never rewritten. A drift check (a window re-fold plus a genesis-sum check of the running total) runs once per IST day per scope and logs any mismatch.
 - **Day pricing.** Day `D`'s storage is priced by the card in force at the **start** of `D` (`istMidnightOf(D)`).
 - **Storage completeness.** A period's storage covers only days up to `storageCompleteThrough`, which is the minimum watermark across the client's scopes. A scope with events but no progress counts as "the day before its first event". `self` gives `null` ("not measured").
 - **Counting units**, each with its stated instant:
@@ -140,18 +145,18 @@ These are FR-78, CAP-5 and CAP-6. Client invoices (21-5) need that usage, derive
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0061_storage_snapshots.sql` (+ journal, snapshot, schema.ts) -- guarded; RLS with a tenant policy plus the AD-24 read-only client clause; no FKs.
+- [x] `wms-be/drizzle/0061_storage_snapshots.sql` (+ journal, snapshot, schema.ts) -- guarded; RLS with a tenant policy plus the AD-24 read-only client clause; no FKs.
   - **`storage_snapshots`:** `id`, `tenant_id`, `client_id`, `warehouse_id`, `snapshot_date date`, `uom`, `on_hand_milli bigint > 0`, `created_at`; `UNIQUE (tenant_id, client_id, warehouse_id, snapshot_date, uom)`.
   - **`storage_snapshot_progress`:** `tenant_id`, `client_id`, `warehouse_id`, `last_day date`, `running jsonb` (uom → milli), `pending_xmax text NULL`, `pending_day date NULL`, `updated_at`; `PK (tenant_id, client_id, warehouse_id)`.
   - **Index** `ledger_events (tenant_id, client_id, warehouse_id, recorded_at)`, a plain build.
-- [ ] `wms-be/src/shared/primitives/money.ts` -- `divideRoundHalfUp` (BigInt), re-exported by invoicing unchanged.
-- [ ] `wms-be` inventory -- stamp one `recordedAt` per cross-warehouse transfer transaction. Add `InventoryFacade` reads:
+- [x] `wms-be/src/shared/primitives/money.ts` -- `divideRoundHalfUp` (BigInt), re-exported by invoicing unchanged.
+- [x] `wms-be` inventory -- stamp one `recordedAt` per cross-warehouse transfer transaction. Add `InventoryFacade` reads:
   - `clientOnHandFoldByDayInTx(tx, scope, fromInstant, toInstant)`: one grouped query bucketed by IST date and `uom`, applying the fold rule;
   - `clientWarehousesWithEventsInTx(tx, tenant, clientIds)`: an EXISTS probe on the new index;
   - `firstEventInstantInTx(tx, scope)`;
   - `countDispatchedOrdersInTx(tx, scope, from, to)`.
-- [ ] `wms-be` inbound/outbound -- `InboundFacade.countReceiptLinesInTx` and `OutboundFacade.countPicksInTx`. Each `(tx, scope, from, to)` read is backed by one shared predicate function that 21-5's drill-down will reuse.
-- [ ] `wms-be/src/modules/billing/storage-snapshot.ts` -- `snapshotScopeInTx(tx, tenant, client, warehouse, now)`:
+- [x] `wms-be` inbound/outbound -- `InboundFacade.countReceiptLinesInTx` and `OutboundFacade.countPicksInTx`. Each `(tx, scope, from, to)` read is backed by one shared predicate function that 21-5's drill-down will reuse.
+- [x] `wms-be/src/modules/billing/storage-snapshot.ts` -- `snapshotScopeInTx(tx, tenant, client, warehouse, now)`:
   1. Take a per-scope `pg_advisory_xact_lock`.
   2. Read the progress row.
   3. Apply the commit guarantee: record `pending_xmax` and `pending_day` at the first tick at or after `T`, and write only when the current xmin is ≥ the recorded xmax.
@@ -161,16 +166,16 @@ These are FR-78, CAP-5 and CAP-6. Client invoices (21-5) need that usage, derive
   7. Run the drift check over the last 7 days, logging any drift as an error.
 
   Also add `verifySnapshotsInTx` (a dry-run re-fold and diff) and `rebuildScopeInTx` (for tests and the script).
-- [ ] `wms-be/src/modules/billing/metering.ts` -- `meterPeriodInTx(tx, tenant, client, fromDate, toDate)` (IST dates, inclusive). Guard `from ≤ to` and at most 366 days before calling segments. Return `{segments: [{rateCardId | null, fromDate, toDate, lines: [{chargeCode, basis, uom | null, quantity: string, ratePaise | null, amountPaise | null}]}], storageCompleteThrough: string | null, totals: {billedPaise, unbilledLines}}`. No-card stretches appear as `rateCardId: null` segments.
-- [ ] `wms-be/src/jobs/jobs.module.ts` -- **`StorageSnapshotWorker`**, enabled by `STORAGE_SNAPSHOT_POLL_MS` (unset or 0 means off; add it to `.env.example`). Each tick:
+- [x] `wms-be/src/modules/billing/metering.ts` -- `meterPeriodInTx(tx, tenant, client, fromDate, toDate)` (IST dates, inclusive). Guard `from ≤ to` and at most 366 days before calling segments. Return `{segments: [{rateCardId | null, fromDate, toDate, lines: [{chargeCode, basis, uom | null, quantity: string, ratePaise | null, amountPaise | null}]}], storageCompleteThrough: string | null, totals: {billedPaise, unbilledLines}}`. No-card stretches appear as `rateCardId: null` segments.
+- [x] `wms-be/src/jobs/jobs.module.ts` -- **`StorageSnapshotWorker`**, enabled by `STORAGE_SNAPSHOT_POLL_MS` (unset or 0 means off; add it to `.env.example`). Each tick:
   - discovers tenants cross-tenant;
   - per tenant, lists non-`self` clients × warehouses with events, through the facades;
   - uses a rotating window over scopes, with a bounded number per tick and a per-scope try/catch;
   - runs single-flight.
-- [ ] `wms-be/scripts/rebuild-storage-snapshots.ts` -- takes tenant, client and warehouse arguments. **Dry-run (verify) by default**; `--write` rebuilds under the scope lock.
-- [ ] `wms-be/src/api/billing-usage.controller.ts` + DTO -- `GET /tenants/{t}/clients/{c}/usage?from=&to=`, member-open, with the matrix error arms. Re-export `openapi.json`.
-- [ ] `wms-be` architecture and isolation -- add the new tables to `BILLING_TABLES`. Add a guard that billing imports no `ledgerEvents`, `picks` or `goodsReceipt*`. Add both tables to the client-isolation probe (the policy count moves).
-- [ ] `wms-be/test/metering.spec.ts` -- cover:
+- [x] `wms-be/scripts/rebuild-storage-snapshots.ts` -- takes tenant, client and warehouse arguments. **Dry-run (verify) by default**; `--write` rebuilds under the scope lock.
+- [x] `wms-be/src/api/billing-usage.controller.ts` + DTO -- `GET /tenants/{t}/clients/{c}/usage?from=&to=`, member-open, with the matrix error arms. Re-export `openapi.json`.
+- [x] `wms-be` architecture and isolation -- add the new tables to `BILLING_TABLES`. Add a guard that billing imports no `ledgerEvents`, `picks` or `goodsReceipt*`. Add both tables to the client-isolation probe (the policy count moves).
+- [x] `wms-be/test/metering.spec.ts` -- cover:
   - every matrix row;
   - every event type's fold arm;
   - the commit guarantee, via a held-open transaction stamped before `T`;
@@ -181,12 +186,12 @@ These are FR-78, CAP-5 and CAP-6. Client invoices (21-5) need that usage, derive
   - worker `tick()` idempotency, a two-instance race (GREATEST), and the rotating window;
   - `self` skipped;
   - the 0061 migration.
-- [ ] `wms-fe` -- a **Usage** section inside the per-client subtree of the Rate cards card:
+- [x] `wms-fe` -- a **Usage** section inside the per-client subtree of the Rate cards card:
   - **Period picker:** months from the client's creation to the current month (labelled "in progress"), defaulting to last month, plus a custom range of at most 366 days.
   - **Segment table:** charge, base unit, quantity (storage shown as unit-days), rate, and amount or "Not billed", with segment totals and an overall billed total.
   - **Notices:** "Estimate until invoiced · GST-exclusive"; "Storage through <date>"; and "Storage not measured yet" when that date is `null`.
   - **Data:** `useClientUsage` refreshes on `notifyRateCardsChanged`. Add the mappers and tests. `self` stays API-only.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `billing.md`: metering, snapshots, the fold rule, the commit guarantee, drift, the runbook (enabling the worker, backfill pace, the rebuild script) and the facade reads;
   - `inventory.md`, `inbound.md` and `outbound.md`: the new reads and the transfer stamp;
   - amend `_bmad-output/specs/spec-3pl/schema.md`: snapshot columns and key per uom; `uom` on `client_invoice_lines`;
@@ -204,7 +209,13 @@ These are FR-78, CAP-5 and CAP-6. Client invoices (21-5) need that usage, derive
 
 ## Implementation Notes
 
+- Baselines: wms-be `2b5a459e22fe3db1fb480412e93e67bff5e8b436` (frontmatter `baseline_commit`); wms-fe `91a3769537d47c6b641f8e63dc3c4f2dfc53e2d1`. Work happens on `feat/21-4-metering-and-storage-snapshots` in both repos. Leave changes uncommitted; do not commit, push, or open PRs. In wms-be run jest via `bun run test -- <file>` (bare `bun test` hangs) and never two jest invocations concurrently. Meta doc edits go in /Users/sasidhar/Documents/WMS-Meta (docs/ and _bmad-output/specs/spec-3pl/; you may edit existing files there). Do not touch anything under /tmp outside your own scratch files.
+
 ## Spec Change Log
+
+- **2026-10-07 (human, code review):** the commit guarantee changed from a snapshot-xmax proof to a `pg_stat_activity` check that no transaction which started before `T` is still open. The xmax proof failed a held-open test. The xid proof the agent substituted left a gap (a stamp taken before the transaction had an xid) and did not cover the counts. The new check covers storage and counts with no gap, at the cost of needing session visibility (it refuses when it cannot see other sessions). KEEP: the 15-minute skew margin, write-once rows, and the drift check.
+
+- **2026-10-07, implementation — the commit proof's xmax.** The design said "record `pg_current_snapshot()` xmax … write when the current xmin ≥ it". Verified against Postgres 18: the snapshot's xmax is `latestCompletedXid + 1`, and a transaction still running with a newer xid is at or above it and unlisted — the held-open test passed straight through it. Implemented instead: the recorder's **own** `pg_current_xact_id() + 1` (the first unassigned xid) as `pending_xmax`, satisfied by a LATER tick's xmin (Boundaries (b)'s intent, unchanged: "no transaction that started before `T` is still open"). Consequence: a proof never completes in the tick that records it, so a quiet scope writes on its second tick. Residual (a transaction that had stamped but taken no xid when the proof was recorded) recorded in PENDING; the pattern in IMPLEMENTATION-GUIDE §7d. **Superseded by the human renegotiation above** — implemented as the `pg_stat_activity` check; the xid proof and its `pending_xmax`/`pending_day` columns are gone.
 
 ## Review Triage Log
 
@@ -233,6 +244,28 @@ These are FR-78, CAP-5 and CAP-6. Client invoices (21-5) need that usage, derive
 | 19 | low | Milli-unit-days can pass 2⁵³; the line grain | Decimal strings; one line per (segment, charge, uom) |
 | 20 | low | Member-open commercial reads were implicit | Stated; the portal must not reuse it |
 | 21 | low | Doc closures were incomplete | Added |
+
+*Code review, 2026-10-07: three layers (blind, edge-case, verification-gap); 31 findings merged into 20, each verified against the code.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | The commit guarantee leaks: the xid proof misses a stamp taken before the xid exists, the drift check can't see a wrong baseline outside its window, and the counts (GRN, picks) are not covered at all | `storage-snapshot.ts` proof; drift-check baseline | human decision: the `pg_stat_activity` `xact_start < T` check (spec change log); a genesis-sum drift check; counts covered |
+| C2 | high | An order dispatched across a card boundary or period end is counted in both, double-billing outbound handling | `countDispatchedOrdersInTx` uses distinct per window | patch: attribute each order to its **first** dispatch event's `recorded_at`, in both the count and the predicate |
+| C3 | high | A late event stamped before a scope's first visible event loses its days permanently (the watermark is persisted before any proof) | `snapshotScopeInTx` "born" watermark | patch: the first watermark is persisted only when the first day is written under the guarantee; the start is computed at write time |
+| C4 | high | Pick and order counts are never tested against other clients' activity (dropping the client filter passes every test) | `picksPredicate`, `dispatchedOrderEventsPredicate` | patch: tests with other clients' picks and dispatches, and with a pack-only `orderId` |
+| C5 | medium | Storage days past the watermark are reported as billed ₹0 | `metering.ts:1081-1090` | patch: each segment and line carries `storageMeasuredThrough`; an unmeasured stretch has `amountPaise` null and is excluded from the billed total |
+| C6 | medium | The rotating window advances one scope per tick and starves the tail | `jobs.module.ts:674-684` | patch: advance by the number processed |
+| C7 | medium | The route doesn't refuse client-scoped (portal) sessions, despite "the portal must not reuse it" | controller | patch: refuse a session with `users.client_id`, plus a test |
+| C8 | medium | `storageCompleteThrough` DTO text says null when no snapshot has run; the code returns first-day minus one | DTO vs `storageCompleteThroughInTx` | patch: the DTO matches the code; the self case is null |
+| C9 | medium | `verifySnapshotsInTx` runs without the scope lock (false drift) | `storage-snapshot.ts:1437-1448` | patch: take the scope lock |
+| C10 | medium | The rebuild's reset of `running` is untested; `--write` prints the pre-rebuild drift as the result | rebuild and script | patch: test `running` after the rebuild; print before and after clearly |
+| C11 | medium | Index claims are wrong: the order count and the per-client snapshot sums aren't served | 0061 | patch: add `ledger_events (tenant_id, client_id, type, recorded_at)` and `storage_snapshots (tenant_id, client_id, snapshot_date)`; fix the comments |
+| C12 | medium | The drift check runs every tick for unchanged scopes | worker | patch: once per IST day per scope, or when the watermark advances |
+| C13 | low | Stale comments still describe the rejected snapshot-xmax proof | schema.ts, 0061 header, `storage-snapshot.ts` | patch |
+| C14 | low | A uuid array built by string concatenation | `clientWarehousesWithEventsInTx` | patch: bind an array parameter |
+| C15 | low | An amount past 2⁵³ throws an untyped Error (a 500) | `metering.ts:952-957` | patch: a typed refusal |
+| C16 | low | The genesis-baseline branch is untested | `fromGenesis` | patch: a test (a late earlier event) |
+| C17 | low | The one-stamp transfer test can pass when both stamps land in the same millisecond | `transfer.spec.ts` | rejected: several round-trips separate the legs; documented |
 
 ## Design Notes
 

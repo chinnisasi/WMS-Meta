@@ -63,12 +63,14 @@ rate_card_lines
 
 ```
 id, tenant_id, client_id not null, warehouse_id not null
-snapshot_date    date not null
-billable_units   bigint not null     -- milli-units, or handling units once 10-3 lands
+snapshot_date    date not null       -- the IST day this is the CLOSING stock of
+uom              text not null       -- the SKU base UoM (one row per base unit)
+on_hand_milli    bigint not null     -- base milli-units at the end of the IST day, > 0
 created_at
 ```
-- `unique (tenant_id, client_id, warehouse_id, snapshot_date)`.
-- **A projection, not a book** (AD-25). Written by a daily job, rebuildable from the ledger, and a rebuild must reproduce it exactly.
+- `unique (tenant_id, client_id, warehouse_id, snapshot_date, uom)`; `CHECK (on_hand_milli > 0)` — a zero day has no row.
+- **A projection, not a book** (AD-25). Written by a daily job, rebuildable from the ledger, and a rebuild must reproduce it — as a set: `(scope, day, uom, on_hand_milli)` equality, not byte equality (ids and `created_at` differ by construction).
+- *(Amended by story 21-4: `billable_units` became `on_hand_milli` **per base UoM** — decision 1, storage is counted separately per base unit — since summing a `kg` SKU beside an `each` SKU means nothing. Handling units stay out until a real pallet concept exists. A companion table `storage_snapshot_progress (tenant_id, client_id, warehouse_id) pk, last_day, running jsonb, drift_checked_on, updated_at` is the job's watermark (born with the first day written under the commit guarantee) — `modules/billing.md`. Only client brands are snapshotted, never `self`. Both tables carry the AD-24 read clause with operator-only writes.)*
 
 ### `client_invoices` / `client_invoice_lines`
 
@@ -86,11 +88,13 @@ client_invoice_lines
   segment_from, segment_to   timestamptz not null   -- the stretch of the period that card covered
   charge_code      text not null
   basis            text not null
-  quantity         bigint not null   -- events counted, or unit-days
+  uom              text              -- the base UoM of a storage line (one line per uom); null for handling
+  quantity         bigint not null   -- events counted, or milli-unit-days
   unit_amount_paise, amount_paise    bigint not null
   sac_code         text              -- SERVICES, not HSN: a 3PL bills a service
 ```
 - **Immutable once issued** (CAP-7): the status CHECK permits no transition out of `issued` except to `disputed`, `settled` or `void`, and no edit of amounts after `issued_at` is set. A correction is a new document.
+- *(Amended by story 21-4: `uom` on the line — storage is one line per (segment, base UoM); a storage quantity is milli-unit-days and can pass 2⁵³, so it is bigint here and a decimal string on the wire. 21-5 meters a period only after its end plus the snapshot commit guarantee, and stores its own output.)*
 - `rate_card_id` is **recorded on each invoice line**, so re-rendering it later uses the card that actually applied. *(Amended by story 21-3, decision 5: a card may take effect on any date, so a period can span two cards — a mid-period rate change **splits the line**, one line per card segment. `BillingFacade`'s `rateCardSegmentsInTx(client, from, to)` returns exactly those segments, clipped and ordered.)*
 
 ### `advance_shipment_notices` / `asn_lines`

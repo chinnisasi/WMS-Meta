@@ -591,4 +591,18 @@ These have all caused, or were caught one review short of causing, a real defect
 
 - `event_hash` still excludes `client_id` — an ACME event recomputes to its stored hash and `verifyChain` passes.
 - `test/architecture.spec.ts` re-pins this: the ledger must read `skus.clientId` and must not call `ensureSelfClientInTx`.
-- Reconcile and rebuild do not touch `client_id`; no `client_id` index yet (21-4).
+- Reconcile and rebuild do not touch `client_id`. Story 21-4 adds the first `client_id` indexes: `(tenant_id, client_id, warehouse_id, recorded_at)` (the fold, scope discovery) and `(tenant_id, client_id, type, recorded_at)` (the dispatched-order count) — 0061, plain builds; 0058's runbook applies to a live deploy.
+
+## Client metering reads (story 21-4)
+
+Billing (AD-25) reads the ledger **only** through these facade methods; the SQL and the fold rule live in `src/modules/inventory/client-metering.ts`, which the facade delegates to and re-exports the scope types and `dispatchedOrderEventsPredicate` from.
+
+| Method | Does |
+|---|---|
+| `clientOnHandFoldByDayInTx(tx, {tenant, client, warehouse}, fromInstant \| null, toInstant)` | ONE grouped query: per (IST day of `recorded_at`, SKU base `uom`) the net on-hand movement under the replay rule — +abs(δ) destination-only, −abs(δ) source-only, 0 otherwise (`ON_HAND_FOLD_TERM`) — over `[from, to)` (`from` null = genesis). BigInt deltas (raw `::text`). Grouped by the event's `client_id` |
+| `clientWarehousesWithEventsInTx(tx, tenant, clientIds)` | `(clientId, warehouseId)` pairs with any event — an EXISTS probe per pair on the new index (stops at the first row); the ids are one bound `uuid[]` parameter |
+| `clientOnHandAtInTx(tx, scope, toInstant)` | per-uom on-hand at an instant, from genesis (the snapshot drift check's genesis sum) |
+| `firstEventInstantInTx(tx, scope)` | the earliest `recorded_at` of a client in a warehouse, or null |
+| `countDispatchedOrdersInTx(tx, {tenant, client}, from, to)` | distinct orders whose FIRST `dispatch.dispatched` event (by `recorded_at`, the event's client) falls in the window — an order whose lines dispatch either side of a boundary counts once; served by 0061's `(tenant_id, client_id, type, recorded_at)` index and 0039's orderId index — here, not on outbound, because outbound reads no ledger. Its predicate (`dispatchedOrderEventsPredicate`) is the one 21-5's dispute drill-down reuses |
+
+The fold is the projection's own rule, so the fold over a scope's whole history equals its live `stock_on_hand` (pinned). **The transfer stamp:** `transfer.command.ts`'s inbound confirm now stamps **one** `recorded_at` for every event of the transaction — a cross-warehouse leg's source draw and destination intake used to call `nowIso()` separately and could straddle an IST midnight (units in neither warehouse, or both, for a day). Pinned in `test/movements/transfer.spec.ts`.

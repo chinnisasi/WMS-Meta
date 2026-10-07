@@ -59,7 +59,7 @@ Invoicing: a client brand's order is **not GST-invoiced** (decision 5) — `orde
 
 ## The stamping rule (AD-24 placement)
 
-`client_id` is a **selective denormalisation** — explicit NOT NULL columns only where queries filter/aggregate without joining through the SKU: `skus`, `orders`, `purchase_orders`, `ledger_events` (billing aggregates over it constantly). Nullable by design: `bins.dedicated_client_id` (attribute, not scope) and `users.client_id` (null = tenant staff, set = portal user — **inert until 21-7**). Tables referencing a SKU — stock, reservations, picks, order lines, GRN lines — inherit and get **no column**; their client isolation rides on the join through `skus`. **No `client_id` indexes yet** (21-4).
+`client_id` is a **selective denormalisation** — explicit NOT NULL columns only where queries filter/aggregate without joining through the SKU: `skus`, `orders`, `purchase_orders`, `ledger_events` (billing aggregates over it constantly). Nullable by design: `bins.dedicated_client_id` (attribute, not scope) and `users.client_id` (null = tenant staff, set = portal user — **inert until 21-7**). Tables referencing a SKU — stock, reservations, picks, order lines, GRN lines — inherit and get **no column**; their client isolation rides on the join through `skus`. The first `client_id` index is 21-4's `ledger_events (tenant_id, client_id, warehouse_id, recorded_at)` (0061) for billing's fold and counts; the order/PO/SKU lists still have none (their client filters are PENDING).
 
 ## Gotchas (the ones that caused real defects, or nearly did)
 
