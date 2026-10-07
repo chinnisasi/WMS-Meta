@@ -217,7 +217,9 @@ development_status:
   21-2b-client-admin-and-attribution: done
   21-3-rate-cards: done
   21-4-metering-and-storage-snapshots: done
-  21-5-client-invoices: backlog
+  21-5-client-invoices: in-progress
+  # Split by the human (2026-10-07): the line drill-down is 21-5b; A5 cleanup is its own refactor story.
+  21-5b-dispute-drill-down: backlog
   21-6-advance-shipment-notices: backlog
   21-7-client-portal: backlog
   21-8-per-client-service-reporting: backlog
@@ -999,7 +1001,7 @@ action_items:
       de-duplicate state maps, instant regex, FE IST handling, loader helpers; one
       FE-BE constants drift guard; converge the idempotency skeleton and lock the
       config commands; fix supplyType nullable-enum"
-    owner: "next invoicing touch (21-5)"
+    owner: "own refactor story (split from 21-5 by the human, 2026-10-07)"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
   - id: "epic-8-retro-item-84-process-specs-citing-a-regulator-or-exte"
