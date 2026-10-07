@@ -362,3 +362,9 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 - **The carried successor copies the original's `client_id`** (unchanged from 21-1).
 - `PurchaseOrderSnapshot.purchaseOrder.clientId`, `PurchaseOrderEntry.clientId` and `PurchaseOrderDto.clientId` carry it (optional/nullable on the DTO — a replay stored pre-21-2b lacks it).
 - GRNs and putaway carry no client column — their ledger events take the SKU's client at append (`inventory.md`).
+
+## Billing reads (story 21-4)
+
+- **`InboundFacade.countReceiptLinesInTx(tx, {tenantId, clientId}, from, to)`** — the `per_receipt_line` count for client metering: every `goods_receipt_lines` row of the client's SKUs whose GRN was **recorded** (`goods_receipt_notes.recorded_at`, the server stamp) in `[from, to)`, across warehouses. Every stored line counts, **including** one whose excess was later rejected as an over-receipt (the unloading happened); an over-receipt approval re-emits `grn.received` but writes no line, so nothing counts twice.
+- **`receiptLinesPredicate(scope, from, to)`** (exported from `inbound.facade.ts`, aliases `grl` / `grn` / `s`) is the ONE definition — 21-5's dispute drill-down lists exactly the lines this counts.
+

@@ -140,6 +140,16 @@ Rate cards: a client brand's versioned prices (`modules/billing.md`). Reads memb
 
 Every route: a malformed `clientId`/`rateCardId` → `400 validation-failed`; any unknown or foreign card or client → `404`. No outbox event.
 
+### billing — `billing-usage.controller.ts` (story 21-4)
+
+A client's **metered usage** (`modules/billing.md` §Metering): each charge's quantity per rate-card segment, with its rate and GST-exclusive amount — an **estimate until invoiced**. Member-open (every member already reads the cards). **The 21-7 client portal must not reuse this route** — it is an operator read of commercial terms.
+
+| Method | Path | Capability | Notes |
+|---|---|---|---|
+| GET | `/tenants/{t}/clients/{c}/usage?from=&to=` | — | `from`/`to` required IST `YYYY-MM-DD`, **inclusive**. → `ClientUsageResponse {clientId, from, to, asOf, storageCompleteThrough: date \| null, segments: [{rateCardId \| null, fromDate, toDate, storageMeasuredThrough: date \| null, lines: [{chargeCode, basis, uom \| null, quantity: string, ratePaise \| null, amountPaise \| null}]}], totals: {billedPaise, unbilledLines}}`. Segments split at every card boundary (IST midnights); a stretch with no card is a `rateCardId: null` segment. One line per (segment, charge, uom), summed across warehouses — storage per base UoM as base-unit-days (a decimal string), the counts (receipt lines, picks, orders — each order once, by its FIRST dispatch event) as whole numbers. A charge the card does not price has a null rate and amount; a storage line in a segment with unmeasured days has the measured quantity and a null amount (not in `billedPaise`). An amount past 2⁵³ → `422 metering-amount-out-of-range`. Storage counts only days ≤ `storageCompleteThrough` (the minimum snapshot watermark; null = not measured — the tenant's own client, or nothing snapshotted); counts run to now. Not a period (`from > to`), more than 366 days, a malformed date, a missing date or a malformed `clientId` → `400 validation-failed`; an unknown/foreign client → `404`; another tenant's path → `403 permission-denied`; a client-portal session (a user with a `client_id`) → `403 role-denied` |
+
+No mutation, no outbox event. The daily storage snapshots behind it are written by the `StorageSnapshotWorker` (`STORAGE_SNAPSHOT_POLL_MS`) — no HTTP route; the verify/rebuild is `scripts/rebuild-storage-snapshots.ts`.
+
 ## outbound — `outbound.controller.ts`
 
 | Method | Path | Capability | Notes |

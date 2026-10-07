@@ -216,7 +216,7 @@ development_status:
   # attribute goods to one; 21-2b lands client admin + attribution before billing.
   21-2b-client-admin-and-attribution: done
   21-3-rate-cards: done
-  21-4-metering-and-storage-snapshots: ready-for-dev
+  21-4-metering-and-storage-snapshots: done
   21-5-client-invoices: backlog
   21-6-advance-shipment-notices: backlog
   21-7-client-portal: backlog

@@ -257,6 +257,19 @@ This is not a precedent. A new read model that wants the same freedom takes its 
 
 **Moving a primitive to `shared/` without changing a module's error contract.** When a helper moves to `shared/primitives` (21-3: `istDateOf`, `isIsoDate` from invoicing to `time.ts`), the shared copy throws a neutral error (`RangeError`) and the old module **re-exports a wrapper** that rethrows its own typed failure — `invoicing/eway-threshold.ts`'s `istDateOf` still throws `ArithmeticOverflowError`, because `eway.delivery.ts` acks exactly that type as a data fault. A plain re-export would have turned a data fault into a retry loop. Pin both: the shared helper's behaviour and the module wrapper's error type.
 
+## 7d. Proving "every transaction before T has finished" (story 21-4)
+
+A projection that buckets by a **server-stamped instant** (`recorded_at`) cannot trust a wait: the stamp is taken before the locks and the commit, and nothing bounds a transaction's length. The check the storage snapshots use (`billing/storage-snapshot.ts`, human-decided 2026-10-07):
+
+- `now ≥ T + margin` (clock skew), **and**
+- no OTHER client backend of this database in `pg_stat_activity` has an open transaction with `xact_start < T`.
+
+Every stamp is taken inside a transaction that began no later than the stamp, so this covers a transaction with or without an xid, and every count stamped the same way. Run it **before** the reads that depend on it (READ COMMITTED: anything not open at the probe is visible to the next statement).
+
+**Two proofs that look right and are not:** `pg_snapshot_xmax(pg_current_snapshot())` is `latestCompletedXid + 1`, so a transaction still running with a newer xid is at or above it, unlisted — the proof passes while it is open. Recording your own `pg_current_xact_id() + 1` and waiting for a later xmin fixes that but misses a transaction that has stamped and **not yet taken an xid** (written nothing). Both were caught by held-open-transaction tests (`test/metering.spec.ts`).
+
+**The price is visibility.** A role sees other users' transactions only with `pg_read_all_stats` (or as the same role); a hidden row reads `<insufficient privilege>`. Detect it and **refuse** — never treat an invisible session as idle. A deploy keeps all app connections on one role or grants `pg_read_all_stats`.
+
 ## 8. Before you say it's done
 
 ```bash

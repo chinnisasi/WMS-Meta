@@ -524,3 +524,10 @@ Each of these has actually cost something.
 - `OrderSnapshot.order.clientId`, `OrderEntry.clientId` and the DTOs carry it (optional/nullable on the snapshot — a replay stored pre-21-2b lacks it).
 - `orderInvoiceFactsInTx` carries `clientSystemOwned` (through `clients.facade.ts` `getClientsInTx`; a missing client row reads as NOT the tenant's own — fail closed). Invoicing skips client orders (`invoicing.md`).
 - Residual race (PENDING): the order path does not lock SKU rows, so a client correction committing between the preflight read and the write could leave the order on the SKU's old client. The correction itself only succeeds while the SKU has no order line.
+
+## Billing reads (story 21-4)
+
+- **`OutboundFacade.countPicksInTx(tx, {tenantId, clientId}, from, to)`** — the `per_pick` count for client metering: `picks` rows of the client's SKUs **created** (`created_at`, the pick transaction's start — the server's clock) in `[from, to)`, across warehouses. One row per picklist line (`picks_line_unique`), so `pick.picked` events (one per batch arm or serial) are never what is counted; a zero-unit short pick writes no row and is not billed; transfers create no picks.
+- **`picksPredicate(scope, from, to)`** (exported from `outbound.facade.ts`, aliases `p` / `s`) is the ONE definition — 21-5's dispute drill-down lists exactly the picks this counts.
+- The **dispatched-order** count is NOT here: outbound reads no ledger, so it lives on `InventoryFacade.countDispatchedOrdersInTx` (`inventory.md`).
+

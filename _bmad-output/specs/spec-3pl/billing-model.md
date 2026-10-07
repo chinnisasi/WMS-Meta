@@ -15,6 +15,8 @@ Companion to `SPEC.md`. What a 3PL charges for, where each number comes from, an
 | `pick` | `per_pick` | a distinct picklist line picked | `pick.picked` — which the ledger emits once per batch arm or serial, so count lines, not events | The floor's unit of work |
 | `outbound_handling` | `per_order` | a distinct order dispatched | `dispatch.dispatched` — emitted once per order **line**, so count orders, not events | Per shipment, independent of line count |
 
+*(Amended by story 21-4 — what each charge is actually metered from: storage from `storage_snapshots`, one line per SKU base UoM, Σ daily closing base milli-units ÷ 1,000,000 × the rate; receipt lines from `goods_receipt_lines` by the GRN's `recorded_at` — every stored line, **including** one later rejected as an over-receipt; picks from `picks` rows (one per picklist line) by `created_at`; orders as distinct orders attributed to their FIRST `dispatch.dispatched` event (by its `recorded_at` and `client_id`) — an order whose lines ship either side of a boundary counts once. Each count has one predicate on the owning module's facade, which the dispute drill-down reuses. Transfers are not billed handling.)*
+
 *(Amended by story 21-3: the event names are the ledger's real ones — there is no `order.dispatched` ledger event (that is the outbox event); each count is of distinct documents, not raw events. Storage is priced per 1,000 base units per day in whole paise, decision 1.)*
 
 Both `charge_code` and `basis` are **closed vocabularies**, TS tuple plus migration CHECK, pinned together by an e2e test — the repo's pattern across its other ten enums.
@@ -25,11 +27,15 @@ Both `charge_code` and `basis` are **closed vocabularies**, TS tuple plus migrat
 
 The ledger records *movements*. Storage bills *presence over time*, which no single event carries.
 
-A daily job writes one `storage_snapshots` row per (client, warehouse, day): the billable units held at the snapshot instant. A month's storage charge is then the sum of daily billable units × the rate.
+A daily job writes one `storage_snapshots` row per (client, warehouse, IST day, base UoM): the base milli-units on hand at the **end** of the IST day — the ledger fold over every event recorded before the IST midnight that ends it. A month's storage charge is then the sum of the daily values × the rate, per base UoM, each day priced by the card in force at its start.
+
+**Stock leaves storage when it is picked** *(story 21-4, decision 2)*. The ledger takes picked stock out of its bin (a draw); packing and dispatch move nothing. So stock received on the 10th, picked on the 18th and dispatched on the 20th is stored the 10th through the 17th. Counting to dispatch would need a second fold over picks and dispatches, and would be harder to defend on a disputed invoice.
+
+**A day is written only when it is complete** *(21-4)*: 15 minutes past its IST midnight **and** once no transaction that began before that midnight is still open (`pg_stat_activity` — the same proof covers the handling counts; `modules/billing.md`). A drift check (a recent-days re-fold plus a genesis-sum check) runs once per IST day per scope and logs any mismatch; a verify/rebuild script re-derives the whole projection.
 
 **This is a projection, not a book.** Replaying the ledger must reproduce every snapshot exactly, and a rebuild is the test (AD-25). It is a cache for a number that is otherwise expensive to compute, and it is how 3PL contracts are written anyway — in storage *days*.
 
-**What "billable units" counts** was the first open question in `SPEC.md`. **Settled by story 21-3 (decision 1): SKU base units, priced per 1,000 per day.** Pallet or bin storage waits for a real pallet concept — 10-3's handling units are catch-weight cases with no location, client or ledger events, so there is nothing to count (`docs/design/PENDING.md` §billing). Summing unlike base units (`kg` beside `each`) is a known limit, also PENDING.
+**What "billable units" counts** was the first open question in `SPEC.md`. **Settled by story 21-3 (decision 1): SKU base units, priced per 1,000 per day.** Pallet or bin storage waits for a real pallet concept — 10-3's handling units are catch-weight cases with no location, client or ledger events, so there is nothing to count (`docs/design/PENDING.md` §billing). Unlike base units are never summed: **story 21-4 counts each base UoM separately** — one snapshot row and one storage line per unit, each priced at the card's storage rate (21-4 decision 1).
 
 ## Rate cards
 

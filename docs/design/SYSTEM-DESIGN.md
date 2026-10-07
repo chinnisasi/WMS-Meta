@@ -73,7 +73,7 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `channels` | sales-channel connections, standing buffers, availability sync (7-1), webhook ingest + fulfillment writeback (7-2) |
 | `invoicing` | GST invoices (8-1): one per dispatched order, derived from dispatch facts over `order.dispatched`, exact paise/bps math, per-tenant FY numbering (per supplier GSTIN since 8-1b); the HSN summary shipped in 8-2a — a read model over issued invoices (`issued_at`, `invoice_lines.uom`) with one catalog read, via `CatalogFacade`, for the current-HSN hint; e-way bills (8-2b) queue off `invoice.issued`, export as NIC bulk JSON or generate through the `EwayGateway` port (unconfigured in production) |
 | `reporting` | the operational dashboard (9-1, FR-27): a read model with **no tables** — ten per-warehouse KPI tiles computed live over the owning modules' records (the ONE named read-only exception to the facade rule, decision 6 — `IMPLEMENTATION-GUIDE.md` §7a), each figure carrying the list route behind it. The audit trail and exports (9-3) join it next |
-| `billing` | client billing (AD-25), story 21-3: **rate cards** — a client brand's versioned prices (`rate_cards`, `rate_card_lines`), drafted then activated from an IST-midnight date and frozen after (DB triggers); a later card supersedes from its own date, a scheduled one can be cancelled (reopening its predecessor). The facade answers "in force at an instant" and "which cards cover a period" (segments — 21-5's invoice-line input). Metering (21-4) and client invoices (21-5) join it; it writes no stock |
+| `billing` | client billing (AD-25), story 21-3: **rate cards** — a client brand's versioned prices (`rate_cards`, `rate_card_lines`), drafted then activated from an IST-midnight date and frozen after (DB triggers); a later card supersedes from its own date, a scheduled one can be cancelled (reopening its predecessor). The facade answers "in force at an instant" and "which cards cover a period" (segments — 21-5's invoice-line input). Story 21-4 adds **metering** (a client's usage per card segment, priced — the `usage` read) and the **daily storage snapshots** (`storage_snapshots`, a projection folded from the ledger under a commit guarantee), reading the ledger, GRN lines and picks only through the inventory, inbound and outbound facades. Client invoices (21-5) join it; it writes no stock |
 | `notifications` | spine placeholder for epic 9 (9-2) |
 
 The api shell (`src/api/`) is where two modules' reads are joined — the device catalog snapshot composes across `inbound` and `outbound` there rather than making one module import the other.
@@ -118,6 +118,7 @@ So a carrier API being down never rolls back a dispatch. Domain state lands firs
 | Outbox relay | drains integration events, backs off, quarantines |
 | Reconciliation | replays the ledger, compares to projections, quarantines divergence |
 | Reservation reaper | expires TTL'd holds, runs the counter parity pass |
+| Storage snapshots (21-4) | writes each client brand's daily closing stock per warehouse and base UoM, once the day is provably complete; drift-checks the last 7 days (`STORAGE_SNAPSHOT_POLL_MS`) |
 
 All poll on configurable intervals and **take explicit tenant context** — AD-3's scoping covers background work too, not just the API.
 
