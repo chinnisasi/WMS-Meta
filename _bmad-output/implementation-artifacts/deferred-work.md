@@ -613,3 +613,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-1-operational-dashboard.md`
   summary: 9-1b dashboard click-through (frontend only) — the Ledger page at /inventory (URL-driven filters by event type, date range, reference doc and shortPick, with views for pack-verification failures and reservation refusals) and URL filters on /replenishment (alert kind/status), /outbound (order status), /conflicts (queue incl. over-receipts) and /channels.
   evidence: Split from 9-1 at the human's request (2026-10-06) to halve the review surface; 9-1 ships every backend list filter and drill definition, so 9-1b is frontend-only and needs no backend or migration change.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-5-client-invoices.md`
+  summary: 21-5b — dispute drill-down: expand a client invoice line to the source records (GRN lines, picks, first-dispatch order events, per-day/per-SKU storage) that produced its quantity, reusing 21-4's shared predicates.
+  evidence: Split by the human on 2026-10-07 when scoping 21-5; independently shippable after 21-5's invoice lines exist.
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-5-client-invoices.md`
+  summary: Epic-8 retro A5 invoicing cleanup — extract generator.ts and eway-bills.tsx, de-duplicate state maps/instant regex/FE IST handling/loader helpers, one FE-BE constants drift guard, converge the idempotency skeleton, lock the config commands, fix supplyType nullable-enum.
+  evidence: Split by the human on 2026-10-07; a pure refactor with no 21-5 dependency, reviewed better on its own diff.
