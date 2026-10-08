@@ -623,3 +623,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-5b-dispute-drill-down.md`
   summary: Test the refresh restamp of `client_invoices.storage_measured_through` when the content hash is unchanged but the group watermark moved.
   evidence: 21-5b code review (verification-gap); reverting `restampMeasuredThroughInTx` fails no test. Impact is limited to breakdown 404s on zero-stock days; the setup needs a client in two groups with out-of-step snapshot watermarks.
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-6-advance-shipment-notices.md`
+  summary: 21-6b — the handheld receives against an ASN: parse the snapshot's `openAsns` arm (`?? []` default), an ASN context in the receive draft beside `poId`, `asnId`/`asnLineId` on the `grn.submit` payload without changing existing PO/blind hashes, ASN refusals in the replay fate table, ASN cards in the inbox and choose step.
+  evidence: Split by the human on 2026-10-08 when scoping 21-6; a separate repo (wms-mobile, hand-written API types) and independently shippable once 21-6's server side lands.
