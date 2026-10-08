@@ -119,6 +119,8 @@ Checklist. **Every item has been missed at least once.**
 - [ ] **A `drizzle/meta/NNNN_snapshot.json`, and `git add` it.** Story 10.1 shipped one untracked; drizzle-kit diffs against the newest *committed* snapshot, so the next `db:generate` on another machine emits a duplicate type change, and a plausible "fix" applies the data change twice
 - [ ] RLS policy for any new table — **migration SQL only, never `schema.ts`**
 - [ ] CHECK constraints — same rule. Widening one means DROP then re-ADD (the 0023/0024 precedent)
+- [ ] **A CHECK arm over a NULLABLE column must say `IS NOT NULL` before `IN (…)`.** `NULL IN (…)` is NULL, and a CHECK treats NULL as a pass — 0013's `po_id IS NULL AND blind_reason_code IN (…)` admitted a GRN with neither a PO nor a reason for three epics; nothing noticed until 21-6's migration probed it (0064 closed it)
+- [ ] **Probe every new CHECK in the post-migration assertion with a refused insert** (and one accepted shape, rolled back by a sentinel exception, so a CHECK that refuses everything fails too) — 0064 is the model; it is what caught the hole above
 - [ ] `bun run db:generate` afterwards must report **"No schema changes"** — the only check that the hand-written SQL and `schema.ts` agree
 - [ ] `git status --short` must show **no untracked files**
 
@@ -159,6 +161,8 @@ Plus **an e2e test pinning the TS list against the DB constraint** (`orders.spec
 **A guard over free text must fail CLOSED.** An allow-list of what is permitted, never a deny-list of what is forbidden — every spelling nobody thought of is a silent accept. The same rule governs status guards: an allow-list of legal states, so a new state arm is a compile or runtime error rather than a silent fall-through (`outbound.md` Gotchas #1, #2, #11).
 
 **Changing the representation of a hashed field is a cross-deploy break.** Idempotency payload hashes and `source_payload_hash` are computed over command fields; change a field's *units* or shape and no key written by the deployed build can replay — it answers `422`, or `order-source-conflict` for a channel redelivery. 10.2 did this across nine commands in five modules. Decide it explicitly, record it, and pin it.
+
+**A command that the sync-report replay rebuild can re-execute receives its stored payload RAW (21-6).** Optional keys a device omitted arrive as `undefined`, not `null`, and every `=== null` check then takes the wrong branch (`grn.submit` 500'd on a payload without `weightsGrams`). Normalise each optional field (`?? null`) right after hashing and before any rule reads it — never in the hash itself, whose shape is the cross-version contract.
 
 **Adding an optional field to a hashed payload: the conditional-key exception (8-1d).** The house convention is an always-present key (`destination: … ?? null`, `consigneeGstin`), and each one added that way was an accepted, pinned break — every in-flight key answered `422`, every channel redelivery `order-source-conflict`. For a field almost no request carries, that break buys nothing, so 8-1d's `consigneeLegalName` joins **both** order hashes (`payloadHash` and `sourcePayloadHash`) **only when present**: normalised first (JS trim, blank = absent), then spread in at a fixed position (right after `consigneeGstin`) as `...(name === null ? {} : { consigneeLegalName: name })`. A request without it hashes byte-for-byte as before. Rules if you reuse it:
 - normalise *before* deciding presence, so `''` and `'   '` hash as absent, never as a different key;

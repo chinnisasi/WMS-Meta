@@ -123,6 +123,13 @@ asn_lines
 ```
 - `unique (tenant_id, asn_code)`.
 - Mirrors `purchase_orders` / `purchase_order_lines` deliberately, so **receiving books against either** with one flow (CAP-9). The GRN's reference document becomes "a PO or an ASN", not a second path.
+- *(Amended by story 21-6 — what was built, `drizzle/0064_advance_shipment_notices.sql`:)*
+  - **Status `closed`** joins the set (`announced | partially_received | received | closed | cancelled`): a partially received ASN closed short by an operator, with a note; no carry-forward. `announced`/`partially_received`/`received` are **derived** from the lines (Σ received against Σ announced per line) in the same transaction as every receipt, approval and amend; `closed` (from `partially_received`) and `cancelled` (from `announced`) are explicit and terminal.
+  - **`status_note text`** — set exactly on `closed` / `cancelled` (1–500, a pairing CHECK).
+  - **The code is unique per `(tenant_id, client_id, asn_code)`**, not per tenant — clients supply their own codes, and two clients may both send `ASN-001`. Code 1–64.
+  - **Receiving** lands on `announced`, `partially_received` and `received` (everything beyond announced on a `received` ASN pends as an over-receipt); only `closed`/`cancelled` refuse. **Cancel** refuses `asn-has-receipts` while any GRN references the ASN. The list row carries **`linesComplete`** (lines with received ≥ announced) — the unit-safe progress figure beside the UoM-mixing totals. The billing drill shows a GRN's PO/ASN code only when that document's client is the line's SKU's client.
+  - The client is **explicit** on the request and checked against the lines' SKUs; the warehouse is fixed at create. `asn_lines` carry `created_at`/`updated_at` (line order) and no status; `announced_qty > 0`, `received_qty ≥ 0`, no ceiling (an approved over-receipt passes it). RLS: the header carries the AD-24 clause on both arms; the lines inherit visibility through the parent.
+  - **The GRN and over-receipt columns:** `goods_receipt_notes.asn_id` with the pairing CHECK widened to three arms (a PO, an ASN, or neither with a reason — written out in full); `goods_receipt_lines.asn_line_id` (never beside `po_line_id`); `over_receipts.asn_id` / `asn_line_id` with a CHECK that exactly one of the pairs `(po_id, po_line_id)` / `(asn_id, asn_line_id)` is set. Story 21-6 thereby changes three existing tables — the "purely additive" note under *Migrations* below holds for the new tables only.
 
 ## Migrations
 

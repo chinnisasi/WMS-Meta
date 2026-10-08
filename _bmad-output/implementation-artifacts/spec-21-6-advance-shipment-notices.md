@@ -2,7 +2,7 @@
 title: 'Advance shipment notices — announce an inbound shipment; receiving books against a PO or an ASN in one flow'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 baseline_commit: '3527a8ef462e0ef22f5198a19ad157d097fb5583'
 review_loop_iteration: 0
@@ -72,7 +72,7 @@ context:
   - `announced`, `partially_received` and `received` are **derived** from Σ received against Σ announced per line, in the same transaction as every receipt, approval and amend.
   - Rejecting an over-receipt never changes `received_qty`.
   - `closed` (from `partially_received`) and `cancelled` (from `announced`) are explicit and terminal, and each requires a note of 1–500 code points. Any other transition answers 409 `asn-transition-invalid`.
-  - Receiving is allowed only while the ASN is `announced` or `partially_received`; otherwise 409 `asn-not-open`.
+  - Receiving is allowed while the ASN is `announced`, `partially_received` **or `received`**. On a `received` ASN every unit beyond the announced quantity becomes an over-receipt, exactly as on an open PO. Only `closed` and `cancelled` refuse, with 409 `asn-not-open`. *(Renegotiated by the human in code review, 2026-10-08: a scan queued while the ASN was partly received, and replayed after it became received, must not be dropped. The snapshot still lists only `announced` and `partially_received`.)*
   - PO close also answers 409 `over-receipt-pending` while any of the PO's over-receipts are pending.
 - **Amend.**
   - Allowed while `announced` or `partially_received`. It may change `expectedAt` and the line set.
@@ -143,6 +143,7 @@ context:
 | Short close | 80 of 100, no pending | `closed` with note; off the snapshot | — |
 | Cancel | 0 received / some received | `cancelled` / — | — / 409 `asn-transition-invalid` |
 | Receive closed ASN | — | — | 409 `asn-not-open` |
+| Late receipt on a received ASN | 100 of 100 received, then 10 more | All 10 pend as an over-receipt; still `received` | — |
 | Two references | `poId` + `asnId` | — | 400 |
 | SKU mismatch (PO or ASN) | Line SKU ≠ referenced line SKU | Applied unmatched; `unmatchedLines` names it; the document line is not bumped | — |
 | Wrong warehouse | GRN WH2, document WH1 | — | 409 `document-warehouse-mismatch` |
@@ -256,6 +257,23 @@ Baselines: wms-be `3527a8ef462e0ef22f5198a19ad157d097fb5583` (`baseline_commit`)
 
 ## Spec Change Log
 
+- **2026-10-08 (human, code review): receiving on a `received` ASN.** The approved rule refused any receipt once an ASN was fully received. A scan queued on a handheld while the ASN was partly received, and replayed after it became `received`, would then be dropped, so goods that arrived would never reach the ledger. That contradicts CAP-9's "same over-receipt handling" (a PO stays open). Amended: `received` accepts receipts, and excess becomes an over-receipt. KEEP: `closed` and `cancelled` refuse, the snapshot lists only `announced` and `partially_received`, and status stays derived.
+- **2026-10-08, implementation — interpretations and extras (recorded by the orchestrator from the implementer's report; no intent changed).**
+  - **An existing CHECK hole was closed.** The 0013 pairing CHECK admitted a GRN with neither a PO nor a reason, because `NULL IN (…)` is not false. The widened CHECK adds `IS NOT NULL`, and the 0064 pre-flight `RAISE`s with any offending rows. A `receiving.spec.ts` fixture that relied on the hole now uses reason `other`. Other nullable `IN (…)` CHECKs are unaudited, which is recorded in PENDING.
+  - **Normalisation is wider than required.** After hashing, the command normalises `poLineId`, `asnLineId`, `batchCode`, `mfgDate` and `weightsGrams` to `?? null`. A replayed payload without `weightsGrams` used to 500. The hash is unchanged, and the golden test pins it.
+  - **Choices the spec left open:**
+    - the duplicate code answers 409 `duplicate-asn-code`;
+    - line arms are evaluated in the order: unknown line rejected → SKU mismatch unmatched → non-open PO line rejected;
+    - a request carrying conflicting `blind` and `poless` answers 400;
+    - ASN commands write audit rows;
+    - a few extra list indexes were added;
+    - "warehouse active" is enforced as "exists in tenant", since warehouses have no status.
+  - **Behaviour changes:**
+    - a PO line whose SKU mismatches its line settles unmatched instead of crediting it;
+    - the drill CSV gains an `asn` column;
+    - the FE's generated `blindReasonCode` enum now includes `null`;
+    - schema.md records that 0064 alters three existing tables, so it is not "purely additive".
+
 ## Review Triage Log
 
 *Design review, 2026-10-08: two code-verified reviewers (receiving correctness; API, FE and fit). 28 findings, merged into 20. One went to the human (decision 3); three were settled by the agent (unmatched lines, per-client codes, explicit `clientId`); the rest are folded in.*
@@ -282,6 +300,32 @@ Baselines: wms-be `3527a8ef462e0ef22f5198a19ad157d097fb5583` (`baseline_commit`)
 | 18 | med | Client-supplied codes collide across clients | Unique per `(tenant, client, code)` |
 | 19 | low | Explicit client versus derived client, for the web and 21-7 | `clientId` sent and checked against the SKUs |
 | 20 | low | Docs: mobile contract, snapshot row, fate of the new 409, "passthrough" wording, portal read refusal, pending count before migration | Added |
+
+*Code review, 2026-10-08: three layers (blind, edge-case, verification-gap). 38 findings, each verified against the code. One went to the human (the change-log entry above); 22 merged into 14 patches; the rest are rejected.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | high | A late receipt on a `received` ASN is refused, and the queued scan is dropped | `OPEN_ASN_STATUSES`; `receiving.command.ts:2338` | human decision: `received` accepts receipts, with the excess going to over-receipt |
+| C2 | high | After any approved over-receipt (received > announced/ordered) the line can't be resent unchanged, so every amend of that ASN or PO fails, including the web form, which pre-fills the line | amend guard `next < received` in `asn.command.ts` and `po.command.ts`; `amendDraftOf` | patch: refuse only a quantity that is lowered **and** ends below received; test amend after approval |
+| C3 | medium | A receipt line with another client's SKU on ACME's ASN carries ACME's `asn_id`, so BETA's invoice drill shows ACME's `asnCode` (the PO code likewise) | drill left join on `grn.asn_id` / `po_id` | patch: the drill shows the document code only when the document's client equals the SKU's client |
+| C4 | medium | A receipt that credits no line leaves the ASN `announced`, so it can be cancelled ("nothing received") while GRNs reference it | cancel guard in `asn.command.ts` | patch: cancel refuses with 409 `asn-has-receipts` when any GRN references the ASN |
+| C5 | medium | List totals add up different units (kg + each) and the web prints the raw sum | `listAsns` totals; `asnProgressLabel` | patch: add `linesComplete` to the row (additive); the web shows "N of M lines received" |
+| C6 | medium | The ASN list's totals, filters and cursor are untested | `asn.spec.ts:460-470` | patch: totals after a receipt, each filter excluding, and a `limit=1` walk |
+| C7 | medium | The ledger `referenceDoc` of an unmatched line is unasserted | `asn.spec.ts:591-634` | patch: assert `{kind, grnId, asnId \| poId}` with no line key |
+| C8 | medium | The web over-receipt queue's ASN line context is untested; one detail fetch per over-receipt with no dedup | `use-inbound.ts:310-321`; no queue test | patch: `over-receipt-queue.test.tsx`; dedup by ASN id |
+| C9 | low | `AsnCommand.create` validates code and line count before permission and replay (skeleton order); the code length counts UTF-16 units while the CHECK counts code points | `asn.command.ts` create | patch: validate after replay; count code points |
+| C10 | low | Amend sends `expectedAt` every time, truncating stored seconds to the minute | `lib/asns.ts` `parseAsnAmend` | patch: send it only when changed |
+| C11 | low | 0064 probes: no accepted insert for `asn_lines`/`goods_receipt_lines` (despite the comment); the status-CHECK probe is also refused by note pairing | 0064:191-262 | patch: accepted inserts; a status probe that only the status CHECK refuses |
+| C12 | low | Stale texts: the schema comment names `…_document_pairing` (0064 kept `…_blind_pairing`); `orderRefLabel`'s docblock sits on the wrong function; `reporting.spec.ts:1056` asserts the old `poless=false` meaning; the dashboard test fixture still emits `poless` | schema.ts:1680; invoice-records.ts; reporting.spec.ts; overview-dashboard.test.tsx:82 | patch |
+| C13 | low | No index serves GRNs by ASN | 0064 | patch: `goods_receipt_notes (tenant_id, asn_id)` |
+| C14 | low | A dead `over-receipt-pending` arm in `decisionReason` (decide never returns it) | `lib/over-receipt.ts` | patch: remove the arm and its test |
+| R1 | false | `document-warehouse-mismatch` drops queued PO scans, against zero-scan-loss | A frozen rule, and its fate is documented in the mobile guide; a receipt booked into the wrong warehouse's stock is the worse loss | rejected |
+| R2 | low | `poless=false` now includes ASN receipts | Frozen: `poless` is an alias of `blind` | rejected |
+| R3 | low | Wrong SKU on a non-open or unknown line: rejected rather than unmatched | Frozen arm order; an unknown or closed line reference is a document error, not a scan | rejected |
+| R4 | low | Derived status changes emit no event or audit | No consumer yet; 21-7 reads through RLS | rejected |
+| R5 | low | No GRN filter by ASN, and no "receipts of this ASN" read | Per-line `receivedQty` is the reconciliation CAP-9 asks for | rejected |
+| R6 | low | The concurrency test accepts either outcome; no receipt-versus-close race test | Its point is that it serialises without deadlock | rejected |
+| R7 | low | Amend takes no note, though the FE task says "each needing a note" | Boundaries: notes on close and cancel only | rejected |
 
 ## Design Notes
 
