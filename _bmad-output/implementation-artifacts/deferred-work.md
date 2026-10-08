@@ -620,3 +620,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-5-client-invoices.md`
   summary: Epic-8 retro A5 invoicing cleanup — extract generator.ts and eway-bills.tsx, de-duplicate state maps/instant regex/FE IST handling/loader helpers, one FE-BE constants drift guard, converge the idempotency skeleton, lock the config commands, fix supplyType nullable-enum.
   evidence: Split by the human on 2026-10-07; a pure refactor with no 21-5 dependency, reviewed better on its own diff.
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-5b-dispute-drill-down.md`
+  summary: Test the refresh restamp of `client_invoices.storage_measured_through` when the content hash is unchanged but the group watermark moved.
+  evidence: 21-5b code review (verification-gap); reverting `restampMeasuredThroughInTx` fails no test. Impact is limited to breakdown 404s on zero-stock days; the setup needs a client in two groups with out-of-step snapshot watermarks.
