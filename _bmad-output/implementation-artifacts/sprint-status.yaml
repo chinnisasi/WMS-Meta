@@ -219,7 +219,7 @@ development_status:
   21-4-metering-and-storage-snapshots: done
   21-5-client-invoices: done
   # Split by the human (2026-10-07): the line drill-down is 21-5b; A5 cleanup is its own refactor story.
-  21-5b-dispute-drill-down: in-progress
+  21-5b-dispute-drill-down: done
   21-6-advance-shipment-notices: backlog
   21-7-client-portal: backlog
   21-8-per-client-service-reporting: backlog

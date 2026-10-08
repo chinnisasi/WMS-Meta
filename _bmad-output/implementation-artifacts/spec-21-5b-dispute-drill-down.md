@@ -2,7 +2,7 @@
 title: 'Dispute drill-down — expand a client invoice line to the records that produced its quantity'
 type: 'feature'
 created: '2026-10-07'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 baseline_commit: '6ae21b8fa5c03d3e9e75bc8acc3bcd1092acea46'
 review_loop_iteration: 0
@@ -159,25 +159,25 @@ Each record shows the actor, the time (IST), the warehouse, the SKU, and the ord
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` facades -- add a paged row read beside each count, on the same predicate:
+- [x] `wms-be` facades -- add a paged row read beside each count, on the same predicate:
   - `receiptLineRecordsInTx`, `pickRecordsInTx`, `dispatchedOrderRecordsInTx`, `clientOnHandBySkuAtInTx` (all in the owning modules);
   - `storageSnapshotRecordsInTx` (in billing);
   - `userEmailsInTx` (in tenancy).
-- [ ] `wms-be/drizzle/0063_invoice_storage_measured_through.sql` (+ journal, snapshot, schema.ts) -- add the nullable column, guarded. Writing it on a draft is allowed by the 0062 guard (drafts are mutable); confirm the guard permits it, and include it in the content hash only if it changes the figures (it does not).
-- [ ] `wms-be/src/modules/billing/invoice-records.ts` -- composes the reads: line lookup, group resolution, summary, records and breakdown.
-- [ ] `wms-be/src/api/client-invoices.controller.ts` with its DTOs:
+- [x] `wms-be/drizzle/0063_invoice_storage_measured_through.sql` (+ journal, snapshot, schema.ts) -- add the nullable column, guarded. Writing it on a draft is allowed by the 0062 guard (drafts are mutable); confirm the guard permits it, and include it in the content hash only if it changes the figures (it does not).
+- [x] `wms-be/src/modules/billing/invoice-records.ts` -- composes the reads: line lookup, group resolution, summary, records and breakdown.
+- [x] `wms-be/src/api/client-invoices.controller.ts` with its DTOs:
   - `GET client-invoices/{id}/lines/{lineId}/records?cursor&limit` returning `{summary?, records[], nextCursor}`;
   - `GET …/lines/{lineId}/storage-breakdown?date&warehouseId`;
   - the line view's `id`.
 
   Re-export `openapi.json`.
-- [ ] `wms-be/test/invoice-records.spec.ts` -- cover:
+- [x] `wms-be/test/invoice-records.spec.ts` -- cover:
   - every matrix row;
   - each charge's records summing to its line, on issued and draft invoices;
   - keyset pages with no duplicates or gaps, including picks sharing one `created_at`;
   - the breakdown Σ equalling the snapshot, including a negative SKU.
-- [ ] `wms-fe` -- the Line records panel, the summary banners, the breakdown, and the CSV export per the decisions, with `csvField` hardened. Add mappers, hooks and tests.
-- [ ] Meta docs:
+- [x] `wms-fe` -- the Line records panel, the summary banners, the breakdown, and the CSV export per the decisions, with `csvField` hardened. Add mappers, hooks and tests.
+- [x] Meta docs:
   - `billing.md`;
   - `inbound.md`, `outbound.md`, `inventory.md`;
   - `API-SURFACE.md` and both contracts;
@@ -202,6 +202,16 @@ Each record shows the actor, the time (IST), the warehouse, the SKU, and the ord
 
 ## Spec Change Log
 
+- **2026-10-07, implementation — interpretations taken where the spec was silent (no intent changed; each is in `modules/billing.md` §Dispute drill-down).**
+  - **The records response also carries `kind` and `invoiceStatus`** (additive): the web picks its table and its mismatch banner from the response, not from a second read. `records` is an OpenAPI `oneOf` discriminated on `kind`.
+  - **An order record's `id` is its first dispatch event's id** (the keyset tiebreaker); `orderRef.source` is null only if the order row is missing (the order drill names its orders through `OutboundFacade.orderRefsInTx`).
+  - **The breakdown's `reconciles` with no snapshot** is `total ≤ 0` (a day closing at ≤ 0 writes none — the projection's rule); with one, `total = snapshot`.
+  - **`storage_measured_through` writes:** prepare's insert, refresh's rewrite, a stale issue's rewrite and the issue update. A refresh whose hash did not move re-stamps only that column when the group watermark moved (a watermark crossing zero-stock days changes no figure) — never `updated_at` or the lines, so 21-5's "a refresh with nothing changed rewrites nothing" still holds. Prepare does not touch a live draft it lists as `existing` (its stored figures and its stored day stay a pair).
+  - **A malformed `invoiceId`/`lineId` is 400** (the route-param shape check every client-invoice route has); an unknown one is 404, as the matrix says.
+  - **The CSV file name replaces `/` in the invoice number with `-`** (`29-S2627-000001-pick-2026-09-15.csv`) — a `/` cannot be in a file name. The header gains one more `#` line ("Times are IST (+05:30). Staff appear as stable pseudonyms."). The records carry no device id to drop.
+  - **The storage record's cursor** carries `istMidnightOf(date)` and the warehouse id (the spec's ordering); a cursor is decoded by the same `decodeCursorSafe` as the invoice list.
+- **2026-10-07, implementation review — fixes:** a compute with no group watermark stores `period_start − 1` (nothing measured), so NULL means only "stored before 0063" and reads as `period_end` on a non-draft invoice, nothing measured on a draft; the CSV writes each `#` comment line as one guarded cell and adds the status, supplying GSTIN, segment dates and generation time; an export aborts when its panel unmounts; the breakdown shows the session-expired, "Invoice changed — reload" and Retry states and a mismatch banner, and its toggle names its day and warehouse; a first-page read supersedes an in-flight "Load more". Tests added for keyset ties across page boundaries in every kind, the measured-through day after issue and a stale issue, the guard refusing it on an issued row, and the Load-more / export failure states.
+
 ## Review Triage Log
 
 *Design review, 2026-10-07: two code-verified reviewers (correctness and performance; API, FE and fit). 24 findings merged into 16. One went to the human (decision 2), one was rejected, and the rest are folded in.*
@@ -224,6 +234,31 @@ Each record shows the actor, the time (IST), the warehouse, the SKU, and the ord
 | 14 | low | Groups can change silently; a void invoice's drill is undefined | 409 `invoice-group-changed`; every status drillable |
 | 15 | low | Docs: billing-model says `pick.picked` events; the frontend docs lack client invoices; the receipt sort is unindexed | Fixed sentence; frontend docs; PENDING |
 | 16 | false | An order dispatched from two GSTIN groups is billed on both | `NOT EXISTS earlier` (`client-metering.ts:192-197`) spans all warehouses, so only the group holding the order's first event counts it — rejected |
+
+*Code review, 2026-10-07: three layers (blind, edge-case, verification-gap). 27 findings, each verified against the code. 16 merged into 9 patches, 1 deferred, the rest rejected.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | medium | CSV `#` comment lines are written raw. A client name, invoice text or line description containing `, =…` splits into a cell that begins with a formula, which bypasses `csvField` | `lib/invoice-records.ts` header lines | patch: each comment line is written as ONE `csvField` cell |
+| C2 | medium | `storage_measured_through` NULL is ambiguous. A post-0063 draft whose group had no watermark writes NULL, and so does a pre-0063 draft. Both are read as `period_end`, so the drill lists days the line never counted. The migration and schema comments claim NULL means "issued before 0063" | `measuredThroughOf`; `storageDays`; 0063 header | patch: a compute with no watermark stores `period_start − 1` (nothing measured); NULL reads as `period_end` only on a non-draft; fix the comments |
+| C3 | medium | Keyset ties are never crossed at a page boundary for receipt lines (one GRN, several lines), orders (same-instant first dispatch) or storage (two warehouses on one day) | `invoice-records.spec.ts` | patch: fixtures plus walks at limits 1–3 asserting no duplicates or gaps |
+| C4 | low | An export keeps paging and downloads after the line panel unmounts | `line-records.tsx`, no abort on unmount | patch: abort on unmount |
+| C5 | low | Breakdown: a null session spins forever; a 404 on a draft has no reload action; a mismatch is plain text; the toggle's accessible name lacks the day and warehouse | `line-records.tsx` breakdown | patch: session-expired state; `needsInvoiceReload` banner with Reload and Retry; the warning banner; aria-label naming day and warehouse |
+| C6 | low | A status change while "Load more" is in flight lets a late page merge into the refetched first page; the stale "more" error survives | `use-invoice-records.ts` | patch: bump `seq` in the first-page effect and clear `more` |
+| C7 | low | The CSV header omits the invoice status, supplying GSTIN, segment dates and generation time | `lib/invoice-records.ts` | patch: add the `#` lines |
+| C8 | gap | Web "Load more" failure and export-failure states are untested | `line-records.test.tsx` | patch: 404 on page 2 of a draft shows reload with a working Reload button and keeps the shown rows; same for export |
+| C9 | gap | The column after issue (including a stale issue) and the 0062 guard refusing a write to it on an issued row are unasserted | `invoice-records.spec.ts` | patch: assertions |
+| D1 | gap | The refresh restamp (hash unchanged, watermark moved) is untested | `restampMeasuredThroughInTx` | defer: only causes breakdown 404s on zero-stock days, and the setup needs out-of-step groups |
+| R1 | false | A storage line with NULL uom gives a silent zero drill | `client_invoice_lines_uom_basis_pair` CHECK (0062:214) makes it impossible | rejected |
+| R2 | false | The group shrinks or grows after issue, so the drill shifts | No path edits a GSTIN or deletes a warehouse; a warehouse created later can hold no records stamped in a past period | rejected (PENDING already carries the GSTIN-edit guard) |
+| R3 | false | The filename may carry illegal characters | An invoice number is digits, `S` and `/`, and `/` is already replaced | rejected |
+| R4 | low | Measured-through is not shown on the drill | Only a draft can stop short, and its `storage-not-complete` gap explains why | rejected |
+| R5 | low | The cursor is not bound to the line or kind (a replayed cursor gives a wrong page, not 400) | Only an API misuse reaches it | rejected |
+| R6 | low | Each page re-scans the order window; the breakdown folds from genesis; there is no export rate limit | By design (summary on first page only, one-day breakdown); the index gap is already in PENDING | rejected |
+| R7 | low | The pseudonym is reversible by anyone holding user ids, and linkable across files | Decision 2's exact formula (frozen) | rejected; billing.md states it hides emails, not identity |
+| R8 | low | `#` lines become rows in Excel; no guard on `\|` or full-width `＝`; quantities carry no unit column | `#` is decision 1; the guard follows the OWASP set | rejected |
+| R9 | low | Order and storage records lack a SKU or actor, despite the Intent's general sentence | The per-kind record shapes are in Boundaries | rejected |
+| R10 | low | The export's protocol fault uses network wording | Unreachable from a conforming server | rejected |
 
 ## Design Notes
 
