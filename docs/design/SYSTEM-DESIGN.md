@@ -63,7 +63,7 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `clients` | the client dimension (AD-23): the `self` client per tenant, `client_id` on `skus`/`orders`/`purchase_orders`/`ledger_events` — 21-1 |
 | `catalog` | SKUs, batches, serials, UoM vocabulary |
 | `inventory` | **the ledger**, projections, reservations, ATP, reconciliation |
-| `inbound` | purchase orders, receiving, GRNs, QC holds |
+| `inbound` | purchase orders, advance shipment notices (21-6 — receiving books against a PO, an ASN, or neither, in one `grn.submit`), receiving, GRNs, QC holds |
 | `putaway` | directed putaway, bin administration |
 | `outbound` | orders, waves, picklists, picks, pack, dispatch |
 | `carriers` | carrier registry, tenant credential vault |

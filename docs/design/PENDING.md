@@ -45,10 +45,15 @@ Two sources, both authoritative:
 
 ## inbound
 
-- **Over-receipt approve does not re-validate PO/line status** — a close-then-approve sequence bumps a closed line's ceiling. Needs a lock before the bump *(epic-3 retro a1)*
+- ~~**Over-receipt approve does not re-validate PO/line status**~~ **Closed by 21-6 (decision 3), the other way round:** approve never refuses on document status (stock that physically arrived is never stranded), but it now locks the document and its line (over-receipt row → SKU → PO/ASN → line), and PO/ASN **close refuses 409 `over-receipt-pending`** while any of its excess awaits a decision — so close and approve serialise on the document row. A pending row left on a PO closed *before* 21-6 still approves and rejects (0064 counts them in its log) *(epic-3 retro a1)*
 - **`releaseHold` lacks `.for('update')` on the origin read**, and release-into-a-blocked-bin behaviour is unpinned *(epic-3 retro a3)*
-- **PO amend has no received-line guard** — delete or SKU rewrite should be refused when `receivedQty > 0` *(epic-3 retro a5)*
-- **Catalog-snapshot composition is not single-tx** and its fan-out is unbounded *(epic-3 retro a13)*
+- ~~**PO amend has no received-line guard**~~ **Closed by 21-6:** removing a line, changing its SKU, or ordering below `received_qty` once it has received anything is 409 `po-line-received` (the ASN amend carries the same guard as `asn-line-received`) *(epic-3 retro a5)*
+- **Catalog-snapshot composition is not single-tx** and its fan-out is unbounded *(epic-3 retro a13)*. **21-6 grows the fan-out:** `openAsns[]` (every announced / partially received ASN of the warehouse, with all its lines) rides the same unbounded read — on the inbound transaction itself, so it adds no connection, but it adds rows
+- **Handheld receiving against an ASN is story 21-6b** — 21-6 shipped the server, the web and the snapshot arm; until 21-6b, an ASN is received only through the device API (the web card says so) *(21-6 decision 1)*
+- **An ASN cannot be linked to a PO** — a client's ASN for goods also on the 3PL's PO books against one or the other, never both; deliberately out of 21-6 *(21-6 Never)*
+- **An ASN whose only receipts credited no line is stuck `announced`** — every line unmatched or rejected leaves all `received_qty` at 0, so it can be neither cancelled (409 `asn-has-receipts` — goods arrived against it) nor closed (close needs `partially_received`); an amend or a further receipt that credits a line are the only ways forward. If it shows up, the fix is a close-from-`announced`-with-receipts arm *(21-6 review)*
+- **No auto-close of an ASN** — a short ASN stays `partially_received` until an operator closes it with a note; there is no age- or expected-date-driven close *(21-6 decision 2)*
+- **`goods_receipt_notes_blind_pairing` admitted a GRN with neither PO nor reason before 0064** — `NULL IN (…)` is NULL, which a CHECK passes; 0064's widened CHECK adds `IS NOT NULL` and its pre-flight lists any such row. Other CHECKs in the repo written as `col IN (…)` on a NULLABLE column carry the same hole — unaudited *(21-6 implementation)*
 - **GRN sequence exhaustion** should be a typed 409; `occurredAt` drift needs a bound decision *(epic-3 retro a14)*
 
 ## putaway

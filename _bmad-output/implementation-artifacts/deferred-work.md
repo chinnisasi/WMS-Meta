@@ -626,3 +626,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-6-advance-shipment-notices.md`
   summary: 21-6b — the handheld receives against an ASN: parse the snapshot's `openAsns` arm (`?? []` default), an ASN context in the receive draft beside `poId`, `asnId`/`asnLineId` on the `grn.submit` payload without changing existing PO/blind hashes, ASN refusals in the replay fate table, ASN cards in the inbox and choose step.
   evidence: Split by the human on 2026-10-08 when scoping 21-6; a separate repo (wms-mobile, hand-written API types) and independently shippable once 21-6's server side lands.
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-6-advance-shipment-notices.md`
+  summary: De-flake `test/ledger.spec.ts` "idempotency race: a concurrent same-key submit collides on the unique key as 409 conflict" — it polls a fixed number of times for the second request to block (`expect(blocked).toBe(true)`, ~:891) and fails under full-suite load.
+  evidence: Failed in the full wms-be run during 21-4 (2026-10-07) and again during 21-6 (2026-10-08); passed 3/3 run alone both times; neither story touched ledger or idempotency code. Fix: wait on pg_locks / pg_stat_activity for the blocked backend with a generous deadline rather than a fixed poll count.

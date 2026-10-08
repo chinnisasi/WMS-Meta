@@ -173,6 +173,7 @@ Fetched online from `GET /tenants/{t}/devices/catalog-snapshot?warehouseId=…` 
 |---|---|---|
 | `skus[]` | id, code, name, **barcode**, uom, `batchTracked`, `serialTracked` — and, 11.7: **`variantValues`** + **`axes`** (nullable) | Barcode → SKU resolution with no network call; the batch-required and serial-required gates — and, 11.7, so the device can **say which variant a scan holds, offline** (UX-DR28). Display only: nothing decides on them; `null` means the SKU is unattached to a product, `absent` means a pre-11-7 seal |
 | `openPurchaseOrders[]` | lines with `orderedQty` / `receivedQty` / `openQty` | Which PO line a scan maps to, and the over-receipt (excess) math |
+| `openAsns[]` *(server since 21-6; the handheld reads it from 21-6b)* | `{id, code, clientId, warehouseId, expectedAt, lines{id, skuId, announcedQty, receivedQty, openQty}}` — the warehouse's `announced` / `partially_received` advance shipment notices | The PO arm's twin: which ASN line a scan maps to, and the same excess math. A closed, cancelled or fully received ASN is absent. **Not yet parsed on the device** — 21-6b defaults it in `parseCatalogSnapshot` (`?? []`); until then a receipt against an ASN is possible only through the device API |
 | `bins[]` | id, code, zone, type, capacity, **`blocked`**, **`systemOwned`** | Bin-code resolution — and blocked/system bins ride the payload *deliberately*, so the device can **reject a scan against them pre-queue** rather than queueing an op the server will refuse |
 | `putawayTasks[]` | GRN line + placeable qty + `suggestedBin` + `rationale` | The putaway unit of work. The suggestion is advisory; the server re-gates at placement |
 | `pickTasks[]` | The whole walk: picklist/line ids, sku, bin, batch, qty, `sliceSeq`, `walkSeq`, `stopCount`, `binStateEpoch?` — and, 11.7: **`kitParentSkuCode`** (nullable) | **The whole walk rides the snapshot on purpose** — that is what lets a wrong-bin scan name *the next walk bin holding the expected SKU* with no network call (`src/picking/draft.ts:133-157`). 11.7 adds the exploded kit component's parent kit SKU code, display-only (`from kit {code}` header line); no pick logic reads kit-ness |
@@ -193,6 +194,8 @@ code 'unauthenticated'     → unreachable   ← 401 session expiry is NOT a ref
 code 'pick-bin-short'      → re-plannable  (AD-14 case 3 — KEPT)
 code 'pick-unresolvable'   → quarantined   (AD-14 case 4 — terminal)
 anything else (incl. role-denied) → rejected
+  — incl. 21-6's 'document-warehouse-mismatch' (a queued receipt naming a PO/ASN of
+    another warehouse) and 'asn-not-open': dropped as rejected, retracted visibly
 non-ApiProblem throw       → rejected, code 'unknown'
 ```
 
