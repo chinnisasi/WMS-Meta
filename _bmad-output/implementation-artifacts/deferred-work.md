@@ -648,3 +648,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
   summary: No way to deactivate or remove a single user (portal or staff) — offboarding one brand employee needs SQL; suspending the client locks out the whole brand.
   evidence: 21-7 code review C15 — pre-existing (no user deactivation command exists for any role); matters more now that untrusted portal users exist.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-7b-portal-asn-entry.md`
+  summary: A SKU that becomes a kit (a composition added) after an open ASN or PO line names it can never be received — receiving refuses kit lines (FR-38), so the document line is stranded until amended or cancelled.
+  evidence: 21-7b code review C9 — announce checks kit-ness only at write time; the same holds for operator ASNs and POs (pre-existing). Fix: refuse a kit composition on a SKU with open inbound lines, or flag the line.

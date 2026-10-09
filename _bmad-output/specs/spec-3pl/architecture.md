@@ -38,7 +38,7 @@ So client is a **third scoping dimension that does not exist today**, and RLS as
 
   An **operator session** leaves `app.client_id` unset and sees the whole tenant, so cross-client waves and floor work are untouched. A **client-portal session** sets it, and the database — not the application — is what makes another client's rows unreachable.
 
-  *(Built by story 21-7: a portal user is the fifth role `client`, paired with `users.client_id` by a CHECK; its session runs every portal read in a transaction stamped `app.client_id` AND with an explicit `client_id` predicate — two layers, the RLS one proved as `wms_rls_probe` with the predicate removed, because the jest suites connect as a superuser. Inherited rows are reached only through a join to a stamped parent. The portal is read-only; portal ASN entry is 21-7b.)*
+  *(Built by story 21-7: a portal user is the fifth role `client`, paired with `users.client_id` by a CHECK; its session runs every portal read in a transaction stamped `app.client_id` AND with an explicit `client_id` predicate — two layers, the RLS one proved as `wms_rls_probe` with the predicate removed, because the jest suites connect as a superuser. Inherited rows are reached only through a join to a stamped parent. The portal was read-only in 21-7; **since 21-7b it is read-mostly plus ASN**: its one write, `POST portal/inbound/asns` (capability `asn.announce`, held by `client`), takes the client from the session, runs in a transaction stamped with it, and re-reads the user and the client in that same transaction — the whole write set proved admitted under the stamp as `wms_rls_probe`.)*
 - **Why this shape:** the leak risk is concentrated in one place (the portal, where an untrusted party holds a session), and this puts enforcement below every surface, query, report and export at once. It is the same fail-closed `NULLIF(current_setting(...), '')` idiom AD-3 already relies on.
 - **Scoping extends where AD-3's does:** background jobs, projection rebuilds, export workers and reporting all take explicit client context or deliberately none.
 
@@ -70,7 +70,9 @@ So client is a **third scoping dimension that does not exist today**, and RLS as
 ```
 clients   — the client entity, its users, its portal scoping. Owns `clients`.
             (21-7: `PortalSessionGuard` lives here; each portal read is its
-            owning module's facade method, stamped { clientId }.)
+            owning module's facade method, stamped { clientId }. 21-7b: the
+            one portal write, the ASN announce, is inbound's AsnCommand.announce,
+            stamped { clientId: command.clientId } in the command itself.)
 billing   — rate cards, metering, storage snapshots, invoices. Owns its own tables.
             Reads ledger events through the inventory facade; writes no stock.
 inbound   — gains the ASN document beside the PO (same module, same GRN flow).

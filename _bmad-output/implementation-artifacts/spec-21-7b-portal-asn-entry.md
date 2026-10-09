@@ -2,8 +2,9 @@
 title: 'Portal ASN entry — a client user announces its own inbound shipment from the portal'
 type: 'feature'
 created: '2026-10-09'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'b9c60d194af81b860138cb61618006b508e5e7ae'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -205,20 +206,20 @@ All `wms-be` paths are relative to `workspace/core/backend/wms-be`; `wms-fe` pat
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` tenancy: `asn.announce` and the `client` grant (amend the 21-7 comment); `TenancyService.portalWarehouses`.
-- [ ] `wms-be` catalog: `CatalogFacade.portalSkus` (kits excluded).
-- [ ] `wms-be` inbound: `AsnCommand.announce`, the client-filtered SKU read and the parameterised `finish`; `InboundFacade.announceAsn`.
-- [ ] `wms-be` api: the route plus 2 reads, `PortalCreateAsnDto`/`PortalAsnLineInputDto`, `PortalSkuDto` and `PortalWarehouseDto`, and `@ApiResponse` for every matrix arm; re-export `openapi.json`.
-- [ ] `wms-be/test/portal-asn.spec.ts`:
+- [x] `wms-be` tenancy: `asn.announce` and the `client` grant (amend the 21-7 comment); `TenancyService.portalWarehouses`.
+- [x] `wms-be` catalog: `CatalogFacade.portalSkus` (kits excluded).
+- [x] `wms-be` inbound: `AsnCommand.announce`, the client-filtered SKU read and the parameterised `finish`; `InboundFacade.announceAsn`.
+- [x] `wms-be` api: the route plus 2 reads, `PortalCreateAsnDto`/`PortalAsnLineInputDto`, `PortalSkuDto` and `PortalWarehouseDto`, and `@ApiResponse` for every matrix arm; re-export `openapi.json`.
+- [x] `wms-be/test/portal-asn.spec.ts`:
   - every matrix row;
   - a deep exact-key `toEqual` on the 201, the replay and both reads;
   - the `portal/skus` second page, a bad cursor and the limit bounds;
   - a kit is absent from `portal/skus`;
   - the portal-hash and operator-create-hash goldens read from `idempotency_keys`;
   - direct-call `announce` arms (wrong actor, suspended, removed user) via `app.get(AsnCommand)`.
-- [ ] `wms-be/test/client-isolation.spec.ts`: one `wms_rls_probe` arm that runs the **whole announce write set** under A's stamp: the header, a line, `idempotency_keys`, `audit_events` and `outbox_messages` inserts, plus the `portalAsnInTx` read-back. All succeed, with a positive control, and are rolled back. Plus the `portal/skus` shape returning A's SKUs only with the predicate removed.
-- [ ] `wms-be` tests listed under "Tests that change".
-- [ ] `wms-fe`:
+- [x] `wms-be/test/client-isolation.spec.ts`: one `wms_rls_probe` arm that runs the **whole announce write set** under A's stamp: the header, a line, `idempotency_keys`, `audit_events` and `outbox_messages` inserts, plus the `portalAsnInTx` read-back. All succeed, with a positive control, and are rolled back. Plus the `portal/skus` shape returning A's SKUs only with the predicate removed.
+- [x] `wms-be` tests listed under "Tests that change".
+- [x] `wms-fe`:
   - `bun run api:generate`;
   - the wrappers and hooks;
   - `parsePortalAsnCreate`, the generic `LineRows` and the adapter, `portalAsnReason`;
@@ -233,7 +234,7 @@ All `wms-be` paths are relative to `workspace/core/backend/wms-be`; `wms-fe` pat
     - each `portalAsnReason` arm;
     - `client-suspended` fires the event;
     - the request list contains only `/portal/*`.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `inbound.md`, `clients.md`, `catalog.md`, `tenancy.md`;
   - `API-SURFACE.md`;
   - 3PL `architecture.md` (the portal is read-mostly plus ASN);
@@ -253,6 +254,12 @@ All `wms-be` paths are relative to `workspace/core/backend/wms-be`; `wms-fe` pat
 - Given the full BE and FE suites, lint, typecheck and the capability mirror, when run, then they pass.
 
 ## Implementation Notes
+
+Baselines: wms-be `b9c60d194af81b860138cb61618006b508e5e7ae` (`baseline_commit`), wms-fe `77c7d38c81fc0d0a4b9bbd2c57b5478548ed140e`.
+- Work on `feat/21-7b-portal-asn-entry` in both repos (already checked out). Leave everything uncommitted: no commit, push or PR.
+- In wms-be, run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming the story.
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (on `main`, uncommitted).
+- Do not touch `wms-mobile`.
 
 ## Spec Change Log
 
@@ -287,6 +294,38 @@ Design review, 2026-10-09: three lenses (adversarial 17, edge-case 15, verificat
 | D23 | Code Map anchors are wrong (idempotency helpers, DTO path) (A16) | TRUE | patch |
 | D24 | The AC requires a real handheld receipt that nothing verifies (A17) | TRUE | patch: the AC uses a device `grn.submit` via the API |
 | D25 | The test plan cannot catch a wrong client on insert (V, "also noted") | TRUE | patch: Announce row asserts the operator `clientId`, both portal lists and the outbox row |
+
+Code review, 2026-10-09: three layers (blind-hunter 15, edge-case 9, verification-gap 3), 27 rows. Each claim checked at the cited code: 9 patch (in 5 fixes), 1 defer, 17 reject. No loopback.
+
+| # | Verdict | Finding (layer) | Evidence | Route |
+|---|---|---|---|---|
+| C1 | low | Form inputs stay live during the POST; an edit clears the key mid-flight, so a timed-out-but-committed submit retries under a new key (EC-7) | TRUE: `portal-inbound.tsx` only the Announce button is `disabled={busy}` | patch: the form is disabled while busy |
+| C2 | low | Discard during flight still announces, then shows the banner (EC-6) | TRUE, same root cause as C1 | patch (with C1) |
+| C3 | low | `portalAsnReason` `validation-failed` passes the raw server detail, which is not portal wording (BH-5) | TRUE: `portal.ts:310-311`; the spec requires portal wording | patch: fixed sentence |
+| C4 | medium | Malformed `expectedAt` on the portal route is untested (VG-1, BH-10a) | Pre-verified; `normalizedExpectedAt` `asn.command.ts:395-404` is the only guard | patch (test) |
+| C5 | medium | The "catalogue too large" form branch never renders in a test (VG-2) | Pre-verified | patch (test) |
+| C6 | low | Single-warehouse auto-select untested (VG-3, BH-11c) | Pre-verified | patch (test) |
+| C7 | low | `docs/repos/wms-fe/README.md:155` still says `client: []`, 40 capabilities (BH-15) | TRUE | patch (docs) |
+| C8 | low | A catalogue over 2,000 SKUs disables the form, with no PENDING entry (BH-8) | TRUE by construction (`drainPortalSkus`) | patch (PENDING) |
+| C9 | medium (unverified scale) | A SKU that becomes a kit after its ASN was announced can never be received (BH-13) | TRUE by construction; pre-existing for operator ASNs and POs | defer |
+| C10 | low | Unlocked client status read lets a concurrent suspend miss the commit (EC-1) | No command suspends a client (21-7 C26); SQL-only | reject |
+| C11 | low | A malformed `expectedAt` is 400 before authority (EC-2) | It mirrors operator `create` (`:422`), leaks nothing, and the hash needs the normalised value | reject |
+| C12 | low | More than 200 warehouses are silently cut (EC-3, BH-9) | Spec-mandated cap with a recorded rationale | reject |
+| C13 | low | Zero warehouses leaves an unsubmittable form (EC-4) | A tenant with client SKUs and no warehouse is not a real 3PL state | reject |
+| C14 | low | Equal name plus equal or null city still collide (EC-5) | Needs duplicate-named warehouses in one city; unlikely | reject |
+| C15 | low | `readSession()` null at submit is silent (EC-8) | The shell redirects on session loss; unreachable in practice | reject |
+| C16 | low | The SKU drain is not abortable (EC-9, BH-7) | Results are dropped by `usePortalDetail`'s `cancelled` flag (`use-portal.ts:125-135`); only wasted fetches; the fix needs signal plumbing | reject |
+| C17 | low | `actor === null` is dead; a deleted user is 403, not 401 (BH-1) | TRUE but nothing deletes users; the implementer flagged it; the docs describe status, not deletion | reject |
+| C18 | low | The write-stamp scan can be fooled by a stamped inner call (BH-2) | The same heuristic as 21-7's read scan; the RLS probe is the second layer | reject |
+| C19 | false | The RLS probe overclaims the "whole write set" (BH-3) | Docs say "write set (every insert, plus the read-back)", which the arm runs; the skipped reads hit tenant-only tables (`kit_compositions` policy `0033:64`) or deliberately client-filtered ones | reject |
+| C20 | low | Post-write views show only `warehouseName`, not the city (BH-4) | Needs duplicate warehouse names; the 21-7 read DTOs are out of this story | reject |
+| C21 | low | A Discard after a timeout loses the key, so a re-entry gets a misleading 409 (BH-6) | Rare; the 409 is about the user's own notice, which is true | reject |
+| C22 | low | Untested `conflict` race, duplicate-SKU lines, foreign-kit ordering, replay after suspend (BH-10b-e) | Duplicate lines are pre-existing operator behaviour; the ordering is correct by reading (`readClientSkus` precedes the kit check); authority precedes replay by construction | reject |
+| C23 | low | Untested capability-hidden button, double-submit, warehouse-only failure (BH-11a,b,d) | Only client sessions reach the portal; the in-flight ref plus C1's disabled form | reject |
+| C24 | low | Line order in the hash is unstated (BH-12) | Operator parity; FE builds lines deterministically from rows | reject |
+| C25 | false | The spec is absent from the review diff (BH-14) | By design: the spec is the claims file, given to the edge-case layer only | reject |
+| C26 | low | `PortalAsnRow` lacks city disambiguation in the banner (BH-4, dup) | See C20 | reject |
+| C27 | low | Drain races a later reload (BH-7, dup) | See C16 | reject |
 
 ## Design Notes
 

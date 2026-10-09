@@ -14,7 +14,7 @@ Next.js 16.3 App Router, React 19, Tailwind 4, TypeScript 6, bun. Four runtime d
 
 Dev server is :3001 so the backend keeps :3000 (`package.json:12`).
 
-Users: **Owner, Ops Manager, Accountant** on a desk — and, since story 21-7, a **client brand's own user** (role `client`) in the read-only client portal, which has its own shell and never mounts an operator surface. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
+Users: **Owner, Ops Manager, Accountant** on a desk — and, since story 21-7, a **client brand's own user** (role `client`) in the client portal (read-only in 21-7; since 21-7b read-mostly plus ASN — it can announce its own inbound shipment), which has its own shell and never mounts an operator surface. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
 
 ## What it deliberately does NOT do
 
@@ -63,10 +63,19 @@ Four of twelve are still `SurfacePlaceholder` (the Overview stopped being partia
 | `/portal` | redirects to `/portal/stock` |
 | `/portal/stock` | `PortalStock` — this client's stock per (SKU, warehouse): on hand, allocated, base UoM; never a bin |
 | `/portal/orders` | `PortalOrders` — the client's orders, expandable to their lines (kit components nested under the kit line) |
-| `/portal/inbound` | `PortalInbound` — advance shipment notices and purchase orders, each expandable to its lines |
+| `/portal/inbound` | `PortalInbound` — advance shipment notices and purchase orders, each expandable to its lines. **21-7b:** "Announce a shipment" (gated on `asn.announce`) opens the portal's one write form — see *Portal ASN entry* below |
 | `/portal/invoices` | `PortalInvoices` — issued invoices (never a draft), opening to the party and lines (a portal layout, not the operator's printable one — that renders from the operator DTO) |
 
 `PortalShell` (`components/portal/portal-shell.tsx`): nav Stock / Orders / Inbound / Invoices, the client's name from the session, sign-out; it listens to session change and expiry like `AppShell`, and **no operator component is mounted inside it**. A staff session → `/settings`, no session → `/login`. Any portal read answering `client-suspended` clears the session and goes to `/login?portal=suspended` ("Your company's portal access is suspended."). The shells' redirect decisions are shared helpers in `lib/portal.ts`, pinned not to loop. Every portal read is a `ResourceState` hook in `lib/use-portal.ts` over a `fetchApiPortal*` wrapper.
+
+**Portal ASN entry (story 21-7b).** The Inbound page's notices section gains "Announce a shipment" (shown when the session role holds `asn.announce`). The form (`AnnounceForm` in `components/portal/portal-inbound.tsx`) reads only portal routes:
+- **Options.** `usePortalSkuOptions` drains `portal/skus` at `limit=100`, up to 20 pages (`drainPortalSkus`); past that the form is disabled with "your catalogue is too large for this form". `usePortalWarehouses` reads `portal/warehouses`; the picker shows the name, plus the city when names repeat (`portalWarehouseOptions`). One warehouse is pre-chosen.
+- **Empty and failed.** No SKUs → the form is disabled with "No SKUs are set up for your company yet — ask the warehouse"; a failed read → `ReadFailure` with Retry.
+- **Rows.** The operator's `LineRows` (`components/inbound/asn-card.tsx`) is exported and generic over the minimal `LineOption {id, code, name, uom, uomPrecision}` (`lib/asns.ts`); the portal maps its `PortalSkuDto` through `portalSkuOption` (`lib/portal.ts`), so no operator type or hook reaches the portal. The quantity step comes from `uomPrecision`.
+- **Body and key.** `parsePortalAsnCreate(draft, warehouseId)` builds `{warehouseId, asnCode, expectedAt?, lines[{skuId, announcedQty}]}` — never a `clientId`, never a line `id` — reusing `parseAsnLines` and `parseExpectedAt`. The `Idempotency-Key` is per draft (minted on the first submit, reused on a retry of the unchanged draft, cleared on success and on any edit) with an in-flight ref, as in `asn-card.tsx`.
+- **Refusals.** `portalAsnReason` sends the session codes (`client-suspended`, `role-denied`, `permission-denied`, `unauthenticated`) to `portalReadReason` and words `not-found`, `duplicate-asn-code`, `kit-cannot-hold-stock`, `validation-failed`, `idempotency-key-reuse` and `conflict` for a client. The POST goes through `portalError`, so `client-suspended` fires the portal event like any read.
+- **Success.** A banner, and the notices list is reset to its FIRST page and refetched (`usePortalList(...).reset()`, the table remounted) — a plain reload would refetch a page-2 cursor and hide the new notice.
+- There is no portal amend, close or cancel (decision 2).
 
 ### `(auth)` — outside the shell (`src/app/(auth)/layout.tsx`, a centred card)
 
@@ -201,7 +210,7 @@ The **picked warehouse** is separate state: `localStorage['wms-active-warehouse:
 
 ## The capability mirror
 
-`src/lib/users.ts` hand-mirrors the backend's `src/modules/tenancy/permissions.ts`: a `CAPABILITIES` tuple (40 entries as of story 21-6) and `ROLE_CAPABILITIES` for the five roles (21-7 added `client: []`).
+`src/lib/users.ts` hand-mirrors the backend's `src/modules/tenancy/permissions.ts`: a `CAPABILITIES` tuple (41 entries as of story 21-7b) and `ROLE_CAPABILITIES` for the five roles (21-7 added `client: []`; 21-7b made it `client: ['asn.announce']` and added `asn.announce` to `OPS_EXCLUDED_CAPABILITIES`, because the Ops Manager's set is derived by exclusion and would otherwise inherit the portal verb).
 
 **Why it exists.** The sidebar must decide what to render before any request is made. There is no capability endpoint; the backend answers 403 `role-denied` at command time, which is the wrong moment to learn a form should not have been offered.
 
