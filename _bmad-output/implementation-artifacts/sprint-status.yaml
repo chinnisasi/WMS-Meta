@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-09-2026 08:22
+last_updated: 10-09-2026 08:40
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -222,7 +222,7 @@ development_status:
   21-5b-dispute-drill-down: done
   21-6-advance-shipment-notices: done
   # Split by the human (2026-10-08): the handheld receiving against an ASN is 21-6b.
-  21-6b-handheld-asn-receiving: review
+  21-6b-handheld-asn-receiving: done
   21-7-client-portal: backlog
   21-8-per-client-service-reporting: backlog
   epic-21-retrospective: optional
