@@ -124,6 +124,7 @@ Three exported facades (`inbound.module.ts:55`). Nothing outside imports a comma
 | `createVendor(command, idempotencyKey)` → `VendorSnapshot` | Delegates to `VendorCommand.create`. | `api/inbound.controller.ts:72` |
 | `createPurchaseOrder / amendPurchaseOrder / closePurchaseOrder(command, key)` | Delegates to `PurchaseOrderCommand`. Close returns `ClosePoSnapshot` = closed PO + successor-or-null. | `api/inbound.controller.ts:136,256,309` |
 | `createAsn / amendAsn / transitionAsn(command, key)` (21-6) | Delegates to `AsnCommand`; `transitionAsn` is close (short) or cancel, with a note. Every response is `AsnSnapshot = {asn}`. | `api/inbound.controller.ts` (`/inbound/asns…`) |
+| `announceAsn(command, key)` → `PortalAsnDetail` (21-7b) | Delegates to `AsnCommand.announce` — the client portal's one write. Deliberately not `portal*`-named: the client stamp lives in the command (it opens its own transaction), so the architecture scan of portal WRITES reads `asn.command.ts: announce`, not the facade. | `api/portal.controller.ts` (`POST portal/inbound/asns`) |
 | `listAsns(tenantId, actorUserId, warehouseId, query)` / `getAsn(tenantId, actorUserId, asnId)` (21-6) | The warehouse list (keyset `(created_at, id)`, `status`/`clientId` filters, `lineCount`/`announcedTotal`/`receivedTotal` folded over the page's ids) and the detail with lines. **A client-portal session is refused 403** — 21-7 opens them. | inbound controller |
 | `listVendors(tenantId, query)` → `Page<VendorEntry>` (`:143`) | Keyset page, newest first. | inbound controller |
 | `listPurchaseOrders(tenantId, warehouseId, query)` → `Page<PurchaseOrderEntry>` (`:185`) | Headers only, warehouse-scoped, optional status filter. Asserts the warehouse is in the tenant first (404). | inbound controller |
@@ -184,13 +185,19 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   autonumber
-  actor Ops as Ops / client (21-7)
+  actor Ops as Ops
+  actor Cl as Client user — portal (21-7b)
   actor Op as Operator — device
   participant Ib as inbound
   participant Inv as inventory
 
-  Ops->>Ib: POST /inbound/asns {clientId, warehouseId, asnCode, lines}
-  Note over Ib: clientId must equal the SKUs' client<br/>(mixed-client / sku-client-mismatch)
+  alt operator keys it
+    Ops->>Ib: POST /inbound/asns {clientId, warehouseId, asnCode, lines}
+    Note over Ib: clientId must equal the SKUs' client<br/>(mixed-client / sku-client-mismatch)
+  else the client announces it (21-7b)
+    Cl->>Ib: POST /portal/inbound/asns {warehouseId, asnCode, lines}
+    Note over Ib: client = the portal session's; tx stamped { clientId }<br/>user + client re-read; SKUs filtered by client (404)<br/>kits 409; answers the bare PortalAsnDetail
+  end
   Op->>Ib: GET catalog-snapshot → openAsns[]
   Op->>Ib: grn.submit {asnId, lines[asnLineId]}
   Note over Ib: lock SKUs → ASN → ASN lines (the PO arm's place)<br/>warehouse must match (document-warehouse-mismatch)
@@ -261,6 +268,7 @@ The skeleton: hash → `assertPermission('asn.manage')` (owner + ops_manager, `p
 
 - **create:** (behind authority and replay) the code 1–64 **code points** and 1–200 lines (400) → warehouse in tenant (404) → client in tenant (404) → SKUs read **unlocked** (404) → `assertSingleClientInTx` (409 `mixed-client`) → the derived client must be `clientId` (409 `sku-client-mismatch`) → scale (precision refusal) → insert (unique violation → 409 `duplicate-asn-code`; the client label is read *before* the insert, because the violation aborts the transaction). Code trimmed, 1–64; 1–200 lines; `expectedAt` a Z-suffixed instant (400 above the transaction).
 - **amend:** ASN `FOR UPDATE` (404) → `announced`/`partially_received` else 409 `asn-not-open` → the PO amend's full line-set replace (duplicate id 400, unknown id 404) → SKUs of another client 409 `sku-client-mismatch` → **a line that has received anything may not be removed, change SKU, or have its quantity LOWERED to below what it received (409 `asn-line-received`)** — after an approved over-receipt received exceeds announced, and resending the line unchanged still amends → `expectedAt` absent = unchanged, `null` = cleared → status re-derived (lowering a line to what it received can complete the ASN).
+- **announce (21-7b — the client portal, `AsnCommand.announce`):** a SEPARATE command on the same tables, never a flag on `create` (whose hash, response and authority stay byte-identical — pinned by an `idempotency_keys` golden). The client is the portal session's (`PortalSession.clientId`, never the body — a body `clientId` or a line `id` is 400 via `forbidNonWhitelisted`). It opens `withTenantTransaction(db, t, fn, { clientId: command.clientId })` itself and does **not** call `assertAuthority`. Order: hash `{surface: 'portal', tenantId, clientId, warehouseId, asnCode (trimmed), expectedAt ?? null, lines[{skuId, announcedQty}]}` (above the tx) → `assertPermission('asn.announce')` → the actor's status and client re-read (not active 401 `unauthenticated`; another client — or none, e.g. an owner — 403 `role-denied`) → `getClientStatusInTx` (not active 403 `client-suspended`) → replay → code and line shape (the shared helpers) → warehouse in tenant (404) → SKUs read `tenant AND client_id = session client AND id IN (…)` (an unknown and another client's SKU are the same 404, detail `No SKU with id "<id>" exists for this client.`) → kits (`CatalogFacade.getKitSkuIdsInTx`) 409 `kit-cannot-hold-stock` naming the codes (receiving refuses a kit line, so it could never be received) → scale → the shared insert (409 `duplicate-asn-code`) → `finish`: outbox `asn.created` with the operator `{asn}` payload, the audit row (actor = the client user — the only record that the ASN came from the portal, decision 3), and the key whose snapshot is the `PortalAsnDetail` rebuilt by `portalAsnInTx` on the same transaction. `mixed-client` and `sku-client-mismatch` are unreachable by construction. The result is an ordinary ASN: the operator list, the device snapshot and receiving treat it exactly as one an operator keyed. There is no portal amend, close or cancel (decision 2 — PENDING).
 - **close / cancel:** note trimmed, 1–500 code points (400 above the transaction) → ASN `FOR UPDATE` → close only from `partially_received`, cancel only from `announced`, else 409 `asn-transition-invalid` → **cancel refuses 409 `asn-has-receipts` while any GRN references the ASN** (a receipt that credited no line leaves it `announced`, but goods arrived against it) → **409 `over-receipt-pending`** while any of its excess awaits a decision (under the ASN lock) → conditional update to the terminal status with the note.
 
 ### `grn.submit` — `ReceivingCommand.submitGoodsReceipt` (`receiving.command.ts:227`)
@@ -389,7 +397,7 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 
 `vendor.created` · `po.created` · `po.amended` · `po.closed` (payload `{ purchaseOrder, successor }`) · `asn.created` · `asn.amended` · `asn.closed` · `asn.cancelled` (21-6, payload `{ asn }`) · `grn.recorded` (full GRN snapshot — `asnId`/`asnCode`, line `asnLineId`, `unmatchedLines` only when present) · `over_receipt.requested` · `over_receipt.approved` · `over_receipt.rejected` (21-6: `poId`/`poLineId` null on an ASN's excess, `asnId`/`asnLineId` present only then) · `qc_hold.placed` · `qc_hold.released`.
 
-**Audit rows** (`audit_events`, `reference` = the idempotency key): `over_receipt.approved|rejected` (`receiving.command.ts:810`), `qc_hold.placed` (`qc.command.ts:369`), `qc_hold.released` (`qc.command.ts:546`), `asn.created|amended|closed|cancelled` (21-6). The PO and vendor commands write no audit row.
+**Audit rows** (`audit_events`, `reference` = the idempotency key): `over_receipt.approved|rejected` (`receiving.command.ts:810`), `qc_hold.placed` (`qc.command.ts:369`), `qc_hold.released` (`qc.command.ts:546`), `asn.created|amended|closed|cancelled` (21-6). The PO and vendor commands write no audit row. **21-7b:** a portal-announced ASN's `asn.created` row carries the CLIENT USER as actor — the only record that it came from the portal (no `origin` column, decision 3; no route reads it yet — the operator badge is PENDING). Its outbox `asn.created` payload is the operator `{asn}`, identical to an operator-keyed one.
 
 ---
 
@@ -418,6 +426,10 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 11. **(21-6) The replay path passes stored lines through raw.** Normalise every optional field (`?? null`) before a rule reads it — an absent key is not `null` to a `=== null` check.
 
 12. **`carriedFromPoId` has no FK and no cascade.** It is a bare uuid validated in-command; the `purchase_orders_tenant_carried_from_idx` index is what makes the chain walkable.
+
+13. **(21-7b) The portal announce and the operator create share ONE `idempotency_keys` table** (unique on `(tenant_id, key)`). The portal fingerprint therefore starts with `surface: 'portal'`: without it, a portal POST whose fields equal an operator create's (minus `clientId`, which both carry) under the same key would re-serve the operator's `{asn}` snapshot — `clientId`, `warehouseId`, `statusNote` — to the portal. Both directions answer 422; both hashes are pinned by goldens read from `idempotency_keys` (`test/portal-asn.spec.ts`).
+
+14. **(21-7b) `finish` builds the stored snapshot through a callback.** The operator commands pass `operatorSnapshot` (`{asn}`), the announce passes the `portalAsnInTx` read-back — the outbox payload stays the operator `{asn}` for both. Do not let the portal shape leak into the outbox, or the operator shape into the portal snapshot.
 
 ---
 

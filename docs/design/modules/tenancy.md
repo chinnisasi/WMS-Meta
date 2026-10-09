@@ -106,6 +106,7 @@ Second index: `rejected_ops_tenant_status_created_at_id_idx` — the review queu
 
 - `getMemberRole(tenantId, userId, tx?)` `:156` — the authority read. Pass `tx` and it runs inside your transaction; omit it and it opens its own. **Every foreign module calls this**, never `users` directly.
 - `requireActiveWarehouse(tenantId)` `:170` → `{warehouseId, code, name}` or 422 `no-active-warehouse`. The zero-warehouse invariant guard for stock-record creation.
+- `portalWarehouses(tenantId, clientId)` (21-7b) — the client portal's warehouse list (the announce form's picker; decision 1: every warehouse of the tenant): `{warehouseId, warehouseName, city}` (city = `origin_city`, null on a pre-11.1 row — it tells apart two warehouses of one name), ordered `(name, id)`, unpaginated and capped at `MAX_WAREHOUSE_PAGE_SIZE` (200). Never a code, address line, contact or GSTIN. Stamped `{ clientId }` like every portal read (the architecture scan lists it), though `warehouses` is tenant-scoped.
 - `listWarehouses` `:200` / `listZones` `:241` / `listBins` `:282` — keyset-paginated reads. `listBins` converts `capacity` out of milli-units (`:330`) and, since 11-5, echoes the four physical-capacity attributes **raw** (integer facts, no `fromMilli`).
 - `computeSetupChecklist(tenantId)` `:344` — the four onboarding steps, computed on read from counts. No stored step rows.
 
@@ -344,7 +345,7 @@ The 404 on the row is **ambiguous by design** — it also covers an inner comman
   - `ops_manager` — everything except `users.invite` and `users.role_change`.
   - `operator` — exactly four: `putaway.execute`, `picks.execute`, `pack.execute`, `dispatch.execute`. The floor executes; it does not plan.
   - `accountant` — `eway.manage`, `rates.manage`, `billing.invoice`.
-- `client` (21-7) — the empty set. A client-portal user is fenced off every operator route at the guard and reads only `portal/` routes.
+- `client` (21-7) — the empty set in 21-7; **exactly `asn.announce` since 21-7b** (the portal's one write — a client user announces its own shipment; owner holds it too, through "everything", harmlessly: the fence keeps owner tokens off portal routes and `AsnCommand.announce` re-checks that the actor's `client_id` is the session client, refusing an owner 403). A client-portal user is fenced off every operator route at the guard and uses only `portal/` routes. The FE mirror lists `asn.announce` in `OPS_EXCLUDED_CAPABILITIES` (ops_manager is derived by exclusion there).
 - `assertPermission(role, capability)` (`:143`) throws 403 `role-denied` naming both the role and the capability.
 - `assertSecureBinAuthority(role, bins)` (`:191`, story 12-3 / FR-42) composes it for the (role, bin) authority question: the five movement writers (placement target, merge source AND target, pick draw, QC-hold origin, QC-release origin-return) call it beside their class gates — it 403s only when an involved bin is `secure`-class (`SECURE_STORAGE_CLASS`, story 12-3) and the actor lacks `secure.move`. The matrix-invariant test in `test/users.spec.ts` keeps `bin.retire`/`qc.manage`/`stock.adjust` holders inside the `secure.move` set.
 
