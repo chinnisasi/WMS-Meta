@@ -636,3 +636,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
   summary: 21-7b — a client user announces an ASN from the portal (SPEC CAP-9's "a client can announce"), a client-side write onto 21-6's ASN command with per-client idempotency, the SKU/client match and per-client code uniqueness.
   evidence: Human decision 2026-10-09 (21-7 open question 2) — 21-7 stays read-only; a client write is a new trust surface.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
+  summary: Portal read performance — no `(tenant_id, client_id, created_at, id)` index serves the portal order/ASN/PO/invoice keysets, and the portal stock read re-aggregates the client's whole stock_on_hand + reservations per page before applying its keyset.
+  evidence: 21-7 code review C12/C13 — fine at today's volumes, a sort/scan per page for a busy brand; needs a migration and a query reshape.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
+  summary: The RLS-only isolation proof (client-isolation.spec Part 3) runs hand-copied portal SQL, not the production `*InTx` functions — a portal read could lose its stamped-table join while the probe stays green.
+  evidence: 21-7 code review C14 — running the real functions under the wms_rls_probe role needs a harness that injects a probe-role transaction.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
+  summary: No way to deactivate or remove a single user (portal or staff) — offboarding one brand employee needs SQL; suspending the client locks out the whole brand.
+  evidence: 21-7 code review C15 — pre-existing (no user deactivation command exists for any role); matters more now that untrusted portal users exist.

@@ -4,7 +4,7 @@
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton, migration checklist and vocabulary pattern below are assumed, not repeated.
 
-Story 21-1 stood up the table and the `self` client; 21-2 added the `app.client_id` RLS clause; **21-2b gave it an admin surface and made attribution real**: owners register and rename client brands, a catalog import names the client its new SKUs belong to, and orders, purchase orders and every ledger movement take their client **from their SKUs**. Status transitions (suspend/depart), deletion and portal users are still absent (21-7 and PENDING).
+Story 21-1 stood up the table and the `self` client; 21-2 added the `app.client_id` RLS clause; **21-2b gave it an admin surface and made attribution real**: owners register and rename client brands, a catalog import names the client its new SKUs belong to, and orders, purchase orders and every ledger movement take their client **from their SKUs**. Status transitions (suspend/depart) and deletion are still absent (PENDING). **21-7 adds the client portal**: a fifth role `client` paired with `users.client_id`, a portal session token carrying `client_id`, the operator fence, and `PortalSessionGuard` + ten read-only `portal/` routes — see *The client portal* below.
 
 ---
 
@@ -40,6 +40,28 @@ Commands: `ClientsCommand.create` / `.rename` / (21-5) `.updateTaxDetails` (`src
   - `getClientInTx` (21-5) — one client's full snapshot including `taxDetails`, 404 when absent: the recipient a client invoice prints
   - `assertSingleClientInTx(tx, tenant, clientIds, subject)` — **the one attribution rule**: one distinct client or 409 `mixed-client` naming the codes (`mixedClient()`)
 
+## The client portal (story 21-7)
+
+A client brand's own user signs in and reads its stock, orders, inbound documents and invoices — read-only (decision 2; portal ASN entry is 21-7b), isolated by the database.
+
+**The persona.** A fifth role, `client` (`ROLE_CAPABILITIES.client` = ∅), paired with `users.client_id` by the 0065 CHECK `("role"::text = 'client') = ("client_id" IS NOT NULL)`. Only an owner invites one: `POST /users {email, role: 'client', clientId}` — guard order authority → replay → client checks (the client read by tenant AND id → 404; the tenant's own `self` → 400; not `active` → 409 `client-not-active`); `clientId` without `role: client`, or the reverse, is 400 above the transaction. The invite fingerprint adds `clientId` only when present (the 8-1d conditional key, after `role`). A role change never assigns `client` (`ASSIGNABLE_ROLES`) and never changes a client user (400). The client user is refused at device badge-in (403 `role-denied`, after the PIN check, nothing bound).
+
+**The session.** Sign-in of a client user checks its client is `active` AFTER the password (403 `client-suspended`; a wrong password stays 401) and mints a token carrying `client_id`; the body adds `user.clientId` and `client {id, code, name}`. The fence (`TenantSessionGuard`, `AnySessionGuard`'s web arm) refuses that token on every operator route — 403 `role-denied`, `This is an operator surface.` (`IMPLEMENTATION-GUIDE.md` §7e).
+
+**`PortalSessionGuard`** (`portal-session.guard.ts`, provided + exported by `ClientsModule`; the api shell imports `SharedModule` so its `DATABASE` resolves) admits only a `client_id` token, and per request — in `withTenantTransaction(db, t, …, { clientId })`, never `AUTH_DATABASE` — re-reads the user (`getMemberPortalFactsIn`: missing / not active / another client → 401) and the client (`readSessionClientIn`: not active → 403 `client-suspended`), then parks `{userId, tenantId, clientId}` for `@CurrentPortalSession()`.
+
+**The reads** (`src/api/portal.controller.ts`, all `GET /tenants/{t}/portal/…`, each its owning module's facade method taking `(tenantId, clientId, query)`):
+
+| Route | Facade | Notes |
+|---|---|---|
+| `portal/me` | `ClientsFacade.portalMe` | `{user {id, email, role, status, clientId}, client {id, code, name}}` |
+| `portal/stock` | `InventoryFacade.portalStock` (`inventory/portal-stock.ts`) | per (SKU, warehouse): `onHand` over every bin, `allocated` = held/committed order reservations; each side pre-aggregated then FULL-joined (no fan-out, allocated-only rows kept); keyset `(skuCode, warehouseId)`, its own codec |
+| `portal/orders`, `/{id}` | `OutboundFacade.portalOrders` / `portalOrder` | `lineCount` counts top-level lines; detail nests kit components; `skus` LEFT-joined |
+| `portal/inbound/asns`, `/{id}`; `portal/inbound/purchase-orders`, `/{id}` | `InboundFacade.portalAsns` / `portalAsn` / `portalPurchaseOrders` / `portalPurchaseOrder` | no vendor, cost or note |
+| `portal/invoices`, `/{id}` | `BillingFacade.portalInvoices` / `portalInvoice` | non-draft only; no note, gaps, warnings, card or line ids; the party without `warehouseCode` / recipient `code` |
+
+Two layers, both required and both proved: the transaction stamp (RLS — the `wms_rls_probe` arms in `test/client-isolation.spec.ts` Part 3, which run **copies** of the portal SQL with the client predicate removed — the stock read (on-hand and order reservations, through `skus`), the order, ASN and PO header lists, the order-line, ASN-line and PO-line reads (through their header), and the invoice header and invoice-line reads (drafts hidden by the policy alone)) and the explicit `client_id = $client` predicate (the HTTP tests in `test/portal.spec.ts`, whose suite is RLS-inert). `test/architecture.spec.ts` pins the stamp on every portal facade read, and that `users.client_id` is written only by the invite insert. Lists: `(created_at desc, id)` keysets over the full-precision instant, limit 1–100, `invalid-cursor` 400; a malformed order/ASN/PO id is 400 and a malformed invoice id 404 (each operator route's convention); an unknown or foreign id is 404.
+
 ## Attribution (story 21-2b) — derived, never chosen
 
 The SKU is the source of truth. Everything else **derives** its client:
@@ -63,7 +85,7 @@ Invoicing: a client brand's order is **not GST-invoiced** (decision 5) — `orde
 
 ## The stamping rule (AD-24 placement)
 
-`client_id` is a **selective denormalisation** — explicit NOT NULL columns only where queries filter/aggregate without joining through the SKU: `skus`, `orders`, `purchase_orders`, `ledger_events` (billing aggregates over it constantly). Nullable by design: `bins.dedicated_client_id` (attribute, not scope) and `users.client_id` (null = tenant staff, set = portal user — **inert until 21-7**). Tables referencing a SKU — stock, reservations, picks, order lines, GRN lines — inherit and get **no column**; their client isolation rides on the join through `skus`. The first `client_id` index is 21-4's `ledger_events (tenant_id, client_id, warehouse_id, recorded_at)` (0061) for billing's fold and counts; the order/PO/SKU lists still have none (their client filters are PENDING).
+`client_id` is a **selective denormalisation** — explicit NOT NULL columns only where queries filter/aggregate without joining through the SKU: `skus`, `orders`, `purchase_orders`, `ledger_events` (billing aggregates over it constantly). Nullable by design: `bins.dedicated_client_id` (attribute, not scope) and `users.client_id` (null = tenant staff, set = portal user — since 21-7 set exactly when `role = 'client'`, the 0065 `users_client_role_pairing` CHECK, written only by the invite insert). Tables referencing a SKU — stock, reservations, picks, order lines, GRN lines — inherit and get **no column**; their client isolation rides on the join through `skus`. The first `client_id` index is 21-4's `ledger_events (tenant_id, client_id, warehouse_id, recorded_at)` (0061) for billing's fold and counts; the order/PO/SKU lists still have none (their client filters are PENDING).
 
 ## Gotchas (the ones that caused real defects, or nearly did)
 
@@ -73,4 +95,5 @@ Invoicing: a client brand's order is **not GST-invoiced** (decision 5) — `orde
 - **SKU codes and barcodes stay unique across the tenant** (decision 2) — an existing code under any client is `duplicate-sku-code`, whose detail now names the owner client.
 - **Residual race (PENDING):** the SKU correction locks the SKU row and re-checks history, but order/PO creation does not lock SKU rows; a correction committing between an order's preflight read and its write could leave that order on the SKU's old client.
 - **The ledger backfill needed the append-only trigger dance** (0040) — any future migration that UPDATEs the ledger repeats it.
-- **Nothing can suspend a client yet** — `suspended` is reachable only by SQL; no command branches on status (PENDING: status transitions and departure).
+- **Nothing can suspend a client yet** — `suspended` is reachable only by SQL. Since 21-7 two paths DO branch on it: a client user's sign-in and every portal request (403 `client-suspended`), and the client-user invite (409 `client-not-active`) — PENDING: status transitions and departure.
+- **`users.client_id` is immutable by construction (21-7)** — never add an `.update(users)` that touches it: the session token's `client_id` claim mirrors it for 15 minutes, and the architecture scan fails the build.

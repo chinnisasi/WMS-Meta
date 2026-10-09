@@ -41,7 +41,8 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 |---|---|---|---|---|---|
 | `email` | text | NO | — | **globally unique** | Not per-tenant — one tenant per email, by design. Duplicate → `409 duplicate-email` |
 | `password_hash` | text | NO | — | — | **scrypt.** Never leaves the row. `DUMMY_HASH` equalises timing so an unknown email and a wrong password are indistinguishable |
-| `role` | `user_role` **pgEnum** | NO | `'operator'` | the enum type | `owner \| ops_manager \| operator \| accountant`. **The only `pgEnum` in the schema** — every later vocabulary uses a CHECK instead, because extending an enum needs `ALTER TYPE` |
+| `role` | `user_role` **pgEnum** | NO | `'operator'` | the enum type + `users_client_role_pairing` (0065) | `owner \| ops_manager \| operator \| accountant \| client` (21-7 added `client`, the client-portal persona — no capabilities). **The only `pgEnum` in the schema** — every later vocabulary uses a CHECK instead, because extending an enum needs `ALTER TYPE` (and the new value cannot be used in the migration run that adds it — IMPLEMENTATION-GUIDE §3) |
+| `client_id` | uuid | **YES** | — | `users_client_role_pairing`: `(role::text = 'client') = (client_id IS NOT NULL)` | 21-1's persona arm; since 21-7 set exactly for a `client` user, written only by the invite insert, never updated (architecture scan) |
 | `status` | text | NO | `'active'` | **NO CHECK — app-layer only** | `invited \| active`, enforced solely by `USER_STATUSES` (`schema.ts:66`). One of the unguarded vocabularies the docs flag elsewhere |
 | `invite_token_hash` | text | **YES** | — | — | **sha256 of the one-time token.** The raw value is returned once and also persists in the idempotency snapshot so a replay re-serves it |
 | `invite_expires_at` | timestamptz | **YES** | — | — | 7-day TTL |
@@ -160,7 +161,9 @@ sequenceDiagram
   Note over T: status flip + wipe flag. On endpoints that<br/>never re-resolve the device row, revocation<br/>DOES NOT BITE — see below.
 ```
 
-### The one-way claim-shape hole
+### The one-way claim-shape hole — closed by 21-7
+
+**Story 21-7 closed it:** `verifyTenantSession` now returns null for any token carrying `device_id`, so a badge-in token no longer opens a web route (401), and `verifyDeviceSession` refuses any token carrying `client_id`. The diagram below is the pre-21-7 state, kept for the record.
 
 ```mermaid
 flowchart LR
@@ -227,7 +230,7 @@ Not a state change; **no idempotency key**. Runs entirely on `AUTH_DATABASE` (cr
 3. `verifyPassword(password, user?.passwordHash ?? DUMMY_HASH)` — **always** one scrypt round `:77`.
 4. Unknown email and wrong password are one 401 `unauthenticated` with identical text.
 
-Returns the token plus `user {id,email,role,status}`. The role in that body is **for FE surface gating only** — the command path re-reads it.
+Returns the token plus `user {id,email,role,status,clientId}` and (21-7) `client {id,code,name} | null`. The role in that body is **for FE surface gating only** — the command path re-reads it. **21-7:** a client user whose client is not `active` is refused 403 `client-suspended` AFTER the password check (a wrong password stays 401); its token carries `client_id`.
 
 ### `WarehouseCommand.create` / `ZoneCommand.create`
 
@@ -289,13 +292,13 @@ The row is never deleted: `(warehouse_id, code)` keeps the code reserved forever
 
 ### `UsersCommand.invite` (`users.command.ts:133`)
 
-Guards: `users.invite` (Owner only) → replay → global email pre-check on `AUTH_DATABASE` (`:166-173`) → insert with `passwordHash: DUMMY_HASH`, `status: 'invited'`, sha256 invite-token hash, 7-day expiry.
+Guards: (21-7, above the tx) `clientId` exactly when `role: 'client'` else 400 → `users.invite` (Owner only) → replay (a stored pre-21-7 snapshot is normalised `clientId ?? null`) → (21-7) the client checks: read by tenant AND id (404), not the `self` client (400), `active` (409 `client-not-active`) → global email pre-check on `AUTH_DATABASE` (`:166-173`) → insert with `passwordHash: DUMMY_HASH`, `status: 'invited'`, `clientId` (the ONLY write of `users.client_id`), sha256 invite-token hash, 7-day expiry. The fingerprint adds `clientId` only when present (the 8-1d conditional key, after `role`) — a staff invite hashes as before 21-7 (golden in `test/portal.spec.ts`).
 
 The **raw invite token's only durable store is the idempotency snapshot** (`:54-58`), so a same-key replay re-serves the exact link. Emits `user.invited`, writes an audit row.
 
 ### `UsersCommand.setUserRole` (`users.command.ts:254`)
 
-Guards: `users.role_change` (Owner only) → replay → target exists in tenant (404).
+Guards: `users.role_change` (Owner only) → replay (normalised `clientId ?? null`) → target exists in tenant (404) → (21-7) neither the target nor the new role is `client` (400; the DTO's `ASSIGNABLE_ROLES` refuses assigning `client` first).
 
 The last-Owner guard is **atomic**: when demoting an owner, the owner rows are locked `FOR UPDATE` first (`:308-314`), then the UPDATE carries `1 < (select count(*) … role = 'owner')` in its own WHERE (`:324-325`). A demotion matching no rows → 409 `last-owner`. Without the row locks, two concurrent demotions of *different* owners would each count 2 from their own READ COMMITTED snapshot.
 
@@ -340,7 +343,8 @@ The 404 on the row is **ambiguous by design** — it also covers an inner comman
   - `owner` — everything.
   - `ops_manager` — everything except `users.invite` and `users.role_change`.
   - `operator` — exactly four: `putaway.execute`, `picks.execute`, `pack.execute`, `dispatch.execute`. The floor executes; it does not plan.
-  - `accountant` — the empty set.
+  - `accountant` — `eway.manage`, `rates.manage`, `billing.invoice`.
+- `client` (21-7) — the empty set. A client-portal user is fenced off every operator route at the guard and reads only `portal/` routes.
 - `assertPermission(role, capability)` (`:143`) throws 403 `role-denied` naming both the role and the capability.
 - `assertSecureBinAuthority(role, bins)` (`:191`, story 12-3 / FR-42) composes it for the (role, bin) authority question: the five movement writers (placement target, merge source AND target, pick draw, QC-hold origin, QC-release origin-return) call it beside their class gates — it 403s only when an involved bin is `secure`-class (`SECURE_STORAGE_CLASS`, story 12-3) and the actor lacks `secure.move`. The matrix-invariant test in `test/users.spec.ts` keeps `bin.retire`/`qc.manage`/`stock.adjust` holders inside the `secure.move` set.
 
@@ -357,15 +361,15 @@ Hand-rolled HS256 over `node:crypto` HMAC — no JWT library, no refresh tokens.
 | | Web session | Device credential | Badge-in session |
 |---|---|---|---|
 | Minted by | `signTenantSession` `:44` | `signDeviceToken` `:150` | `signBadgeInSession` `:160` |
-| Claims | `sub`, `tenant_id`, `iat`, `exp` | `device_id`, `tenant_id`, `iat`, `exp` | `device_id`, `tenant_id`, `sub`, `iat`, `exp` |
+| Claims | `sub`, `tenant_id`, `iat`, `exp` — plus `client_id` (after `tenant_id`) for a client-portal user (21-7) | `device_id`, `tenant_id`, `iat`, `exp` | `device_id`, `tenant_id`, `sub`, `iat`, `exp` |
 | TTL | 15 min (`SESSION_TTL_SECONDS`) | 30 days | 30 days |
 | Verified by | `verifyTenantSession` `:64` | `verifyDeviceSession` `:182` | `verifyDeviceSession` |
 
-Signature comparison is `timingSafeEqual` after a length check (`:92`). There is **no role claim in either family** — that is the point.
+Signature comparison is `timingSafeEqual` after a length check (`:92`). There is **no role claim in either family** — that is the point. **AD-4 amended by 21-7, for the fence only:** a client-portal token carries `client_id`, used solely to refuse operator routes at the guard and to admit portal routes (`PortalSessionGuard`, which re-reads user and client per request); capabilities stay a per-command DB read. A present `client_id` that is not a UUID string (`null` included) is an invalid token.
 
-**The two families are only one-way exclusive.** `verifyDeviceSession` *requires* a `device_id` claim (`:224`), so a web token never passes the device guard. `verifyTenantSession` does **not** reject a `device_id` claim — it checks only `sub`, `tenant_id` and `exp` (`:105-108`). A badge-in token carries all three and is signed with the same secret, so it satisfies `TenantSessionGuard`. The docstring at `:177-181` claims mutual exclusivity; that is true in one direction only. See Security notes.
+**(Pre-21-7 — now exclusive both ways, see above.) The two families were only one-way exclusive.** `verifyDeviceSession` *requires* a `device_id` claim (`:224`), so a web token never passes the device guard. `verifyTenantSession` does **not** reject a `device_id` claim — it checks only `sub`, `tenant_id` and `exp` (`:105-108`). A badge-in token carries all three and is signed with the same secret, so it satisfies `TenantSessionGuard`. The docstring at `:177-181` claims mutual exclusivity; that is true in one direction only. See Security notes.
 
-Guards are transport only. `TenantSessionGuard` (`tenant-session.guard.ts:27`) parses `Bearer` case-insensitively, verifies, and parks claims on the request. Ownership of the path is a separate `assertOwnTenant(session, tenantId)` at each controller method — 403 `permission-denied`.
+Guards are transport only — with one exception since 21-7, **the fence**: `TenantSessionGuard` (`tenant-session.guard.ts:27`) parses `Bearer` case-insensitively, verifies, refuses a token carrying `client_id` with 403 `role-denied` (`This is an operator surface.`, also on `AnySessionGuard`'s web arm), and parks claims on the request. Ownership of the path is a separate `assertOwnTenant(session, tenantId)` at each controller method — 403 `permission-denied`.
 
 ### Password and PIN handling (`passwords.ts`)
 
@@ -387,7 +391,7 @@ Guards are transport only. `TenantSessionGuard` (`tenant-session.guard.ts:27`) p
 
 Returns the device token, the TTL, and `offlineStoreKeySealed` — delivered exactly once; the server never needs it again.
 
-**Badge-in** (`:491`). Not a state change beyond the binding + last-seen, so **no idempotency key** (the sign-in pattern). Device row locked `.for('update')`; unknown / revoked / not-yet-enrolled → 403 `device-revoked` (all identical). PIN verified against `device.pinHash ?? DUMMY_HASH` — one scrypt round always. `bound` (`:513-516`) requires an **active** user in this tenant and either an unbound device or the *same* operator: a device is single-operator until re-enrollment. Wrong operator or wrong PIN → one 401 `badge-invalid`.
+**Badge-in** (`:491`). **21-7:** binding is an allowlist — a floor role (`isFloorRole`) or, keeping its pre-21-7 behaviour, the accountant; anyone else (the `client` user) is refused 403 `role-denied` AFTER the PIN + binding check and BEFORE the device update (a wrong PIN stays 401, a refused badge-in binds nothing); the three per-command device role re-checks (`enrollment.command.ts`, `receiving.command.ts`, `sync-report.command.ts`) are the floor-role allowlist `isFloorRole` (`owner | ops_manager | operator`) instead of `=== 'accountant'` denylists. Not a state change beyond the binding + last-seen, so **no idempotency key** (the sign-in pattern). Device row locked `.for('update')`; unknown / revoked / not-yet-enrolled → 403 `device-revoked` (all identical). PIN verified against `device.pinHash ?? DUMMY_HASH` — one scrypt round always. `bound` (`:513-516`) requires an **active** user in this tenant and either an unbound device or the *same* operator: a device is single-operator until re-enrollment. Wrong operator or wrong PIN → one 401 `badge-invalid`.
 
 **Revoke** (`:554`). Status flip + `revoked_at`/`revoked_by` + `wipe_flag` + audit + `device.revoked`, one transaction. A re-revoke of an already-revoked device re-serves the state with **no second audit row and no second outbox event** (`:595-613`) while still writing its idempotency row.
 
@@ -448,13 +452,15 @@ The QC-hold re-select additionally requires `systemOwned = true` (`:169`): adopt
 
 Warehouse ownership is *not* an RLS dimension — RLS stays single-dimension and `assertWarehouseInTenant` catches a foreign warehouse as 404 inside the command transaction.
 
+**The client-portal fence (21-7).** A client user's token carries `client_id`; `TenantSessionGuard` and `AnySessionGuard`'s web arm refuse it (403 `role-denied`, `This is an operator surface.`) on every operator route, and `PortalSessionGuard` (clients module) admits only such a token, re-reading the user and the client per request on `DATABASE` in a client-stamped transaction — never `AUTH_DATABASE`. See `clients.md` → *The client portal*.
+
 **`AUTH_DATABASE` is the deliberate hole.** It is a BYPASSRLS connection (`src/shared/db/db.ts:35-51`) used by exactly four paths that have no tenant scope yet: sign-in, registration's replay lookup, invite's global email pre-check, accept-invite's and enroll's lookups. Two rules govern it: **reads only**, and **scope the predicate to a tenant wherever a tenant is known**. Registration is the only key-only lookup, and only because it genuinely has no tenant.
 
 **Password/PIN handling.** scrypt only, never reversible, never in a response, never in an idempotency payload hash (registration `:68`, accept-invite `:404` both deliberately exclude it — a leaked idempotency row must not become an offline password oracle, and a salted hash could not be replay-deterministic anyway). Enumeration is closed by the `DUMMY_HASH` round on every rejection path.
 
 **Session expiry.** Web tokens die in 15 minutes with no refresh — re-authenticate. Device tokens live 30 days but are **server-checked on every request**, so revocation does not wait for expiry.
 
-**A badge-in token satisfies `TenantSessionGuard`.** Both families are HS256 under the same `JWT_SECRET`, and `verifyTenantSession` checks only `sub`/`tenant_id`/`exp` — all of which a badge-in token carries. A floor operator's 30-day device session therefore also opens the web surface for its own tenant, with whatever capabilities that operator's role grants. Not exploitable across tenants (`assertOwnTenant` and RLS still hold) and not a privilege escalation (the role is re-read per command either way), but it does hand a 30-day credential to a surface designed around a 15-minute one, and revocation only bites on endpoints that re-resolve the device row — which the web endpoints do not. Not recorded in `../PENDING.md`; verify before relying on the 15-minute TTL as a control.
+~~**A badge-in token satisfies `TenantSessionGuard`.**~~ **Closed by 21-7** — `verifyTenantSession` refuses a token carrying `device_id` (401 on every web route). Pre-21-7 record: Both families are HS256 under the same `JWT_SECRET`, and `verifyTenantSession` checks only `sub`/`tenant_id`/`exp` — all of which a badge-in token carries. A floor operator's 30-day device session therefore also opens the web surface for its own tenant, with whatever capabilities that operator's role grants. Not exploitable across tenants (`assertOwnTenant` and RLS still hold) and not a privilege escalation (the role is re-read per command either way), but it does hand a 30-day credential to a surface designed around a 15-minute one, and revocation only bites on endpoints that re-resolve the device row — which the web endpoints do not. Not recorded in `../PENDING.md`; verify before relying on the 15-minute TTL as a control.
 
 **Known gaps** (`../PENDING.md` → tenancy): no PIN attempt lockout on badge-in, and no role gate on the operator *binding* — any `active` user of the tenant with the device's PIN can become its bound operator (`enrollment.command.ts:513-516`). The role gate exists only on the commands themselves.
 
