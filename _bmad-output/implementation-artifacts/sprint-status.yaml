@@ -223,7 +223,7 @@ development_status:
   21-6-advance-shipment-notices: done
   # Split by the human (2026-10-08): the handheld receiving against an ASN is 21-6b.
   21-6b-handheld-asn-receiving: done
-  21-7-client-portal: in-progress
+  21-7-client-portal: review
   # Split by the human (2026-10-09): portal ASN entry (a client write) is 21-7b.
   21-7b-portal-asn-entry: backlog
   21-8-per-client-service-reporting: backlog

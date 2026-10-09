@@ -1,14 +1,15 @@
 # API surface
 
-Every route the backend exposes, grouped by the module that owns it. **177 operations across 23 controller files** (counted from `wms-be/openapi/openapi.json` at story 21-5b — recount from the exported document, do not hand-increment).
+Every route the backend exposes, grouped by the module that owns it. **193 operations across 27 controller files** (counted from `wms-be/openapi/openapi.json` at story 21-7 — recount from the exported document, do not hand-increment).
 
 Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-be/README.md`](../repos/wms-be/README.md); this is the inventory — what exists, who owns it, what gates it.
 
 **Conventions that hold everywhere:**
 - `{t}` = `:tenantId`, `{w}` = `:warehouseId`. The path `tenantId` must match the session's, or `403 permission-denied`.
+- **The fence (21-7):** every operator route (`TenantSessionGuard`, and `AnySessionGuard`'s web arm) refuses a client-portal token — one carrying `client_id` — with `403 role-denied`, detail exactly `This is an operator surface.`; every `portal/` route refuses any other token with `403 role-denied`, `This is a client-portal surface.` A token whose `client_id` is malformed or `null`, or that carries both `client_id` and `device_id`, is `401`; a badge-in token no longer opens a web route (`401`).
 - Every **mutating** route requires an `Idempotency-Key` header (26-char ULID). Missing/malformed → `400`; same key + different payload → `422 idempotency-key-reuse`; concurrent same key → `409 conflict`.
-- **Reads are never capability-gated** — any tenant member may read. Only mutations carry a capability (`permissions.ts:4-7`).
-- Lists are cursor-paginated, `limit` 1–200. Offset pagination is banned.
+- **Reads are never capability-gated** — any tenant *staff* member may read. Only mutations carry a capability (`permissions.ts:4-7`). **Exception (21-7):** a client-portal user is a member too, but every operator route refuses its session at the guard (the fence below); it reads only the `portal/` routes.
+- Lists are cursor-paginated, `limit` 1–200 (some operator lists narrower, e.g. ASNs 1–100; **every `portal/` list is 1–100**). Offset pagination is banned.
 - Errors are RFC 9457 problem details; **clients branch on `code`, never on prose**.
 
 ---
@@ -18,7 +19,7 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | Method | Path | Capability | Notes |
 |---|---|---|---|
 | POST | `/tenants` | — | Register tenant + owner. Global email uniqueness → `409 duplicate-email` |
-| POST | `/tenants/sign-in` | — | 15-min HS256 JWT. Unknown email and wrong password are indistinguishable → `401` |
+| POST | `/tenants/sign-in` | — | 15-min HS256 JWT. Unknown email and wrong password are indistinguishable → `401`. **21-7:** the body adds `user.clientId` and `client {id, code, name} \| null`; a client-portal user's token carries `client_id`; its client not `active` → `403 client-suspended` (after the password check) |
 | POST | `/tenants/{t}/warehouses` | `warehouse.create` | Body carries the required `origin` address (story 11-1); duplicate code → `409 duplicate-warehouse-code` |
 | GET | `/tenants/{t}/warehouses` | — | Keyset |
 | POST | `/tenants/{t}/warehouses/{w}/zones` | `zone.create` | Foreign warehouse → `404` |
@@ -30,14 +31,14 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `.../bins/{binId}/merge` | `bin.retire` | Moves stock, emits ledger events. 11-5 gates on the target's physical capacity: `bin-overweight` / `bin-volume-exceeded` / `bin-item-oversize` → `400`; 12-1 merge-class gate `bin-storage-mismatch` → `400` — the target bin cannot satisfy a source SKU's class (names the offending SKUs); 12-2 merge-hazard gate `bin-segregation-conflict` → `400` — a moved SKU's hazard class co-locates with an incompatible occupant of the target (names both parties and both classes; moved-vs-moved is not re-checked — the source already co-locates them); 12-3 authority gate → `403 role-denied` naming `secure.move` when the **source or target** is secure-class and the actor lacks `secure.move` (FR-42 — byte-identical for holders; dead code by matrix today, the users.spec invariant keeps it enforced). 12-4 bulk-asset occupancy gate `bin-occupancy-conflict` → `400` — the target is a `tank`/`silo` and the moved SKUs would give it a second SKU (the ONE predicate; runs BEFORE the hazard and capacity gates — an incompatible-hazard different-SKU merge answers the occupancy code). The merge retires the source bin on success, so a retired source is refused (`binRetiredAsSource` → `400`) |
 | POST | `.../bins/{binId}/retire` | `bin.retire` | **Terminal.** Bin must be empty |
 | GET | `/tenants/{t}/setup-checklist` | — | Computed on read |
-| POST | `/tenants/{t}/users` | `users.invite` | Returns a one-time invite token; 7-day TTL |
+| POST | `/tenants/{t}/users` | `users.invite` | Returns a one-time invite token; 7-day TTL. **21-7:** `role` may be `client` with a required `clientId` (refused for any other role → `400`); the client must be this tenant's (`404`), not its own `self` (`400`), and `active` (`409 client-not-active`) — checked behind the replay. Every user response carries `clientId` (null for staff) |
 | GET | `/tenants/{t}/users` | — | Keyset |
-| PATCH | `/tenants/{t}/users/{userId}` | `users.role_change` | Demoting the last owner → `409 last-owner` |
+| PATCH | `/tenants/{t}/users/{userId}` | `users.role_change` | Demoting the last owner → `409 last-owner`. **21-7:** `role` is one of the four staff roles (`client` → `400`); a client user's role never changes (`400`) |
 | POST | `/tenants/{t}/accept-invite` | **unauthenticated** | Token valid only on the inviting tenant's URL |
-| GET | `/tenants/{t}/me` | — | App-mount bootstrap; role changes surface without re-login |
+| GET | `/tenants/{t}/me` | — | App-mount bootstrap; role changes surface without re-login. Operator-only (a portal token is fenced — the portal reads `portal/me`) |
 | POST | `/tenants/{t}/devices/enrollment-codes` | `device.manage` | One-time code, hashed at rest |
 | POST | `/tenants/{t}/devices/enroll` | **device credential** | Returns the sealed offline-store key **once** |
-| POST | `/tenants/{t}/devices/badge-in` | **device credential** | Opens the operator session every op re-authorises against |
+| POST | `/tenants/{t}/devices/badge-in` | **device credential** | Opens the operator session every op re-authorises against. **21-7:** a client-portal user → `403 role-denied` (after the PIN check — a wrong PIN stays `401 badge-invalid`; nothing binds); `BadgeInResponse.operator.role` carries the five-role vocabulary |
 | GET | `/tenants/{t}/devices` | — | Keyset |
 | POST | `/tenants/{t}/devices/{deviceId}/revoke` | `device.manage` | Status flip + wipe flag; idempotent |
 | POST | `/tenants/{t}/devices/self-test/echo` | **device credential** | Connectivity probe |
@@ -117,6 +118,23 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | POST | `/tenants/{t}/putaway/placements` | `putaway.execute` | **device.** Records suggestion-vs-actual. `bin-full`/`bin-blocked` → `400`; 11-5 physical gates `bin-overweight`/`bin-volume-exceeded`/`bin-item-oversize` → `400`; 12-1 conformance gate `bin-storage-mismatch` → `400` (FR-40 — the bin's class must satisfy the SKU's, the temperature hierarchy colder-bin-over-warmer-SKU, non-temperature classes exact-match); 12-2 co-location gate `bin-segregation-conflict` → `400` (FR-41 — the target bin's occupants' hazard classes must be compatible with the SKU's; names both SKUs and both classes; a null class carries no rule in either direction); 12-3 authority gate → `403 role-denied` naming `secure.move` when the target bin is secure-class and the actor lacks `secure.move` (FR-42 — operator is refused; the suggestion stays role-blind, advisory suggestion / binding gate); 12-4 bulk-asset rules: `bin-occupancy-conflict` → `400` (a `tank`/`silo` holds exactly ONE SKU — names the holding SKU; runs before the hazard and capacity arms); every bulk placement REQUIRES reason `bulk-asset` → else `400 validation-failed` (the bulk arm answers before the generic six-code mismatch message), and `bulk-asset` on an ordinary bin → `400 validation-failed` (the signal stays queryable by placement class); `insufficient-on-hand` → `422` (retryable, key unconsumed) |
 | GET | `/tenants/{t}/putaway/tasks` | — | Remaining work in the receiving bin |
 | GET | `/tenants/{t}/putaway/placements` | — | Keyset |
+
+## portal — `portal.controller.ts` (story 21-7)
+
+The client portal: read-only, every route behind `PortalSessionGuard` (a client-portal token only; the user and client re-read per request — user gone / inactive / moved → `401`, client not active → `403 client-suspended`). Each is its owning module's facade read, stamped `{ clientId }` AND carrying the explicit client predicate. Lists: `?cursor&limit` (1–100), newest first by `(createdAt, id)` (stock: by `(skuCode, warehouseId)`); `400 invalid-cursor`; a status outside its vocabulary `400`. An unknown or another client's id → `404`. Every response is an exact key allowlist — no bin, warehouse code, cost, vendor, note, gap, warning, user or integration id.
+
+| Method | Path | Owning facade | Notes |
+|---|---|---|---|
+| GET | `/tenants/{t}/portal/me` | clients | `{user {id, email, role, status, clientId}, client {id, code, name}}` |
+| GET | `/tenants/{t}/portal/stock` | inventory | rows `{skuId, skuCode, skuName, baseUom, warehouseId, warehouseName, onHand, allocated}` — per (SKU, warehouse) with either above zero; `onHand` over every bin, `allocated` = held/committed order reservations; base units |
+| GET | `/tenants/{t}/portal/orders` | outbound | `?status`; rows `{id, status, source, externalRef, warehouseName, destinationName, destinationCity, destinationPincode, lineCount, createdAt}` (`lineCount` = top-level lines) |
+| GET | `/tenants/{t}/portal/orders/{orderId}` | outbound | the row + `lines[{skuCode, skuName, qty, components[{skuCode, skuName, qty}]}]`; malformed id `400` |
+| GET | `/tenants/{t}/portal/inbound/asns` | inbound | `?status`; rows `{id, code, status, expectedAt, warehouseName, lineCount, announcedTotal, receivedTotal, createdAt}` |
+| GET | `/tenants/{t}/portal/inbound/asns/{asnId}` | inbound | + `lines[{skuCode, skuName, announcedQty, receivedQty}]`; malformed id `400` |
+| GET | `/tenants/{t}/portal/inbound/purchase-orders` | inbound | `?status`; rows `{id, code, status, warehouseName, lineCount, orderedTotal, receivedTotal, createdAt}` |
+| GET | `/tenants/{t}/portal/inbound/purchase-orders/{poId}` | inbound | + `lines[{skuCode, skuName, orderedQty, receivedQty, expectedDate}]`; malformed id `400` |
+| GET | `/tenants/{t}/portal/invoices` | billing | non-draft only; rows `{id, invoiceNo, fyLabel, periodStart, periodEnd, status, issuedAt, replacesInvoiceId, placeOfSupply, supplyType, totals {subtotal, cgst, sgst, igst, tax, roundOff, payable}}` (paise) |
+| GET | `/tenants/{t}/portal/invoices/{invoiceId}` | billing | + `party {supplier {name, gstin, stateCode, stateName, address}, recipient {name, legalName, gstin, stateCode, stateName, address}}` and `lines[{segmentFrom, segmentTo, chargeCode, basis, uom, quantity, unitAmountPaise, amountPaise, sac, gstBps, cgstPaise, sgstPaise, igstPaise}]`; a draft, malformed or foreign id `404` |
 
 ## clients — `clients.controller.ts` (story 21-2b)
 

@@ -123,6 +123,7 @@ Checklist. **Every item has been missed at least once.**
 - [ ] **Probe every new CHECK in the post-migration assertion with a refused insert** (and one accepted shape, rolled back by a sentinel exception, so a CHECK that refuses everything fails too) — 0064 is the model; it is what caught the hole above
 - [ ] `bun run db:generate` afterwards must report **"No schema changes"** — the only check that the hand-written SQL and `schema.ts` agree
 - [ ] `git status --short` must show **no untracked files**
+- [ ] **The migrator applies every pending migration in ONE transaction** (`drizzle-orm/pg-core/dialect.js` wraps the whole pending set in one `session.transaction`), and Postgres refuses to USE an enum value inside the transaction that added it (`55P04`). So **never use a new enum value in the migration that adds it — nor in any later migration that might run in the same deploy**: compare `col::text` in a CHECK, and never write the new value in a probe. Splitting the `ALTER TYPE … ADD VALUE` into its own file does not help — both files still run in one transaction. 0065 (story 21-7, `user_role` gains `client`) is the model: the pairing CHECK compares `role::text`, and the direction that needs a `client` row is proved in jest, where the value has long been committed
 
 **For a data migration, additionally:**
 
@@ -194,6 +195,7 @@ expect(skuId).toBeDefined();                                        // filler
 - Seed through **real HTTP** (register tenant → sign in → act), not raw inserts, unless the test is about the DB itself
 - `cleanupRows()` + close `DATABASE`/`AUTH_DATABASE` clients + `suiteDb.drop()` in `afterAll`
 - A `wms_rls_probe` cross-tenant test for every new table — connect as a non-superuser and assert zero rows
+- **jest e2e is RLS-inert.** Dev and CI connect as the superuser `wms` (`src/shared/db/db.ts`; only production's `wms_app` binds RLS — `scripts/provision-roles.sql`), so an HTTP test proves the APP predicate and nothing else: a read whose isolation rests on RLS passes every e2e test with the policy deleted. **Isolation is proved as `wms_rls_probe`** — run the read's own query shape, scope-stamped, with the app predicate removed, and assert only the scoped rows come back (21-7's `test/client-isolation.spec.ts` Part 3). Where a read must carry both layers, pin the stamp with an architecture scan as well (21-7: every portal facade read passes `{ clientId }`)
 - An OpenAPI path-list assertion for every new route
 
 **For a data migration**, the harness exists — `test/fractional-quantity.spec.ts` is the model: copy the real `drizzle/` folder, delete the migration under test, trim the journal, run the repo's own migrator against a scratch database, seed representative rows, apply the migration **inside one transaction** (as the real runner does), then assert. Build the "before" state from the repo's own history, never a hand-written replica.
@@ -273,6 +275,17 @@ Every stamp is taken inside a transaction that began no later than the stamp, so
 **Two proofs that look right and are not:** `pg_snapshot_xmax(pg_current_snapshot())` is `latestCompletedXid + 1`, so a transaction still running with a newer xid is at or above it, unlisted — the proof passes while it is open. Recording your own `pg_current_xact_id() + 1` and waiting for a later xmin fixes that but misses a transaction that has stamped and **not yet taken an xid** (written nothing). Both were caught by held-open-transaction tests (`test/metering.spec.ts`).
 
 **The price is visibility.** A role sees other users' transactions only with `pg_read_all_stats` (or as the same role); a hidden row reads `<insufficient privilege>`. Detect it and **refuse** — never treat an invisible session as idle. A deploy keeps all app connections on one role or grants `pg_read_all_stats`.
+
+## 7e. The client portal — AD-4 amended for the fence only (story 21-7)
+
+**The token used to be transport, never authority.** A client-portal user's session token now carries a `client_id` claim (`signTenantSession(…, clientId?)` adds it only when given — an operator token's payload keys stay exactly `sub, tenant_id, iat, exp`, pinned byte for byte in `test/portal.spec.ts`). The claim has **one** use: the fence.
+
+- **The fence.** `TenantSessionGuard` and `AnySessionGuard`'s web arm refuse a token carrying `client_id` with 403 `role-denied`, detail exactly `This is an operator surface.` — one check in front of every operator route, so no copied `assertOwnTenant` can forget it. A new operator route gets the fence by using the guard; nothing else to remember.
+- **The reverse fence.** Portal routes (`GET /tenants/{t}/portal/…`, `src/api/portal.controller.ts`) are behind `PortalSessionGuard` (clients module), which admits ONLY a `client_id` token (else 403 `role-denied`, `This is a client-portal surface.`) and **re-reads the user and the client every request** inside a client-stamped tenant transaction — never `AUTH_DATABASE`: user missing / not active / another client → 401; client not active → 403 `client-suspended`. That is where an untrusted party holds the session and where suspension must bite before the 15-minute expiry.
+- **Why the claim cannot go stale:** `users.client_id` is written only by the invite insert (the DTO, the command, the 0065 pairing CHECK and an architecture scan), and a client user's role never changes. Capabilities stay a per-command DB read; `ROLE_CAPABILITIES.client` is empty.
+- **Both families are now exclusive in both directions** — `verifyTenantSession` refuses a token carrying `device_id` (the old one-way hole: a badge-in token opened the web surface), and `verifyDeviceSession` refuses one carrying `client_id`. A present `client_id` that is not a UUID string (`null` included) is an invalid token, never "no client".
+- **A portal read is two layers, both required:** the owning module's facade method `(tenantId, clientId, query)` opens `withTenantTransaction(db, t, fn, { clientId })` (RLS) AND the query carries an explicit `client_id = $client` on a stamped table, reaching inherited rows (stock, reservations, lines) only through a join to a stamped parent. Never reuse an operator read route for the portal; the response is an exact key allowlist rebuilt key by key, never a spread of the operator view.
+- **Role checks over a growing vocabulary are allowlists.** The device role re-checks were `role === 'accountant'` denylists and silently admitted the fifth role; they are now `isFloorRole` (`FLOOR_ROLES` in `permissions.ts`).
 
 ## 8. Before you say it's done
 

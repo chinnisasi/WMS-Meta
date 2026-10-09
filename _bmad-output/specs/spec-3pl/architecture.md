@@ -37,6 +37,8 @@ So client is a **third scoping dimension that does not exist today**, and RLS as
   ```
 
   An **operator session** leaves `app.client_id` unset and sees the whole tenant, so cross-client waves and floor work are untouched. A **client-portal session** sets it, and the database — not the application — is what makes another client's rows unreachable.
+
+  *(Built by story 21-7: a portal user is the fifth role `client`, paired with `users.client_id` by a CHECK; its session runs every portal read in a transaction stamped `app.client_id` AND with an explicit `client_id` predicate — two layers, the RLS one proved as `wms_rls_probe` with the predicate removed, because the jest suites connect as a superuser. Inherited rows are reached only through a join to a stamped parent. The portal is read-only; portal ASN entry is 21-7b.)*
 - **Why this shape:** the leak risk is concentrated in one place (the portal, where an untrusted party holds a session), and this puts enforcement below every surface, query, report and export at once. It is the same fail-closed `NULLIF(current_setting(...), '')` idiom AD-3 already relies on.
 - **Scoping extends where AD-3's does:** background jobs, projection rebuilds, export workers and reporting all take explicit client context or deliberately none.
 
@@ -53,6 +55,7 @@ So client is a **third scoping dimension that does not exist today**, and RLS as
 |---|---|
 | **AD-1** ledger is the only stock truth | **Strengthened.** Ownership becomes answerable from the ledger, and billing derives from it |
 | **AD-3** tenant + warehouse scope | **Extended, and its 3PL note corrected.** Client is a third dimension AD-3 does not provide |
+| **AD-4** offline-first / the token is transport | **Amended by story 21-7, for the fence only.** A client-portal session token carries a `client_id` claim whose one use is refusing every operator route at the guard (and admitting the `portal/` routes, whose guard re-reads the user and the client per request). It cannot go stale — `users.client_id` is written only at invite — and capabilities stay a per-command DB read (`IMPLEMENTATION-GUIDE.md` §7e) |
 | **AD-5** idempotency | Unchanged — keys stay tenant-scoped; client is carried in the payload, not the key |
 | **AD-6** module boundaries | A new `clients` module owns the client entity; a new `billing` module owns rate cards, metering and invoices, and reads the ledger through the inventory facade |
 | **AD-9** integer primitives | Unchanged — money stays integer paise, and rates are paise too |
@@ -66,6 +69,8 @@ So client is a **third scoping dimension that does not exist today**, and RLS as
 
 ```
 clients   — the client entity, its users, its portal scoping. Owns `clients`.
+            (21-7: `PortalSessionGuard` lives here; each portal read is its
+            owning module's facade method, stamped { clientId }.)
 billing   — rate cards, metering, storage snapshots, invoices. Owns its own tables.
             Reads ledger events through the inventory facade; writes no stock.
 inbound   — gains the ASN document beside the PO (same module, same GRN flow).

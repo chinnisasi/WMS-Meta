@@ -2,8 +2,9 @@
 title: 'Client portal — a client user signs in and reads its own stock, orders, inbound and invoices, isolated by the database'
 type: 'feature'
 created: '2026-10-09'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '43c326211855cd0dd6d1ec88411612edd3f4b9e7'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -228,12 +229,12 @@ All `wms-be` paths are relative to `workspace/core/backend/wms-be`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be/drizzle/0065_portal_client_role.sql` (with journal, snapshot and `schema.ts`) -- the enum value, the pre-flight, the text-compared CHECK and the `DO`-block post-assertion.
-- [ ] `wms-be` tenancy -- token sign and verify, sign-in, both fence refusals, badge-in, the three allowlists, the role tuples and DTOs, invite and role-change rules, replay normalisation, `ROLE_CAPABILITIES.client`, the comment amendments.
-- [ ] `wms-be` clients -- `PortalSessionGuard`, `@CurrentPortalSession`, `portal/me`.
-- [ ] `wms-be` portal reads -- `portal.controller.ts`, the portal DTOs, one facade read per owning module with its cursor codec; then re-export `openapi.json`.
-- [ ] `wms-be` existing fixtures -- rewrite the four CHECK-broken fixtures to set `role='client', client_id=…` together, with the token minted **before** the update, so each still proves its per-route refusal (claim-less token, DB-read client).
-- [ ] `wms-be/test/portal.spec.ts` and `test/client-isolation.spec.ts` -- cover:
+- [x] `wms-be/drizzle/0065_portal_client_role.sql` (with journal, snapshot and `schema.ts`) -- the enum value, the pre-flight, the text-compared CHECK and the `DO`-block post-assertion.
+- [x] `wms-be` tenancy -- token sign and verify, sign-in, both fence refusals, badge-in, the three allowlists, the role tuples and DTOs, invite and role-change rules, replay normalisation, `ROLE_CAPABILITIES.client`, the comment amendments.
+- [x] `wms-be` clients -- `PortalSessionGuard`, `@CurrentPortalSession`, `portal/me`.
+- [x] `wms-be` portal reads -- `portal.controller.ts`, the portal DTOs, one facade read per owning module with its cursor codec; then re-export `openapi.json`.
+- [x] `wms-be` existing fixtures -- rewrite the four CHECK-broken fixtures to set `role='client', client_id=…` together, with the token minted **before** the update, so each still proves its per-route refusal (claim-less token, DB-read client).
+- [x] `wms-be/test/portal.spec.ts` and `test/client-isolation.spec.ts` -- cover:
   - every matrix row;
   - the fence's exact detail on a member-open GET per controller plus one `AnySessionGuard` route;
   - **guard coverage:** every route has exactly one of the four guards, or is allowlisted by exact method and path (health, openapi, echo, webhooks, sign-in, register, accept-invite, `devices/enroll`, the not-found catch-all); every `portal/` route has `PortalSessionGuard` and no other route has it;
@@ -245,7 +246,7 @@ All `wms-be` paths are relative to `workspace/core/backend/wms-be`.
   - the 0065 CHECK in the `client` direction;
   - deep exact-key `toEqual` on every portal response;
   - pagination: a second page across equal timestamps, a bad cursor, limit bounds.
-- [ ] `wms-fe` -- everything under Web, and:
+- [x] `wms-fe` -- everything under Web, and:
   - run `bun run api:generate`;
   - `auth.test.ts`: a legacy session reads `clientId === null`, and there is no redirect loop between the shells;
   - `client.test.ts`: `refreshSessionUser` on a `clientId` change;
@@ -270,6 +271,12 @@ All `wms-be` paths are relative to `workspace/core/backend/wms-be`.
 - Given the full BE and FE suites, when run, then they pass.
 
 ## Implementation Notes
+
+Baselines: wms-be `43c326211855cd0dd6d1ec88411612edd3f4b9e7` (`baseline_commit`), wms-fe `48320ab8c4b89694ae5d7b808a04b2cbd0930984`.
+- Work on `feat/21-7-client-portal` in both repos (already checked out) and leave everything uncommitted: no commit, push or PR.
+- In wms-be, run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming the story.
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (on `main`, uncommitted).
+- Do not touch `wms-mobile` code; its README is a doc.
 
 ## Spec Change Log
 
@@ -309,6 +316,37 @@ Design review, 2026-10-09: three lenses (adversarial 22, edge-case 23, verificat
 | 28 | med | FE session tolerance and sign-in routing untested; the unknown-role test would be vacuous once `client` is mirrored (VG11) | TRUE: `readSession` returns the parsed object unchanged | patch: listed FE tests, unknown role via a cast |
 | 29 | low | the immutability scan cannot see role values (A12, VG12) | TRUE: `role: command.role` | patch: the scan covers `client_id` only; role enforced by DTO + HTTP tests |
 | 30 | low | "the two new tables" names nothing; FE verification skips `api:generate`; migration pre-flight and post-assertion arms unstated (A21, VG13, E8, A2) | TRUE | patch: sentence removed; `api:generate` added; `RAISE` pre-flight and `DO`/`check_violation` probes specified |
+
+Code review, 2026-10-09: three layers (blind-hunter 15, edge-case 5, verification-gap 6), 26 rows. Every claim was checked at the cited code; 11 patch, 4 defer, 11 reject. No loopback.
+
+| # | Verdict | Finding (layer) | Evidence | Route |
+|---|---|---|---|---|
+| C1 | medium | Suspension notice lost: `clearSession()` flips the shell decision to `/login`, whose effect replaces after `PORTAL_SUSPENDED_LOGIN` (EC-1) | TRUE: `portal-shell.tsx:41,45-47` — the last `router.replace` wins | patch |
+| C2 | low | Address lines keyed by text collide when equal (EC-4) | TRUE; direct correction | patch |
+| C3 | low | Badge-in refusal is a `=== 'client'` denylist beside the new allowlist rule (BH-1) | TRUE: `enrollment.command.ts` badge-in; a later role would bind devices | patch: allow floor roles + accountant explicitly |
+| C4 | low | API-SURFACE "reads never capability-gated" and "limit 1–200" now false (BH-9) | TRUE | patch (docs) |
+| C5 | low | Portal invoice `invoiceNo`/`fyLabel`/`issuedAt` nullable though always set; FE invents "Unnumbered" (BH-12) | TRUE: void is reachable only from issued/disputed (billing-model) | patch |
+| C6 | medium | RLS-only probe arms omit ASN and header shapes; PENDING claims ASN lines proved (BH-8) | TRUE: `client-isolation.spec.ts` Part 3 | patch: add arms, narrow the claim |
+| C7 | medium | ASN/PO paging and the PO status filter untested (VG-1) | Pre-verified gap | patch (tests) |
+| C8 | medium | Storage-line milli→decimal and restated `compareLines` untested (VG-2) | Pre-verified gap | patch (tests) |
+| C9 | medium | FE paging and ASN/PO line expanders untested (VG-3) | Pre-verified gap | patch (tests) |
+| C10 | low | `any-session.guard.ts` docstring says the tenant verifier ignores `device_id` (VG other) | TRUE since 21-7 | patch |
+| C11 | low | "badge-in token no longer opens a web route" has no direct assertion (VG other) | TRUE: only the combined-claim token is tested | patch (test) |
+| C12 | medium (unverified scale) | No `(tenant_id, client_id, created_at, id)` index serves the portal keysets (BH-6) | TRUE: no such index; a busy brand's list sorts every page | defer |
+| C13 | low | The stock read re-aggregates the client's whole stock per page (BH-7) | TRUE by construction (CTEs before the keyset) | defer (with C12) |
+| C14 | medium | The RLS proof runs copies of the portal SQL, not the production functions (VG-4) | Pre-verified; a harness change beyond this story | defer |
+| C15 | medium | No way to deactivate one portal user (BH-2) | TRUE, but pre-existing: no user deactivation exists for any role; suspending the client is the only lever | defer |
+| C16 | false | A portal 401 leaves the user on a dead session (BH-3) | `client.ts:354` clears the session on every 401; the shell then routes to `/login` | reject |
+| C17 | low | Malformed-id 400 vs invoice 404 differ (BH-4) | Spec-conformant ("the operator route's convention"); cosmetic | reject |
+| C18 | low | Cursor decoders copied thrice (BH-5) | The house pattern already tracked in PENDING cross-cutting | reject |
+| C19 | low | clients ↔ tenancy import cycle unguarded (BH-10) | Boots and every suite passes; harm is hypothetical future value imports | reject |
+| C20 | low | `portal/me` repeats the guard's re-read (BH-11) | Two cheap reads; fixing adds request plumbing | reject |
+| C21 | low | Invoices ordered by `created_at`, not issue order (BH-13) | Spec-mandated keyset; rows show period and issue date; drafts issue promptly | reject |
+| C22 | low | `signTenantSession` positional optional args (BH-14) | Style; one caller | reject |
+| C23 | low | Accept after client suspension untested (BH-15) | Suspension is SQL-only (PENDING); sign-in refuses it, tested | reject |
+| C24 | low | Invite role stays `client` if the clients list reloads to null (EC-2) | Unlikely (one fetch); the guard would add a branch | reject |
+| C25 | low | Empty client picker with no message (EC-3) | Needs every brand non-active — unreachable without SQL | reject |
+| C26 | low | Invite vs concurrent suspension, unlocked read (EC-5) | No command suspends a client | reject |
 
 ## Design Notes
 

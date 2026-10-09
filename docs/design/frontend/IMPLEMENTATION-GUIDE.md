@@ -266,7 +266,9 @@ The reason is written at four call sites (`outbound.tsx:64-65`, `over-receipt-qu
 
 **Four Settings cards do not yet do this.** `zone-bin-setup.tsx:117`, `devices-card.tsx:48`, `users-card.tsx:66` and `warehouse-create-form.tsx:58` subscribe (`import-catalog.tsx` was converted in 21-2b; `clients-card.tsx` was written subscribed) only to session *presence* (`() => readSession() !== null`) and then read `readSession()?.user.role` at render. A role change that the `/me` bootstrap writes back does not change presence, so those affordances do not re-render until something else does. `sku-table.tsx` is the corrected sibling in the same directory — copy that one.
 
-### The known crash
+### The known crash — closed by story 21-7
+
+**21-7 took the fix:** `roleHasCapability` is a membership check (an unknown role answers `false`), the mirror carries the fifth role `client: []`, and `readSession` normalises `clientId`/`client`. The record below is the pre-21-7 state.
 
 ```ts
 export function roleHasCapability(role: UserRole | undefined, capability: Capability): boolean {

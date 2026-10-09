@@ -14,7 +14,7 @@ Next.js 16.3 App Router, React 19, Tailwind 4, TypeScript 6, bun. Four runtime d
 
 Dev server is :3001 so the backend keeps :3000 (`package.json:12`).
 
-Users: **Owner, Ops Manager, Accountant** on a desk. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
+Users: **Owner, Ops Manager, Accountant** on a desk — and, since story 21-7, a **client brand's own user** (role `client`) in the read-only client portal, which has its own shell and never mounts an operator surface. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
 
 ## What it deliberately does NOT do
 
@@ -35,7 +35,7 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 
 ## Route map
 
-`src/app/layout.tsx` is document chrome only — the pre-paint theme script (`:16-28`) and the Geist font. Two route groups hang off it so signup never renders the app sidebar.
+`src/app/layout.tsx` is document chrome only — the pre-paint theme script (`:16-28`) and the Geist font. Three route groups hang off it so signup never renders the app sidebar and a client-portal user never renders the operator shell.
 
 ### `(app)` — the twelve in-shell surfaces (`src/app/(app)/layout.tsx` → `AppShell`)
 
@@ -56,6 +56,18 @@ The auth gate in `src/proxy.ts` is explicitly *not* an enforcement boundary eith
 
 Four of twelve are still `SurfacePlaceholder` (the Overview stopped being partial at 9-1) (the `/settings` header counts its own placeholder section, not the surface) — a two-prop component rendering a heading and a sentence (`src/components/shell/surface-placeholder.tsx`). The IA is complete; the surfaces are not.
 
+### `(portal)` — the client portal (story 21-7, `src/app/(portal)/layout.tsx` → `PortalShell`)
+
+| Route | Surface |
+|---|---|
+| `/portal` | redirects to `/portal/stock` |
+| `/portal/stock` | `PortalStock` — this client's stock per (SKU, warehouse): on hand, allocated, base UoM; never a bin |
+| `/portal/orders` | `PortalOrders` — the client's orders, expandable to their lines (kit components nested under the kit line) |
+| `/portal/inbound` | `PortalInbound` — advance shipment notices and purchase orders, each expandable to its lines |
+| `/portal/invoices` | `PortalInvoices` — issued invoices (never a draft), opening to the party and lines (a portal layout, not the operator's printable one — that renders from the operator DTO) |
+
+`PortalShell` (`components/portal/portal-shell.tsx`): nav Stock / Orders / Inbound / Invoices, the client's name from the session, sign-out; it listens to session change and expiry like `AppShell`, and **no operator component is mounted inside it**. A staff session → `/settings`, no session → `/login`. Any portal read answering `client-suspended` clears the session and goes to `/login?portal=suspended` ("Your company's portal access is suspended."). The shells' redirect decisions are shared helpers in `lib/portal.ts`, pinned not to loop. Every portal read is a `ResourceState` hook in `lib/use-portal.ts` over a `fetchApiPortal*` wrapper.
+
 ### `(auth)` — outside the shell (`src/app/(auth)/layout.tsx`, a centred card)
 
 | Route | Notes |
@@ -73,7 +85,7 @@ Four of twelve are still `SurfacePlaceholder` (the Overview stopped being partia
 
 ### The gate
 
-`src/proxy.ts` matches everything but Next internals and static assets (`:50`). No hint cookie + a non-auth path → `/login`; hint + an auth path → `/`. The decision is extracted as a pure `gate(pathname, hasHint)` (`:29`) because `bun:test` has no Next runtime.
+`src/proxy.ts` matches everything but Next internals and static assets (`:50`). No hint cookie + a non-auth path → `/login`; hint + an auth path → `/`. It is presence-only, so it cannot tell a portal session from a staff one — that split is the shells' (21-7): `AppShell` renders nothing until the session is read, then sends a client session to `/portal/stock` (before any operator hook or fetch runs) and no session to `/login`. The decision is extracted as a pure `gate(pathname, hasHint)` (`:29`) because `bun:test` has no Next runtime.
 
 ---
 
@@ -160,7 +172,7 @@ For reads that need the *whole* chain — a SKU id→object map, the warehouse p
 
 ## Auth and session
 
-**Storage.** `localStorage['wms-session']` holds `{token, tenant, user, expiresAt}` (`src/lib/auth.ts:12`, `:38-44`). The token is the backend's 15-minute HS256 session; there is no refresh.
+**Storage.** `localStorage['wms-session']` holds `{token, tenant, user, client, expiresAt}` (21-7: `user.clientId` and `client {id, code, name}`, both read as `null` from a legacy row) (`src/lib/auth.ts:12`, `:38-44`). The token is the backend's 15-minute HS256 session; there is no refresh.
 
 **`readSession()` is pure** (`auth.ts:53`) — it never writes, never dispatches. It is the `getSnapshot` of every `useSyncExternalStore` subscription, and a side effect there would run during render. It validates the shape and returns `null` for: missing row, malformed JSON, a row with no `user` (a pre-1.5 session), or `expiresAt <= Date.now()`. **An expired session simply reads as signed-out**; the stale row is cleaned up by the next write.
 
@@ -168,7 +180,7 @@ For reads that need the *whole* chain — a SKU id→object map, the warehouse p
 
 **The hint cookie.** `wms-session-hint` (`auth.ts:33`) mirrors session *presence* — never token material — because `src/proxy.ts` runs server-side and cannot see localStorage. Max-Age matches the token TTL; `Secure` only on https; `max-age=0` is the delete. If `localStorage` throws (private mode), `writeSession` **skips the cookie too** (`auth.ts:106-110`): admitting the user into pages that cannot call the API is worse than an honest `/login`.
 
-**Bootstrap.** `AppShell` fires `refreshSessionUser()` once on mount (`app-shell.tsx:29-31`). It re-reads `/me` and rewrites the stored session **only if** id, role or status moved (`client.ts:1117-1140`). A failure is swallowed — the stored role stays, because gating is cosmetic.
+**Bootstrap.** `AppShell` fires `refreshSessionUser()` once on mount (`app-shell.tsx:29-31`) — and since 21-7 `PortalShell` does too. It re-reads `/me` for staff and `portal/me` for a client session, and rewrites the stored session **only if** id, role, status or `clientId` moved (`client.ts:1117-1140`). A failure is swallowed — the stored role stays, because gating is cosmetic.
 
 **Subscription.** `subscribeSession` (`auth.ts:167`) listens to both the `storage` event (other tabs) and the local `SESSION_CHANGED_EVENT` (this tab: sign-in, sign-out, expiry).
 
@@ -180,7 +192,8 @@ For reads that need the *whole* chain — a SKU id→object map, the warehouse p
 | **The token expires while the tab is open** | The watchdog timer fires at the instant, surfaces flip to signed-out. The hint cookie expires on its own clock, so the next hard navigation redirects to `/login` |
 | **The backend rejects the token (401)** | The response interceptor clears the session *and* the hint cookie immediately |
 | **Sign-out** | `clearSession()` — removes the row, deletes the cookie browser-wide (so every tab closes), then `router.push('/login')` (`sign-out.tsx:26-29`) |
-| **A role appears that this build does not know** | `roleHasCapability` throws. See Gotchas |
+| **A role appears that this build does not know** | `roleHasCapability` answers `false` (21-7 — a membership check; it used to throw). The sidebar shows nothing gated |
+| **The client of a portal user is suspended** | The next portal read answers `403 client-suspended`; the portal shell clears the session and lands on `/login` with the suspension message |
 
 The **picked warehouse** is separate state: `localStorage['wms-active-warehouse:<tenantId>']` (`src/lib/warehouses.ts:19-23`). The tenant-id suffix is deliberate — re-signing in as another tenant can never read the previous tenant's pick. There is no server-side "active warehouse" concept yet.
 
@@ -188,7 +201,7 @@ The **picked warehouse** is separate state: `localStorage['wms-active-warehouse:
 
 ## The capability mirror
 
-`src/lib/users.ts` hand-mirrors the backend's `src/modules/tenancy/permissions.ts`: a `CAPABILITIES` tuple (22 entries as of story 4.6b) and `ROLE_CAPABILITIES` for the four roles.
+`src/lib/users.ts` hand-mirrors the backend's `src/modules/tenancy/permissions.ts`: a `CAPABILITIES` tuple (40 entries as of story 21-6) and `ROLE_CAPABILITIES` for the five roles (21-7 added `client: []`).
 
 **Why it exists.** The sidebar must decide what to render before any request is made. There is no capability endpoint; the backend answers 403 `role-denied` at command time, which is the wrong moment to learn a form should not have been offered.
 
@@ -214,7 +227,7 @@ The guard resolves `../../../backend/wms-be/src/modules/tenancy/permissions.ts` 
 
 **`AppShell`** (`src/components/shell/app-shell.tsx`) — sidebar + header + `<main>`. Owns the `/me` bootstrap, the ⌘K binding, and layer discipline: Esc closes the topmost layer only (the header menu's Esc handler is skipped while the palette is open, `:59-68`), one palette layer ever. Responsive contract: ≥1024px full sidebar · 768–1023px monogram-only · <768px header menu, which mounts its own `WarehouseSwitcher` because the sidebar's is invisible there.
 
-**`Sidebar`** renders `visibleNavItems(role)` — the IA filtered by capability. An **unknown/absent role sees the full list** (`navigation.ts:50-54`): the server render has no role, and hiding everything then showing it is worse than the reverse.
+**`Sidebar`** renders `visibleNavItems(role)` — the IA filtered by capability. An **absent role sees the full list** (`navigation.ts:50-54`): the server render has no role, and hiding everything then showing it is worse than the reverse. An unknown role no longer crashes it (`roleHasCapability` answers false, 21-7), and a `client` session never reaches it — `AppShell` redirects to the portal before the sidebar mounts.
 
 **`CommandPalette`** — ⌘K, Esc closes, Enter commits, arrows select. Touch users reach it from the header button; hover-only affordances are banned.
 
@@ -279,7 +292,7 @@ These have all caused, or came one review short of causing, a real defect.
 
 2. **A hook that swallows a failed fetch into `null` renders as "Loading…" forever.** The eight house loaders still do this (`use-catalog.ts:62-64`, `use-zone-bins.ts:74-76`, and siblings). `ResourceState` exists to end it; `use-outbound-waves.ts:20-25` is the note.
 
-3. **`roleHasCapability` throws on a role outside the four.** `ROLE_CAPABILITIES[role].includes(...)` (`users.ts:103`) guards `undefined` and nothing else; a `UserRole` outside the record indexes to `undefined` and the `.includes` call is a `TypeError`. Verified: `"undefined is not an object (evaluating 'ROLE_CAPABILITIES[role].includes')"`. `readSession` only checks `typeof role === 'string'` (`auth.ts:68`), so a backend that adds a fifth role, a stale build, or a hand-edited localStorage row crashes the **sidebar** — the first thing that renders. The test at `users.test.ts:236` covers `undefined` only.
+3. ~~**`roleHasCapability` throws on a role outside the four.**~~ **Closed by 21-7** (a membership check; `users.test.ts` pins an unknown role via a cast). The original note: `ROLE_CAPABILITIES[role].includes(...)` (`users.ts:103`) guards `undefined` and nothing else; a `UserRole` outside the record indexes to `undefined` and the `.includes` call is a `TypeError`. Verified: `"undefined is not an object (evaluating 'ROLE_CAPABILITIES[role].includes')"`. `readSession` only checks `typeof role === 'string'` (`auth.ts:68`), so a backend that adds a fifth role, a stale build, or a hand-edited localStorage row crashes the **sidebar** — the first thing that renders. The test at `users.test.ts:236` covers `undefined` only.
 
 4. **Two gating styles coexist, and one of them does not track a role change.** The four newer surfaces subscribe to the role itself through `useSyncExternalStore`. Four Settings cards — `zone-bin-setup.tsx:117`, `devices-card.tsx:48`, `users-card.tsx:66`, `warehouse-create-form.tsx:58` — subscribe only to session *presence* (`import-catalog.tsx` was converted in 21-2b) and then read `readSession()?.user.role` at render. The `/me` bootstrap's role rewrite does not change presence, so those affordances stay as they were until something else re-renders them. `sku-table.tsx:59-68` is the corrected sibling in the same directory.
 
