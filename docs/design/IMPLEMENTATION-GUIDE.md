@@ -213,6 +213,8 @@ A refusal names the rule and the offender:
 > `Base UoM "kg" is a measured unit … give it a whole-unit UoM, or leave it untracked`
 > `reasonCode must be one of ["bin-empty","damaged",…] (got "xyz")`
 
+**A `ProblemException`'s `title` argument never reaches the wire when it carries a detail** (found in 21-8). The exception's `message` is `detail ?? title`, and `ProblemDetailsFilter` renders `title` from `exception.message` — so the wire `title` equals the `detail` (`assertMeteringPeriod`'s "Invalid metering period" never appeared either). Put everything a client must read in `detail`, assert `code` and `detail` in tests, and do not promise a title in a spec.
+
 **Never interpolate a raw domain value into operator-facing text without converting it at the edge.** Quantities are milli-units internally; printing one directly shows 2000 where the user asked for 2. Caught in review on story 10.2 across six sites.
 
 ---

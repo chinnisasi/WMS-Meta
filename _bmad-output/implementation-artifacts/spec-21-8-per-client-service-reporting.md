@@ -2,8 +2,9 @@
 title: 'Per-client service reporting — dock-to-stock, pick accuracy and dispatch timeliness for one client, from the ledger, for the operator and the client'
 type: 'feature'
 created: '2026-10-10'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '90033ce11c3bce4db73cad2fe081fc7459551e0b'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -170,12 +171,12 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` reporting: `sql.ts` (the move), `service.ts`, and the two facade methods.
-- [ ] `wms-be` api: both routes, the four DTO classes, and an `@ApiResponse` per arm; `openapi.json`.
-- [ ] `wms-be/test/service-report.spec.ts`: every matrix row on both routes, plus a deep exact-key `toEqual` on the body.
-- [ ] `wms-be` tests that change: `portal.spec.ts`, `architecture.spec.ts`, `client-isolation.spec.ts`.
-- [ ] `wms-be`: run `scripts/loadtest-overview.ts`'s seed once against a 366-day report and record the p95 in `modules/reporting.md` "Load" (reported, not a gate).
-- [ ] `wms-fe`:
+- [x] `wms-be` reporting: `sql.ts` (the move), `service.ts`, and the two facade methods.
+- [x] `wms-be` api: both routes, the four DTO classes, and an `@ApiResponse` per arm; `openapi.json`.
+- [x] `wms-be/test/service-report.spec.ts`: every matrix row on both routes, plus a deep exact-key `toEqual` on the body.
+- [x] `wms-be` tests that change: `portal.spec.ts`, `architecture.spec.ts`, `client-isolation.spec.ts`.
+- [x] `wms-be`: run `scripts/loadtest-overview.ts`'s seed once against a 366-day report and record the p95 in `modules/reporting.md` "Load" (reported, not a gate).
+- [x] `wms-fe`:
   - `bun run api:generate`;
   - the wrappers and hooks;
   - `components/reports/client-service.tsx` and the page;
@@ -191,7 +192,7 @@ context:
     - portal requests are `/portal/*` only;
     - `client-suspended` fires the event;
     - the 404 and 503 copy.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `modules/reporting.md` (the 21-8 hook → done; the service read and its definitions);
   - `API-SURFACE.md`;
   - `frontend/SYSTEM-DESIGN.md`: `/reports` partial (service only); the placeholder count; the portal routes and nav;
@@ -207,6 +208,12 @@ context:
 - Given the full BE and FE suites, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Baselines: wms-be `90033ce11c3bce4db73cad2fe081fc7459551e0b` (`baseline_commit`), wms-fe `05dc4afb75366eff0e24edbff69b74f76718c6ca`.
+- Work on `feat/21-8-per-client-service-reporting` in both repos (already checked out). Leave everything uncommitted: no commit, push or PR.
+- In wms-be, run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming the story.
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
+- Do not touch `wms-mobile`.
 
 ## Spec Change Log
 
@@ -253,6 +260,28 @@ Three design-review lenses ran over the draft: backend claims, metric semantics,
 | 33 | backend | Offline placements inflate dock | low | Fixed: PENDING note (9-1 accepts the same) |
 | 34 | metrics | Same-transaction placement ties | low | False: medians and counts are order-independent; there is no cursor |
 | 35 | backend | Equality holds only with the same `[from, to)` | low | Confirmed: the test passes the facade's clipped window to the oracle |
+
+**Code review (2026-10-10)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V) over the combined diff; 19 findings.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | B, E | `statement_timeout` set once bounds each statement, not the read — ~7 statements can hold a connection ~30 s while every surface promises a 5 s report budget | medium — verified `reporting.facade.ts` serviceInTx sets it once; `rowsOf` re-arms only for `TILE_TX_DEADLINES` (capped 1.5 s) | patch: whole-read deadline re-armed per query |
+| C2 | B | No concurrency cap — portal users can start concurrent 366-day reads | medium — real; root is the pre-existing absence of any portal read rate limit (PENDING already carries the write cap) | defer |
+| C3 | B | `ordersDispatched` joins `orders`, billing's count does not — orphaned / mismatched events would diverge | low — orders are never deleted and an order's client is its SKUs' (21-2b `sku-client-mismatch`; correction refused once history exists); not met in use | reject |
+| C4 | B | `linesDispatched` counts events, not distinct lines | low — one event per line today (atomic dispatch, `dispatch.command.ts:343-385`); `count(distinct)` is a direct correction | patch |
+| C5 | B | The RLS probe re-types the query shapes; can drift from `service.ts` | low — real developer drift risk; a shared builder is new structure for an unlikely edit | reject |
+| C6 | B | Load note implies year-scale cost; the seed is ~7 days | low — true | patch: doc wording |
+| C7 | B | Backlog includes backordered orders (client's own stock missing) | false — exactly decision 5 (received, not cancelled, undispatched > 24 h) | reject |
+| C8 | B | Exception title never reaches the wire; tests pin title === detail; no PENDING item | low — `ProblemDetailsFilter` behaviour, pre-existing (billing same) | patch: PENDING entry |
+| C9 | B | FE copies the 366-day bound by hand | low — drift only if the BE bound changes; fix is new schema surface | reject |
+| C10 | B, E | A failed warehouse read silently leaves only "All warehouses" (operator and portal) | low — real but only on a failed read, and the report still works over all warehouses; fix adds a failure branch | reject |
+| C11 | B | Portal may name any tenant warehouse (200 vs 404 discloses existence) | false — `portal/warehouses` already lists every tenant warehouse to the client (21-7b decision 1) | reject |
+| C12 | B | Isolation test's genesis-hash probe events break the chain | false — the file already seeds probe events this way (`client-isolation.spec.ts:17,167,605`) and nothing in it verifies a chain | reject |
+| C13 | E | A line with an `unfulfillable` slice counts as accurate | false — decision 4 counts short *picks*; an unfulfillable slice is a plan-time stockout, never picked (excluded deliberately, design review #3) | reject |
+| C14 | E | `to = 9999-12-31` passes the guards and 500s in `addIsoDays`/`istMidnightOf` | low — real but needs a year-9999 period; fix adds a guard (billing shares it) | reject |
+| C15 | E | A ratio ≥ 0.9995 and < 1 renders "100%" | medium — `formatFigure` rounds to 1 dp; 1 short in 5,000 lines reads perfect to a client | patch |
+| C16 | V | Dock-to-stock's upper bound `pp.created_at < window.to` is never exercised | medium — pre-verified gap; dropping it passes every test | patch: fixture after P + boundary assertion |
+| C17 | V | `portalReadReason` `report-unavailable` arm unreachable and duplicates the copy | low — `portalServiceReason` answers it first | patch: delete |
 
 ## Design Notes
 
