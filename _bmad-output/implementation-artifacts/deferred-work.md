@@ -632,3 +632,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-6b-handheld-asn-receiving.md`
   summary: Receive-draft line resolution with the same SKU on two PO/ASN lines — every scan resolves to the first open line, so its overflow pends as an over-receipt while the second line stays open; resolve against draft-remaining open qty instead.
   evidence: `resolveLineRefs` in wms-mobile `src/receiving/draft.ts` keeps the pre-21-6b `resolvePoLineId` rule (first line with cached openQty > 0, ignoring units already in the draft); found by 21-6b code review (C9).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
+  summary: 21-7b — a client user announces an ASN from the portal (SPEC CAP-9's "a client can announce"), a client-side write onto 21-6's ASN command with per-client idempotency, the SKU/client match and per-client code uniqueness.
+  evidence: Human decision 2026-10-09 (21-7 open question 2) — 21-7 stays read-only; a client write is a new trust surface.
