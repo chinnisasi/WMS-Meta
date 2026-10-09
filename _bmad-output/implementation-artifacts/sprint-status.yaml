@@ -222,7 +222,7 @@ development_status:
   21-5b-dispute-drill-down: done
   21-6-advance-shipment-notices: done
   # Split by the human (2026-10-08): the handheld receiving against an ASN is 21-6b.
-  21-6b-handheld-asn-receiving: backlog
+  21-6b-handheld-asn-receiving: ready-for-dev
   21-7-client-portal: backlog
   21-8-per-client-service-reporting: backlog
   epic-21-retrospective: optional
