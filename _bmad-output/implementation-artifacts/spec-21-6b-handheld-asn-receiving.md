@@ -2,7 +2,7 @@
 title: 'Handheld ASN receiving: the device receives against an advance shipment notice the way it receives against a PO'
 type: 'feature'
 created: '2026-10-09'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 baseline_commit: '7f8aa2dd532990dc43cfd2fac0a50c97ce495ca8'
 review_loop_iteration: 0
@@ -136,18 +136,18 @@ The mobile references are to `7f8aa2dd`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-mobile src/api.ts` -- the types per Boundaries.
-- [ ] `wms-mobile src/state/catalog-snapshot.ts` and `device-store.test.ts` -- the `openAsns` default and the legacy-seal pin.
-- [ ] `wms-mobile src/receiving/draft.ts` and `draft.test.ts` -- covers:
+- [x] `wms-mobile src/api.ts` -- the types per Boundaries.
+- [x] `wms-mobile src/state/catalog-snapshot.ts` and `device-store.test.ts` -- the `openAsns` default and the legacy-seal pin.
+- [x] `wms-mobile src/receiving/draft.ts` and `draft.test.ts` -- covers:
   - `chooseAsn`, `draftContextSet`, re-resolution on switching, and generic line resolution;
   - `documentProgress` with the clamps and `unmatchedQty`, the header and `confirmLabel` helpers, and the unmatched-label helper;
   - card and copy helpers, and payload building from the context;
   - tests for every matrix row at the pure layer.
-- [ ] `wms-mobile app/receive.tsx` -- wire the helpers. The screen composes no copy itself.
-- [ ] `wms-mobile app/inbox.tsx` -- `AsnTaskCard` and the copy.
-- [ ] `wms-mobile src/state/replay-classification.ts` and its test -- the named arms, the settled note's arms (including "clean receipt gives no note"), and a malformed response.
-- [ ] `wms-fe` -- remove the notice and update its two tests. Separate branch and PR, merged after mobile.
-- [ ] Meta docs:
+- [x] `wms-mobile app/receive.tsx` -- wire the helpers. The screen composes no copy itself.
+- [x] `wms-mobile app/inbox.tsx` -- `AsnTaskCard` and the copy.
+- [x] `wms-mobile src/state/replay-classification.ts` and its test -- the named arms, the settled note's arms (including "clean receipt gives no note"), and a malformed response.
+- [x] `wms-fe` -- remove the notice and update its two tests. Separate branch and PR, merged after mobile.
+- [x] Meta docs:
   - `mobile/SYSTEM-DESIGN.md`: the `/receive` row, the `openAsns` row `:176` (now parsed), and the fate block;
   - `mobile/IMPLEMENTATION-GUIDE.md`: the absent-key exception, and the snapshot-growth count at `:142`;
   - `API-SURFACE.md:104`;
@@ -164,6 +164,8 @@ The mobile references are to `7f8aa2dd`.
 - Given `bun run typecheck && bun test` (wms-mobile) and the wms-fe suite, when run, then they pass.
 
 ## Implementation Notes
+
+Baselines: wms-mobile `7f8aa2dd532990dc43cfd2fac0a50c97ce495ca8` (`baseline_commit`), wms-fe `b92a42095c1f74c3b4ce721bfa848e329e0fc1c1`. Work on `feat/21-6b-handheld-asn-receiving`, already checked out in both repos, and leave everything uncommitted: no commit, push or PR. Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (leave the meta git state alone). Do not touch wms-be. Use bun only. Do not touch `/tmp` outside your own scratch files.
 
 ## Spec Change Log
 
@@ -190,6 +192,26 @@ The mobile references are to `7f8aa2dd`.
 | D15 | low | A fully received ASN can't be chosen, but the server accepts late receipts | PENDING entry (would need a server snapshot change) |
 | D16 | low | Route-param precedence was unstated | ASN, then PO, then blind; only cached ids |
 | D17 | low | Two Code Map line references were wrong | Corrected |
+
+*Code review, 2026-10-09: three layers (blind, edge-case, verification-gap). 23 findings, each verified against the code. 8 patch groups; 1 deferred; the rest rejected.*
+
+| # | Verdict | Finding | Evidence | Route |
+|---|---|---|---|---|
+| C1 | medium | Deleting the `document-warehouse-mismatch` branch keeps its test green (no `detail` in the fixture) | `replay-classification.test.ts:493` | patch: a distinct detail, asserted |
+| C2 | low | The settled note can render "refused () — not booked" | `goodsReceiptNote` code filter | patch |
+| C3 | low | `asnId?: string \| null` admits `asnId: null` on PO/blind payloads | `api.ts` | patch: `asnId?: string` |
+| C4 | low | "1 lines", "1 open POs" | `asnCardDetail`, `catalogCachedDetail` | patch: singular at 1 |
+| C5 | low | The screen still composes document copy (back label, over-receipt banner), against "the screen composes no copy" | `receive.tsx` | patch: helpers |
+| C6 | low | Untested: `blind: 'true'`, `open 0` label, the blind-receipt note branch | draft/replay tests | patch: tests |
+| C7 | low | The wms-fe negative assertion passes on an empty render | `asn-card.test.tsx` | patch: positive assertion |
+| C8 | low | Docs: test counts, `/inbox` row, the over-receipt banner missing from the mixed-unit PENDING entry | mobile SYSTEM-DESIGN, PENDING | patch |
+| C9 | low | Same SKU on two document lines: every scan resolves to the first open line, so its overflow pends while the second line stays open | `resolveLineRefs`, identical to the pre-21-6b `resolvePoLineId` | defer (pre-existing PO behaviour) |
+| R1 | false | A mid-draft catalog refresh leaves a stale `asnId`/`asnLineId` (also: missing-line progress, null active document, stale refs at confirm) | `refreshCatalog` is reachable only from the choose step and the no-catalog screen (`receive.tsx:228,486`); the screen loads its snapshot once | rejected |
+| R2 | false | A blind receipt's note says "without crediting the PO" | The server's blind arm settles before the unmatched arm, so a blind receipt never carries `unmatchedLines` | rejected |
+| R3 | low | `asn-not-open` drops the whole GRN | Decided in 21-6 (the fate table); the op reaches the web review queue through the sync report | rejected |
+| R4 | low | No UI for switching documents; re-resolution is defensive only | The choose step comes before any scan; a control would add surface | rejected |
+| R5 | low | The ASN expected date shows in UTC | A spec decision (Boundaries: `YYYY-MM-DD` in UTC) | rejected |
+| R6 | low | The note does not name the unmatched reason | The spec chose line counts; the reason is in the response | rejected |
 
 ## Design Notes
 
