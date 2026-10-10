@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-10-2026 02:10
+last_updated: 10-10-2026 08:42
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -209,7 +209,7 @@ development_status:
   # PHASE 2, additive on top of the dimension, run parallel to Phase 1.
   # Backend-first within the epic; there is deliberately NO mobile surface
   # story (floor work stays client-agnostic — cross-client waves untouched).
-  epic-21: in-progress
+  epic-21: done
   21-1-client-dimension-migration: done
   21-2-client-isolation-rls: done
   # Found while starting 21-3 (2026-10-06, human): nothing could create a client or
@@ -226,7 +226,7 @@ development_status:
   21-7-client-portal: done
   # Split by the human (2026-10-09): portal ASN entry (a client write) is 21-7b.
   21-7b-portal-asn-entry: done
-  21-8-per-client-service-reporting: review
+  21-8-per-client-service-reporting: done
   epic-21-retrospective: optional
 
   # Touches ALREADY-SHIPPED code: conformance is enforced inside the
