@@ -664,3 +664,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-fix-new-warehouse-order-intake.md`
   summary: CLAUDE.md's headline count of PENDING items is stale (two closed, two added by this fix).
   evidence: Code review C11 — CLAUDE.md is an agent-context file, so the count is updated outside the story.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-9-handheld-late-asn-receipt.md`
+  summary: A re-targeted GRN records only the successor PO; nothing names the closed PO the device actually scanned against.
+  evidence: Code review C13 — the GRN's po_id, ledger reference, over-receipt rows and snapshot all name the successor; the chain is derivable via carried_from_po_id but not which PO the operator scanned. A `retargeted_from_po_id` column or grn.recorded payload field would restore the audit trail.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-9-handheld-late-asn-receipt.md`
+  summary: The approved-excess putaway rule is implemented three times (putaway facade, putaway command, kpis.ts awaiting tile) with no cross-scenario agreement test.
+  evidence: Code review C14 — a shared SQL fragment or a test comparing task counts to the tile across mixed scenarios would stop drift.

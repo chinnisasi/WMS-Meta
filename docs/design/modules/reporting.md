@@ -95,7 +95,7 @@ IST calendar days computed in TS (`IST_OFFSET_MS`, now in `shared/primitives/tim
 | # | Tile | Figure | Source & definition | Drill | Reconciles |
 |---|---|---|---|---|---|
 | 1 | dockToStock | `medianMinutes` {today, d7} | median of `putaway_placements.created_at − goods_receipt_notes.created_at` (minutes) over placements in the window; negative intervals excluded | ledger `type=putaway.placed` | no (a median) |
-| | | `awaitingPutaway` (live) | GRN lines with applied units whose (sku, batch) still has on-hand in the system Receiving bin — `PutawayFacade.getPutawayTasksInTx`'s derivation in one statement | `GET /putaway/tasks?warehouseId` | **yes** |
+| | | `awaitingPutaway` (live) | GRN lines with putaway units (`applied_qty` + Σ APPROVED over-receipt excess — story 21-9) whose (sku, batch) still has on-hand in the system Receiving bin — `PutawayFacade.getPutawayTasksInTx`'s derivation in one statement | `GET /putaway/tasks?warehouseId` | **yes** |
 | 2 | pickRate | `pickLines` {today, d7}, `lastHour` | `picks` rows by `created_at` — one per pick line (a 10-serial line is ONE line; the ledger has ten draws) | ledger `type=pick.picked` | no (units differ) |
 | 3 | shortPicks | `shortLines` {today, d7} | `picklist_lines.status = 'short'` by `updated_at` (the terminal flip), via `picklists` for the warehouse — **zero-unit shorts included** (they write no `picks` row and no event) | `…/outbound/picklist-lines?status=short` (window on `updated_at`, keyset on the immutable `(created_at, id)`) | **yes** |
 | 4 | grnVariances | `overReceipts` {today, d7} | `over_receipts.requested_at` in the window | `/receiving/over-receipts?warehouseId` | **yes** |

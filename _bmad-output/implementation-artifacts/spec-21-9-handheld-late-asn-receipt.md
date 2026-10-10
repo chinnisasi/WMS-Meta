@@ -2,8 +2,9 @@
 title: 'Late receipts against a closed or cancelled ASN or PO pend for approval — no scanned carton is ever lost'
 type: 'bugfix'
 created: '2026-10-10'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '605535a16d73e94a8275b707f01912f9bc72f04b'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -168,14 +169,14 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` migration 0066 + journal + snapshot + `schema.ts` comment -- decision 2.
-- [ ] `wms-be` `receiving.command.ts` -- terminal arm, re-target arm, status-check order, comments -- decisions 1, 3, 5.
-- [ ] `wms-be` putaway (facade, command) and `kpis.ts` awaiting tile -- count approved excess -- decision 4.
-- [ ] `wms-be` controller/DTO descriptions; `openapi.json`.
-- [ ] `wms-be` tests -- every matrix row, the replaced assertions, approve/reject, putaway, catch-weight, re-target, stuck op, migration probe.
-- [ ] `wms-fe` -- `api:generate`; queue labels, status suffix, copy; tests.
-- [ ] `wms-mobile` -- one `goodsReceiptNote` fixture test (no code change).
-- [ ] Meta docs:
+- [x] `wms-be` migration 0066 + journal + snapshot + `schema.ts` comment -- decision 2.
+- [x] `wms-be` `receiving.command.ts` -- terminal arm, re-target arm, status-check order, comments -- decisions 1, 3, 5.
+- [x] `wms-be` putaway (facade, command) and `kpis.ts` awaiting tile -- count approved excess -- decision 4.
+- [x] `wms-be` controller/DTO descriptions; `openapi.json`.
+- [x] `wms-be` tests -- every matrix row, the replaced assertions, approve/reject, putaway, catch-weight, re-target, stuck op, migration probe.
+- [x] `wms-fe` -- `api:generate`; queue labels, status suffix, copy; tests.
+- [x] `wms-mobile` -- one `goodsReceiptNote` fixture test (no code change).
+- [x] Meta docs:
   - `modules/inbound.md`: terminal-document rule, re-target, invariants that now hold only for on-time receipts, the event payload without a line id;
   - `modules/putaway.md`: approved excess is work;
   - `API-SURFACE.md`: submit no longer returns `asn-not-open` / `po-not-open`; the warehouse-mismatch order;
@@ -193,6 +194,13 @@ context:
 - Given the full BE, FE and mobile suites, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Baselines: wms-be `605535a16d73e94a8275b707f01912f9bc72f04b` (`baseline_commit`), wms-fe `6a21ce087b8c3819fcbf461ec276ea064f08075f`, wms-mobile `7f99c7da15e390991c78285568c039e68752ec64`.
+- Work on `feat/21-9-handheld-late-asn-receipt` in all three repos (already checked out). Leave everything uncommitted: no commit, push or PR.
+- In wms-be, run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming the story. In wms-fe and wms-mobile, `bun test` is correct.
+- Real Postgres and Valkey must be up for the BE suites (wms-be docker-compose).
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
+- wms-mobile: test fixtures only — no source change.
 
 ## Spec Change Log
 
@@ -221,6 +229,32 @@ Design review (2026-10-11), three lenses: receiving and approve (R), migration c
 | 17 | R, C | Stale controller and command 409 text and schema/DTO comments | low | Fixed: listed |
 | 18 | R | Close/cancel vs a late submit: no new race (same lock order); pending rows on a cancelled ASN are fine since it has no transitions left | — | Recorded |
 | 19 | C | Mobile claims: no named `po-not-open` arm; no cached document status | low | Fixed: Design Notes |
+
+**Code review (2026-10-11)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V) over the combined diff; 33 raw findings, 25 distinct.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | E | Re-target matches a successor line only when the device's named closed line has the scanned SKU, so a no-reference, unknown-id or differing-SKU line pends even with exactly one open successor line of the scanned SKU | medium — verified, `receiving.command.ts:786-803`; deviates from decision 5 ("lines whose SKU matches an open successor line receive normally"). The intent is unambiguous and the fix is one condition | patch |
+| C2 | E | Terminal PO arm (no open successor): a matched *carried* line pends on that line, so approval credits quantity also carried to the successor | medium — verified | patch: carried → null line |
+| C3 | V, B | Re-target edges untested: no-reference / differing-SKU lines, several successor lines of one SKU | medium — pre-verified gap | patch: tests |
+| C4 | B | No test applies a stuck `po-not-open` op | low | patch: test |
+| C5 | B, E | The FE late label and status suffix use the document's *current* status, so decided ordinary over-receipts on a later-closed document read as late | medium — close/cancel is blocked while pending, so the status is reliable only on pending rows | patch: pending rows only |
+| C6 | B, E | A null-line row on an open successor reads "+N over open" beside "Unmatched line" | low | patch |
+| C7 | B, E | "It named no PO/ASN line" is false for mismatch, unknown-id and re-targeted rows | low | patch: copy |
+| C8 | E | A late lined row still shows the line's "open" figure | low | patch |
+| C9 | B | The 409 docs drop `po-not-open`/`asn-not-open` though the fail-closed arms still throw; the `poNotOpen` detail is nonsensical | low | patch |
+| C10 | B, E | The putaway backfill effect is unquantified; surfacing is bounded by shared Receiving on-hand | low | patch: PENDING count query + caveat |
+| C11 | B | The putaway lesson is missing from IMPLEMENTATION-GUIDE | low | patch |
+| C12 | B | Re-targeted pending rows block the open successor's close; undocumented | low | patch: docs |
+| C13 | B | A re-targeted GRN keeps no record of the PO the device scanned (audit trail) | medium — real; needs a column or payload field (new surface) | defer (PENDING) |
+| C14 | B | The approved-excess rule exists in three copies (facade, command, `kpis.ts`) with no agreement test across scenarios | low — real drift risk; a consolidation refactor | defer |
+| C15 | B | A receipt naming a *cancelled* closed line whose SKU the successor carries applies to the successor | false — decision 5 resolves by SKU on the successor | reject |
+| C16 | B | A no-reference line behaves differently on a re-target than on an open PO | false — decision 5 / decision 2 (terminal-origin lines never go straight to stock unmatched); with C1 a matching SKU now books normally | reject |
+| C17 | B | Re-targeted pending rows land on the successor, not the original | false — decision 5 says "pend against the successor" | reject |
+| C18 | B | Untested: a chain leaving the warehouse, the hop bound, a concurrent close mid-walk, replay of `poCode`, re-target catch-weight | low — close always creates the successor in the same warehouse; the walk locks each hop; replay returns the stored snapshot | reject |
+| C19 | B | Mobile ignores `poCode` | low — no mobile change by spec; the field is additive | reject |
+| C20 | B | Several successors per PO resolved by creation order | false — a PO closes once, so it has at most one successor | reject |
+| C21 | E | Stranded excess surfaces only while its Receiving stock is unconsumed | low — true; documented with C10 | reject (doc via C10) |
 
 ## Design Notes
 

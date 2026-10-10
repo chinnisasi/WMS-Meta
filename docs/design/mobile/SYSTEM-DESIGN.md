@@ -193,7 +193,8 @@ code 'device-revoked'      → revoked       (strands the tail)
 code 'unauthenticated'     → unreachable   ← 401 session expiry is NOT a refusal: re-badge, then replay
 code 'pick-bin-short'      → re-plannable  (AD-14 case 3 — KEPT)
 code 'pick-unresolvable'   → quarantined   (AD-14 case 4 — terminal)
-code 'asn-not-open'                → rejected, BY NAME (21-6b — a closed/cancelled ASN never re-opens)
+code 'asn-not-open'                → rejected, BY NAME (21-6b — a closed/cancelled ASN never re-opens;
+                                     unreachable against a 21-9 server, which holds the receipt for approval)
 code 'document-warehouse-mismatch' → rejected, BY NAME (21-6b — a PO/ASN of another warehouse)
 anything else (incl. role-denied) → rejected
 non-ApiProblem throw       → rejected, code 'unknown'
