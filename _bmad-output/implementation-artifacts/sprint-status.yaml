@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-10-2026 09:09
+last_updated: 10-10-2026 10:18
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -1043,7 +1043,7 @@ action_items:
       a restart — order-intake ATP read self-repairs or creation sets the ready marker
       (R1, pre-existing)"
     owner: "fix story (BE, reservation)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
   - id: "epic-21-retro-item-88-story-21-10-client-suspend-reactivate-ow"
     epic: 21
