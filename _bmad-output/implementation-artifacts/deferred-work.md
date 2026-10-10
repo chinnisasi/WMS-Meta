@@ -656,3 +656,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-8-per-client-service-reporting.md`
   summary: Portal reads have no rate limit or concurrency cap, and 21-8's portal service report (up to 366 days, 5 s budget) is the heaviest of them.
   evidence: Code review C2 — the Overview caps itself at 3 process-wide tile slots; `portalServiceReport` has none, so concurrent portal users can each hold a pooled connection for up to 5 s. Pre-existing gap shared by every portal read (PENDING already carries the portal write cap).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-new-warehouse-order-intake.md`
+  summary: Grants that are not preceded by an ATP read (the short-pick re-grant, `pick.command.ts:1171`, and the second `runGrantScript` caller, `reservation.service.ts:1973`) still answer 503 store-down once on a cold or flushed warehouse.
+  evidence: Code review C10 — the fix repairs on ATP reads and keeps grant semantics unchanged (a not-ready grant is store-down for that request). After a Valkey flush the first short pick per warehouse fails 503 on the mobile scan/replay path; a once-retry when `ensureReady` returns true, or an ATP-read-first, would close it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-new-warehouse-order-intake.md`
+  summary: CLAUDE.md's headline count of PENDING items is stale (two closed, two added by this fix).
+  evidence: Code review C11 — CLAUDE.md is an agent-context file, so the count is updated outside the story.

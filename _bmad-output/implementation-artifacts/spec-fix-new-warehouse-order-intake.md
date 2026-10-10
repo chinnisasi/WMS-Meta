@@ -2,8 +2,9 @@
 title: 'Fix: a new or cold warehouse takes orders without a restart — ATP self-arms its reservation counters'
 type: 'bugfix'
 created: '2026-10-10'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '7db8e05988f29d1fd519318646b913a33f06162f'
 review_loop_iteration: 0
 context:
   - 'docs/design/SYSTEM-DESIGN.md'
@@ -124,11 +125,11 @@ Paths are relative to `workspace/core/backend/wms-be`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/modules/inventory/reservation.service.ts` -- `rebuildWarehouse` and the in-flight map inside `rebuildCounters`; `ensureReady` with the double-check and backoff; the `atp` not-ready branch with the input re-read; the grant not-ready branch -- the fix.
-- [ ] `test/cold-warehouse-intake.spec.ts` -- every matrix row, with the gating and spies named in Boundaries -- the regression.
-- [ ] `test/reservations.spec.ts` -- rewrite `:594-625` and `:678` -- they asserted the old fail-closed read.
-- [ ] The test files with "needed for readiness" bootstrap comments -- reword them -- truth.
-- [ ] Meta docs:
+- [x] `src/modules/inventory/reservation.service.ts` -- `rebuildWarehouse` and the in-flight map inside `rebuildCounters`; `ensureReady` with the double-check and backoff; the `atp` not-ready branch with the input re-read; the grant not-ready branch -- the fix.
+- [x] `test/cold-warehouse-intake.spec.ts` -- every matrix row, with the gating and spies named in Boundaries -- the regression.
+- [x] `test/reservations.spec.ts` -- rewrite `:594-625` and `:678` -- they asserted the old fail-closed read.
+- [x] The test files with "needed for readiness" bootstrap comments -- reword them -- truth.
+- [x] Meta docs:
   - `docs/design/modules/inventory.md`:
     - `:529` the readiness section: repair-on-read, single-flight for every rebuild, backoff;
     - `:470` the invariant row: repair before 503;
@@ -145,6 +146,12 @@ Paths are relative to `workspace/core/backend/wms-be`.
 - Given the full BE suite, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Baseline: wms-be `7db8e05988f29d1fd519318646b913a33f06162f` (`baseline_commit`). Backend only; wms-fe and wms-mobile are untouched.
+- Work on `fix/new-warehouse-order-intake` in wms-be (already checked out). Leave everything uncommitted: no commit, push or PR.
+- Run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming this change.
+- Real Valkey must be up for the suites (`redis://localhost:56379/0`, wms-be docker-compose).
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
 
 ## Spec Change Log
 
@@ -169,6 +176,29 @@ Design review (2026-10-10), two lenses: concurrency and invariant (K), and claim
 | 13 | K | The grant must ignore `ensureReady`'s boolean | low | Fixed: stated |
 | 14 | K | The post-check → `getCounter` window under another rebuild | low | Accepted: no worse than today's normal path; Design Notes reworded |
 | 15 | K, T | The "exactly once" spy flakes if the reaper or parity job runs | low | Fixed: assert the gates are unset |
+
+**Code review (2026-10-10)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V) over the diff; 23 raw findings, 18 distinct.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | V | The post-repair input re-read in `atp` is untested; deleting it passes every arm | medium — pre-verified gap | patch: gated arm seeds stock mid-repair |
+| C2 | V, B | The grant path's backoff is untested; reverting it to a direct rebuild passes | medium — pre-verified gap | patch: grant inside the window → 503, no rebuild, no log |
+| C3 | B, E | Concurrent joiners of a failing flight each log and reset the backoff: N logs per failure | medium — every joiner reaches its own `catch` on the shared rejected promise | patch: log only when no live backoff exists; concurrent-failure arm |
+| C4 | E | A wall-clock step back makes the age negative, so the warehouse fails closed until the clock catches up | low — needs a clock step; a one-condition fix | patch |
+| C5 | B, E | `repairFailedAt` is never pruned, and survives a later facade, parity or startup success | low — grows per distinct warehouse id; a direct correction | patch: prune when expired; clear on flight success |
+| C6 | B | The "parity + read" title claims a lost-increment proof the arrangement never exercises | low — true | patch: retitle to what it proves |
+| C7 | B | The interface contract `docs/repos/wms-be/README.md` (2.3 bullet) still describes reads failing closed | low — CLAUDE.md requires the contract to change with the behaviour | patch |
+| C8 | B | `inventory.md` caller list omits `channelVisibleQuantity`; neighbouring line refs are stale | low | patch |
+| C9 | B | `replenishment.md` lost the gotcha with no replacement line | low | patch |
+| C10 | B | The short-pick re-grant (`pick.command.ts:1171`) and the second `runGrantScript` caller (`:1973`) grant with no ATP read first, so after a flush the first short pick per warehouse is still 503 | medium — verified; pre-existing grant semantics, kept unchanged by this spec on purpose | defer |
+| C11 | B | The PENDING headline count in CLAUDE.md is now stale | low | defer (agent-context file) |
+| C12 | B, E | A late joiner of a flight already past its journal read gets that flight's report; a counter that went *high* after the seed survives to the next parity cycle | low — needs a compensation failure inside a rebuild window; parity heals it next pass; the fix needs flight-phase tracking | reject |
+| C13 | B | Inside `ensureReady`, a Valkey outage yields the "being rebuilt" detail, not the `valkeyDown` detail | low — same 503 code, and the log carries the real error | reject |
+| C14 | B | The cold path reads the Postgres inputs twice | false — the design chose the re-read so on-hand and reserved come from the same side of the rebuild; the first read is wasted only on the rare cold path | reject |
+| C15 | E | An active backoff returns 503 instead of joining a rebuild another caller started | low — only within 5 s of a failure; join-instead adds a branch | reject |
+| C16 | E | After a successful rebuild, a newly started flight can disarm before the re-check | low — the documented check-then-read window (Design Notes), no worse than today | reject |
+| C17 | B | The validated-warehouse invariant is not enforced in code | low — the design recorded it as a documented invariant; every current caller validates | reject |
+| C18 | B | The sweep test asserts `opened`, not that the key was armed; no failed-repair sweep case | low — the sweep's skip-on-throw is unchanged code | reject |
 
 ## Design Notes
 
