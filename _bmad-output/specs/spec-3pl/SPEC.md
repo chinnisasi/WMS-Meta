@@ -35,10 +35,12 @@ The PRD currently forecloses this: §2.2 lists 3PLs under Non-Users as "a v2 wed
 - **CAP-3 — D2C is the one-client case**
   - **intent:** A tenant that owns its own goods uses the identical model with a single system-owned client, so no surface, query or command branches on "3PL mode".
   - **success:** Every existing D2C flow behaves identically after the client dimension lands, with no conditional client logic anywhere in the command layer.
+  - *(Amended 2026-10-10 (epic-21 retro, as built): the code **does** branch on `clients.system_owned` — not on a "3PL mode", but on the `self` client — to refuse billing and invoicing work for it. 21-2b decision 5: GST invoicing skips a client brand's order (409 `client-order-not-invoiced`, `invoicing/generator.ts`), so only `self` orders get a tax invoice. Billing refuses the `self` client: no rate card (`rate-card.command.ts` `assertPricedClient`), no client invoice (409 `client-not-billable`, `client-invoices.ts` `assertBillableClient`), no storage snapshot or storage metering (`storage-snapshot.ts`, `metering.ts`, 21-4 decision 4). `self` is also never renamed and gets no portal users. D2C flows are otherwise unchanged.)*
 
 - **CAP-4 — Rate cards per client**
   - **intent:** An operator can define what a client is charged and from when, covering storage per unit per day and handling per receipt line, per pick and per order.
   - **success:** A rate change effective the 1st leaves the previous month's issued invoice byte-identical.
+  - *(Amended 2026-10-10 (epic-21 retro, as built): storage is priced **per 1,000 base units per day** (basis `per_thousand_units_per_day`, whole paise), one line per SKU base UoM — not per unit and not per pallet. Pallet and bin storage wait for a real pallet concept (21-3 decision 1; 21-4 decision 1; `billing-model.md`).)*
 
 - **CAP-5 — Charges metered from the ledger**
   - **intent:** Every billable event is derived from movements already recorded, not from a separately maintained tally.
@@ -47,10 +49,12 @@ The PRD currently forecloses this: §2.2 lists 3PLs under Non-Users as "a v2 wed
 - **CAP-6 — Storage measured in duration**
   - **intent:** A client is charged for how long its goods occupied space, not merely for what moved.
   - **success:** Stock received on the 10th and dispatched on the 20th bills the storage days the rate card defines, and the count is reproducible from the ledger.
+  - *(Amended 2026-10-10 (epic-21 retro, as built): storage **stops at the pick, not at dispatch** — picking draws the stock out of its bin, while pack and dispatch move nothing in the ledger. Stock received on the 10th and picked on the 18th is stored the 10th through the 17th (21-4 decision 2, `storage-snapshot.ts`). The unit is per 1,000 base units per day (CAP-4 note).)*
 
 - **CAP-7 — Client invoices**
   - **intent:** An operator can issue a period invoice to a client, and both sides can see which events produced each line.
   - **success:** Every invoice line traces to the ledger events that generated it; an issued invoice never changes when upstream rates or data change.
+  - *(Amended 2026-10-10 (epic-21 retro, as built): the lifecycle gained **`disputed → void`** — `issued → disputed | settled | void` and `disputed → settled | void`. A dispute that ends in a correction voids the invoice, and the next prepare drafts a replacement naming it (21-5; `billing-model.md`).)*
 
 - **CAP-8 — Client portal**
   - **intent:** A client can see its own stock, orders, inbound and invoices without an operator relaying it.
@@ -63,6 +67,7 @@ The PRD currently forecloses this: §2.2 lists 3PLs under Non-Users as "a v2 wed
 - **CAP-10 — Per-client service reporting**
   - **intent:** An operator and a client can both see how the operation performed for that client — dock-to-stock, pick accuracy, dispatch timeliness.
   - **success:** Each figure is computed per client from the ledger and reconciles to it, with no separately maintained metric store.
+  - *(Amended 2026-10-10 (epic-21 retro, as built): only the **dispatch-derived** figures read the ledger. Timeliness and the accuracy denominator come from `dispatch.dispatched`, and `ordersDispatched` equals the invoiced dispatched-order count (pinned by `test/service-report.spec.ts`). Dock-to-stock and short picks are projections over rows written in the same transaction as their ledger events. Pack failures come from a fact table (`pack_verification_failures`, not backfilled before 0058). See 21-8 Design Notes.)*
 
 ## Constraints
 
@@ -96,7 +101,9 @@ A 3PL onboards two client brands into one warehouse, receives an ASN-announced s
 
 ## Open Questions
 
-- Which charge basis does storage use by default — per pallet, per bin, per cubic metre, or per unit? The rate card can express several, but one has to be the default the onboarding flow proposes.
-- Does a client user need to see *cost* (their rate card) in the portal, or only their invoices? Exposing rates makes disputes self-service and makes renegotiation pressure constant.
-- When a client leaves, what happens to their ledger history — retained under the tenant for audit, exported and purged, or transferred? This interacts with AD-16's retention architecture and with whatever the contract says.
-- Is a client permitted to hold stock across more than one of the tenant's warehouses under one client record, or is a client record per warehouse?
+*(Amended 2026-10-10 (epic-21 retro): three of the four are settled, by the story named on each. Client departure stays open.)*
+
+- ~~Which charge basis does storage use by default — per pallet, per bin, per cubic metre, or per unit? The rate card can express several, but one has to be the default the onboarding flow proposes.~~ **Settled by 21-3 decision 1:** per 1,000 base units per day, the only storage basis. Pallet and bin storage wait for a real pallet concept (PENDING billing).
+- ~~Does a client user need to see *cost* (their rate card) in the portal, or only their invoices? Exposing rates makes disputes self-service and makes renegotiation pressure constant.~~ **Settled by 21-7 decision 3:** invoices and their lines only. The rate card and the line drill-down stay operator-side. "Portal visibility of rate cards" stays in PENDING billing.
+- When a client leaves, what happens to their ledger history — retained under the tenant for audit, exported and purged, or transferred? This interacts with AD-16's retention architecture and with whatever the contract says. **Still open** — PENDING clients, "Client status transitions and departure".
+- ~~Is a client permitted to hold stock across more than one of the tenant's warehouses under one client record, or is a client record per warehouse?~~ **Settled by 21-2b (design review #13):** one tenant-wide client record may hold stock in several warehouses. Attribution is per SKU, and SKUs are tenant-wide (PENDING clients).

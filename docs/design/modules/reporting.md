@@ -25,6 +25,8 @@ Retries never inflate the facts: a failed pack records its attempt's idempotency
 
 Everywhere else a module reads a sibling's state only through its facade (AD-6). Reporting's tiles read the owning modules' tables **directly, read-only**, by human decision (9-1, decision 6): ten aggregate counts through ten facades would be ten bespoke "count my rows in this window" methods with one consumer each — a second definition of every KPI, free to drift from the one here.
 
+**The second exception (21-8, ratified at the epic-21 retro, 2026-10-10).** `service.ts` — the per-client service report — reads `putaway_placements`, `goods_receipt_notes`, `orders`, `picklist_lines`, `pack_verification_failures` and `ledger_events` the same way, on stricter terms: every query inner-joins a client-policied table and carries an explicit `client_id` predicate, and the dispatched-order population reuses `dispatchedOrderEventsPredicate` from `inventory.facade`, so `ordersDispatched` equals the invoiced count (`test/service-report.spec.ts`). The directory-wide guards below cover it. A third read model still needs its own human decision (`IMPLEMENTATION-GUIDE.md` §7a).
+
 The exception is bounded by guards in `test/architecture.spec.ts` ("reporting is a read-only exception…"):
 
 1. nothing under `src/modules/reporting` writes any table — no Drizzle `.insert/.update/.delete`, no raw `INSERT INTO` / `UPDATE … SET` / `DELETE FROM` / `TRUNCATE` (detectors pinned against counterexamples);

@@ -63,7 +63,7 @@ So client is a **third scoping dimension that does not exist today**, and RLS as
 | **AD-12** reservations | **Client-scoped by inheritance.** A reservation references a SKU, and the SKU carries the client, so client A's order can never draw client B's units |
 | **AD-16** tamper-evident audit | **Interacts with client offboarding** — see the open question in `SPEC.md` about departed clients' history |
 | **AD-21** fiscal/legal state | **Precedent reused** by AD-25 rather than duplicated |
-| **AD-22** handling units | Unchanged, and useful: storage billed per pallet wants the handling unit Epic 10-3 introduces |
+| **AD-22** handling units | Unchanged, and useful: storage billed per pallet wants the handling unit Epic 10-3 introduces. *(Amended 2026-10-10 (epic-21 retro, as built): storage is **not** billed per pallet. The only storage basis is per 1,000 base units per day (`per_thousand_units_per_day`, 21-3 decision 1), because 10-3's handling units are catch-weight cases with no location, client or ledger events. Per-pallet billing waits for a real pallet concept (PENDING billing). Storage stops at the pick (21-4 decision 2).)* |
 
 ## Module boundaries (AD-6)
 
