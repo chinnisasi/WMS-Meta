@@ -19,6 +19,11 @@ Turn the WMS into a system that can run as a 3PL: it stores and ships *other com
 - Story 21.7: Client portal — read-mostly (stock, orders, inbound, invoices) under `app.client_id` sessions
 - Story 21.8: Per-client service reporting — dock-to-stock, pick accuracy, dispatch timeliness from the ledger
 
+> **As built (epic-21 retro, 2026-10-10)** — three corrections to this context:
+> - **Storage billing basis:** per **1,000 base units per day** (basis `per_thousand_units_per_day`, whole paise, one line per SKU base UoM). It is not per unit and not per pallet (21-3 decision 1). Pallet storage waits for a real pallet concept (PENDING billing). This supersedes "per unit per day" under Technical Decisions and the per-pallet line under Cross-Story Dependencies.
+> - **"Web only; mobile gains nothing new" no longer holds.** 21-6b added handheld receiving against an ASN to wms-mobile. It was split out of 21-6 by the human (sprint-status, 2026-10-08). Floor work otherwise stays client-agnostic.
+> - **Stories 21-9, 21-10 and 21-11 were added by the retro:** handheld late ASN receipt (A1), client suspension (A3), and hardening, portal decoupling and pinned tests (A4–A6). The epic reopens. Also built and not listed above: 21-2b, 21-5b, 21-6b and 21-7b (human splits).
+
 ## Requirements & Constraints
 
 - **Client as first-class entity.** Every unit of stock, order and inbound document is attributable to exactly one client; ownership is answerable from the ledger alone.

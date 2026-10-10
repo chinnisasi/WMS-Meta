@@ -175,13 +175,16 @@ AD-5: every mutating request carries a client-minted ULID (`lib/ulid.ts:28` — 
 
 > **Two id vocabularies — never confuse them.** Entity ids (orders, SKUs, bins, holds, excursions…) are dashed lowercase **UUIDv7** (`wms-be/src/shared/primitives/ids.ts`); ULIDs are the **Idempotency-Key vocabulary only**, never an entity id. 12-7's trace viewer shipped with the two swapped — a spec invented a "order ids are ULIDs" gate, the implementation and its tests enshrined it, and the surface could not load a single real order until three review layers caught it. Before writing any id shape check or id-input affordance, read the BE's id vocabulary first-hand (`ids.ts`, the route's own param validation) and test with a fixture in that shape — not with a fabricated value in the shape you assumed.
 
-**The key's lifetime is the *intent*, not the HTTP attempt.** Three shapes, all correct:
+**The key's lifetime is the *intent*, not the HTTP attempt.** Three shapes, all correct (the per-draft shape comes in two forms since epic 21):
 
 | Shape | Where | Key minted |
 |---|---|---|
 | **Per click** | `ulid()` inline at the call site — every Settings action, the over-receipt decision, the QC release, the order cancel | at the moment of the click |
 | **Per draft** | `OrderCreateForm` (`outbound-orders.tsx:125`, `:178-179`), `WavePolicyForm` / generate (`outbound-waves.tsx:179`, `:351`) | on first submit, **reused across retries of an unchanged draft**, cleared on success and on any draft edit — `editDraft` (lines, including each line's rate), `editDestination`, since 8-1c `editConsigneeGstin` (the buyer GSTIN) and since 8-1d `editConsigneeLegalName` each call `setIdempotencyKey(null)` (`outbound-orders.tsx:136-153`), because every one of them is in the backend's request hash |
 | **Per confirmation** | the wave release/cancel row actions (`outbound-waves.tsx:605-616`, `:824`, `:844`) | when the confirmation opens; reused across retries of it; cleared with the confirmation |
+| **Per draft, ref form** *(epic-21)* | `keyRef.current ??= ulid()` in a `useRef<string \| null>`: `rate-cards-card.tsx` (`:334`/`:350`, `:426`/`:436`, `:496`/`:506`), `clients-card.tsx` (`:222`/`:240`, `:313`/`:330`, `:397`/`:417`), `client-invoices.tsx` (`:199`/`:209`, `:436`/`:444`, `:490`) | on first submit, reused across retries; set to `null` on success and on a draft edit (`clients-card.tsx:255-258`). The same lifetime as the per-draft shape, held in a ref instead of `useState` |
+
+*(Amended 2026-10-10, epic-21 retro F4.)* The two per-draft forms coexist: `useState` + `setIdempotencyKey(null)` (outbound) and `useRef` + `keyRef.current ??= ulid()` (the epic-21 Settings and client-invoice cards). The guide states no preference between them; unifying them is a deferred cleanup (retro A9). Both must clear on every edit to a hashed field. `client-invoices.tsx:318,321` (Refresh and Issue) mint a key **per click** on purpose: an issue answered `stale` is recorded under its key, so re-sending that key would re-serve `stale`.
 
 The per-draft and per-confirmation shapes exist because a create that times out **after the server committed** is only safe to retry if the retry replays. Re-minting would raise a second order. Conversely, sending the same key with a *changed* body is what the backend answers 422 `idempotency-key-reuse` to — hence clearing on every edit.
 
@@ -236,7 +239,17 @@ Three rules inside it:
 | `generateReason` / `releaseReason` / `cancelWaveReason` / `policyReason` / `waveDetailReason` | `lib/outbound-waves.ts:496` / `:529` / `:574` / `:603` / `:557` | `no-eligible-orders`, `wave-cap-exceeded`, `cutoff-passed` (verbatim) |
 | `decisionReason` | `lib/over-receipt.ts:18` | `over-receipt-decided` |
 | `qcReason` | `lib/over-receipt.ts:44` | `qc-hold-open`, `qc-hold-released`, `qc-hold-origin-bin-gone` |
+| `asnReason` *(21-6)* | `lib/asns.ts:209` | `duplicate-asn-code`, `sku-client-mismatch`, `mixed-client`, `asn-not-open`, `asn-line-received`, `asn-transition-invalid`, `over-receipt-pending` |
+| `portalReadReason(error, subject)` / `portalAsnReason` *(21-7, 21-7b)* | `lib/portal.ts:101` / `:298` | `client-suspended`, `invalid-cursor` · `client-suspended`, `duplicate-asn-code`, `kit-cannot-hold-stock` |
+| `serviceReportReason` / `portalServiceReason` *(21-8)* | `lib/service-report.ts:107` / `:134` | `report-unavailable` |
+| `clientReason(error, action)` / `correctClientReason` / `importReason` / `taxDetailsReason` *(21-2b, 21-5)* | `lib/clients.ts:197` / `:247` / `:274` / `:431` | `duplicate-client-code` · `sku-has-history`, `mixed-client` · `import-too-large`, `unsupported-file-type`, `file-unreadable`, `client-required` · — |
+| `prepareReason` / `clientInvoiceActionReason` / `clientInvoiceReadReason(error, subject)` *(21-5)* | `lib/client-invoices.ts:355` / `:388` / `:419` | `period-not-ended`, `client-not-billable`, `nothing-to-invoice`, `invoice-exists` · `invoice-has-gaps`, `invoice-not-draft`, `invoice-transition-invalid`, `nothing-to-invoice` · `invalid-cursor` |
+| `lineRecordsReason(error, status)` *(21-5b)* | `lib/invoice-records.ts:159` | `invoice-group-changed`, `invalid-cursor` |
+| `usageReason` *(21-4)* | `lib/usage.ts:227` | — |
+| `rateCardReason(error, action)` *(21-3)* | `lib/rate-cards.ts:276` | `rate-card-effective-date`, `rate-card-effective-overlap`, `rate-card-no-lines`, `rate-card-not-draft`, `rate-card-not-cancellable`, `client-not-active` |
 | `rejectionReason` (seven **file-local** copies) | `auth-forms.tsx:257`, `warehouse-create-form.tsx:133`, `zone-bin-setup.tsx:845`, `import-catalog.tsx:266`, `sku-table.tsx:316`, `users-card.tsx:288`, `devices-card.tsx:283` | `duplicate-email`/`invite-pending`/`invite-invalid` · `duplicate-warehouse-code` · `duplicate-zone-code`/`duplicate-bin-code`/`grid-too-large`/`bin-not-empty`/`bin-retired`/`bin-merge-hold-open`/`bin-full`/`bin-blocked` · `import-too-large`/`unsupported-file-type`/`file-unreadable` · `duplicate-barcode` · `email-exists`/`last-owner` · — |
+
+*(Amended 2026-10-10, epic-21 retro F4: the epic-21 rows were added; codes listed are those beyond the house set. Each re-words the session codes on its own — consolidating them is deferred cleanup, retro A9.)*
 
 The house set every mapper handles: `not-found`, `role-denied`, `permission-denied`, `idempotency-key-reuse`, `unauthenticated`, `validation-failed`.
 

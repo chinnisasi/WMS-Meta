@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-10-2026 08:42
+last_updated: 10-10-2026 09:09
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -209,7 +209,7 @@ development_status:
   # PHASE 2, additive on top of the dimension, run parallel to Phase 1.
   # Backend-first within the epic; there is deliberately NO mobile surface
   # story (floor work stays client-agnostic — cross-client waves untouched).
-  epic-21: done
+  epic-21: in-progress
   21-1-client-dimension-migration: done
   21-2-client-isolation-rls: done
   # Found while starting 21-3 (2026-10-06, human): nothing could create a client or
@@ -227,7 +227,13 @@ development_status:
   # Split by the human (2026-10-09): portal ASN entry (a client write) is 21-7b.
   21-7b-portal-asn-entry: done
   21-8-per-client-service-reporting: done
-  epic-21-retrospective: optional
+  # Added by the epic-21 retro (2026-10-10, human): patch stories for the open
+  # findings — 21-9 handheld late ASN receipt (A1), 21-10 client suspension (A3),
+  # 21-11 hardening + portal decoupling + pinned tests (A4-A6). Epic reopened.
+  21-9-handheld-late-asn-receipt: backlog
+  21-10-client-suspension: backlog
+  21-11-epic-21-hardening: backlog
+  epic-21-retrospective: done
 
   # Touches ALREADY-SHIPPED code: conformance is enforced inside the
   # existing putaway (3.5) and pick (4.3) commands.
@@ -550,7 +556,7 @@ action_items:
     action: "Over-receipt approve: re-validate PO + line status in decideOverReceipt,
       lock the line before the ceiling bump (A2/E1/V3 + A3); e2e arm close-then-approve"
     owner: "Claude (fix branch, before Epic 4 consumes over-receipts)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
   - id: "epic-3-retro-a2-system-bin-identity-reserve-codes"
     epic: 3
@@ -577,7 +583,7 @@ action_items:
     action: "PO amend received-line guard: refuse delete/sku rewrite when receivedQty
       > 0 (A4/E6)"
     owner: "Claude (next inbound story)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-09-10.md"
   - id: "epic-3-retro-a6-badge-in-hardening-batch"
     epic: 3
@@ -1023,3 +1029,73 @@ action_items:
     owner: "Claude (immediate)"
     status: done
     ref: "_bmad-output/implementation-artifacts/epic-8-retro-2026-10-05.md"
+  - id: "epic-21-retro-item-86-story-21-9-a-handheld-asn-receipt-replay"
+    epic: 21
+    action: "Story 21-9: a handheld ASN receipt replayed after its ASN was cancelled
+      or closed must reach the ledger (unmatched/blind or review-queue receive), never
+      be dropped (X1)"
+    owner: "story 21-9 (BE + mobile)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-87-fix-story-a-warehouse-created-after-serv"
+    epic: 21
+    action: "Fix story: a warehouse created after server start must take orders without
+      a restart — order-intake ATP read self-repairs or creation sets the ready marker
+      (R1, pre-existing)"
+    owner: "fix story (BE, reservation)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-88-story-21-10-client-suspend-reactivate-ow"
+    epic: 21
+    action: "Story 21-10: client suspend/reactivate owner command + Settings action,
+      making the client-suspended gates reachable (X2)"
+    owner: "story 21-10 (BE + FE)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-89-story-21-11-hardening-portal-controller"
+    epic: 21
+    action: "Story 21-11 hardening: portal.controller call scan vs PORTAL_READS/WRITES;
+      replay-under-lock in ASN amend/transition and client rename; CLIENT_STATUSES
+      pin; asn-not-open description; one FE charge-label source; useTenantWarehouses
+      failed arm (X3 B2 B6 X4 F2 F3)"
+    owner: "story 21-11"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-90-story-21-11-decouple-portal-from-operato"
+    epic: 21
+    action: "Story 21-11: decouple portal from operator code — move LineRows and outbound/shell
+      primitives to a shared component (F1)"
+    owner: "story 21-11"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-91-story-21-11-pinned-tests-http-cross-clie"
+    epic: 21
+    action: "Story 21-11: pinned tests — HTTP cross-client wave e2e; delete-draft,
+      re-prepare, identical invoice lines (S2, CAP-5)"
+    owner: "story 21-11"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-92-doc-reconciliation-in-the-retro-pr-3pl-s"
+    epic: 21
+    action: "Doc reconciliation in the retro PR: 3PL SPEC/epic-context/architecture
+      as-built notes; IMPLEMENTATION-GUIDE 7a ratifies reporting/service.ts; FE guide
+      mapper and key tables; PENDING X5/A1/R1/R2 (S1 B1 X5 F4)"
+    owner: "retro PR (immediate)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-93-process-three-standing-design-review-che"
+    epic: 21
+    action: "Process: three standing design-review checklists in IMPLEMENTATION-GUIDE
+      — portal surface (stamp, predicate, controller scan, widened-role consumers),
+      idempotency surface discriminator, one IST/period helper per side (P1)"
+    owner: "Claude (next story design review)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-21-retro-item-94-duplication-cleanup-at-next-touch-be-per"
+    epic: 21
+    action: "Duplication cleanup at next touch: BE period validator, problem builders,
+      cursor codecs, replay plumbing, SQL IST offset, warehouse filter; FE mapper
+      session arms, loader-hook skeleton, key shape, IST helpers (B4 F4)"
+    owner: "next touch"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"

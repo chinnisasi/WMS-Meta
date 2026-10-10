@@ -237,15 +237,22 @@ Backend first, always. A story spanning repos lands the additive backend change,
 
 ---
 
-## 7a. The one read-only exception: reporting (story 9-1, decision 6)
+## 7a. The read-only exceptions: reporting (story 9-1, decision 6; story 21-8, ratified 2026-10-10)
 
-AD-6's rule — a sibling reads another module only through its facade — has **exactly one named exception**: the reporting module's dashboard tiles (`src/modules/reporting/kpis.ts`) read the owning modules' tables directly, in read-only SQL. A KPI routed through a facade would need a bespoke "count my rows in this window" method per tile, each a second definition of the KPI free to drift from the first. The terms, all guarded by `test/architecture.spec.ts`:
+AD-6's rule — a sibling reads another module only through its facade — has **exactly two named exceptions**, both in the reporting module. The first: the dashboard tiles (`src/modules/reporting/kpis.ts`) read the owning modules' tables directly, in read-only SQL. A KPI routed through a facade would need a bespoke "count my rows in this window" method per tile, each a second definition of the KPI free to drift from the first. The terms, all guarded by `test/architecture.spec.ts`:
 
 - **Reporting writes nothing** — no Drizzle `.insert/.update/.delete`, no raw `INSERT`/`UPDATE … SET`/`DELETE`/`TRUNCATE` anywhere under `src/modules/reporting`;
 - **only the api shell imports it** (plus the root `app.module.ts` composition) — no module may build on a read model that bypasses facades;
 - **it owns no table** — the facts it needed (`pack_verification_failures`, `ingest_backorder_refusals`) are owned and written by **outbound**, the module whose refusals they record.
 
-This is not a precedent. A new read model that wants the same freedom takes its own human decision and its own guard block. A new KPI belongs in `kpis.ts`, names its source and its drill, and is either `reconciles: true` (proven by paging its drill in `test/reporting.spec.ts`) or says why not. Details: `modules/reporting.md`.
+**The second exception: the per-client service report** (`src/modules/reporting/service.ts`, story 21-8). It was built under decision 6 without its own decision, and the human ratified it on 2026-10-10 (epic-21 retro, B1). Its terms:
+
+- **Read-only**, like `kpis.ts`;
+- **every query inner-joins a client-policied table** (`skus`, `orders` or `ledger_events`) **and carries an explicit `client_id = $client` predicate** — the two layers a portal read needs (RLS under the portal stamp, plus the predicate);
+- **the dispatched-order population reuses `dispatchedOrderEventsPredicate`** from `inventory.facade`, so `ordersDispatched` equals the count the client is invoiced for (pinned by `test/service-report.spec.ts`, "reconcile: ordersDispatched equals the invoiced dispatched-order count");
+- **guarded by the same directory-wide reporting guards** in `test/architecture.spec.ts` (writes nothing, only the api shell imports it, owns no table).
+
+This is not a precedent. A new read model that wants the same freedom — a third — takes its own human decision and its own guard block. A new KPI belongs in `kpis.ts`, names its source and its drill, and is either `reconciles: true` (proven by paging its drill in `test/reporting.spec.ts`) or says why not. Details: `modules/reporting.md`.
 
 **List windows (9-1).** A list that takes a time window uses `src/shared/primitives/instant-range.ts`: `@IsInstant()` (an ISO-8601 instant **with** a zone designator — a bare local time is refused), `assertInstantRange(from, to)` in the controller (`from ≥ to` → `400 validation-failed`), `@BooleanFlag()` + `@IsBoolean()` for a flag (exactly `'true'`/`'false'`, anything else refused by name), `@RepeatableParam()` for `?type=a&type=b`. The window is half-open `[from, to)` on a **server-stamped** column, and the list's cursor must carry the full-precision instant (`fullPrecisionInstant`) — a drill paged to exhaustion is a promise, and a truncated cursor silently breaks it.
 
