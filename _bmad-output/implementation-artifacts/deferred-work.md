@@ -652,3 +652,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-7b-portal-asn-entry.md`
   summary: A SKU that becomes a kit (a composition added) after an open ASN or PO line names it can never be received — receiving refuses kit lines (FR-38), so the document line is stranded until amended or cancelled.
   evidence: 21-7b code review C9 — announce checks kit-ness only at write time; the same holds for operator ASNs and POs (pre-existing). Fix: refuse a kit composition on a SKU with open inbound lines, or flag the line.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-8-per-client-service-reporting.md`
+  summary: Portal reads have no rate limit or concurrency cap, and 21-8's portal service report (up to 366 days, 5 s budget) is the heaviest of them.
+  evidence: Code review C2 — the Overview caps itself at 3 process-wide tile slots; `portalServiceReport` has none, so concurrent portal users can each hold a pooled connection for up to 5 s. Pre-existing gap shared by every portal read (PENDING already carries the portal write cap).

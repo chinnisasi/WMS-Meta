@@ -1,6 +1,6 @@
 # Reporting module
 
-> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. The audit trail and exports (9-3) join this module next.
+> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. The audit trail and exports (9-3) join this module next.
 
 Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line` below is relative to `wms-be/`. Read `../IMPLEMENTATION-GUIDE.md` first — and its §7a, the read-only exception this module exists under.
 
@@ -8,7 +8,7 @@ Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line
 
 ## Owns
 
-**No tables.** The module is a read model: `kpis.ts` (one function per tile), `window.ts` (the IST windows), `reporting.facade.ts` (the warehouse check and the best-effort runner). It exports `ReportingFacade` alone; the api shell's `ReportingController` (`src/api/reporting.controller.ts`, DTOs in `src/api/reporting.dto.ts`) is its only consumer.
+**No tables.** The module is a read model: `kpis.ts` (one function per tile), `window.ts` (the IST windows), `sql.ts` (the SQL helpers `rowsOf`/`n`/`nf`/`ratio`/`ts`/`countingSinceInTx`, moved out of `kpis.ts` by 21-8), `service.ts` (21-8 — the service report's period guard and queries), `reporting.facade.ts` (the warehouse check, the best-effort runner, the service reads). It exports `ReportingFacade` alone; the api shell is its only consumer — `ReportingController` (`src/api/reporting.controller.ts`, DTOs in `src/api/reporting.dto.ts`) and, since 21-8, `PortalController`'s `GET portal/service`.
 
 The two facts the dashboard needed that nothing stored before are **outbound-owned**, not reporting's (see `outbound.md`):
 
@@ -38,6 +38,8 @@ The exception is bounded by guards in `test/architecture.spec.ts` ("reporting is
 | Method | Shape | Does | Called by |
 |---|---|---|---|
 | `overview` | `(tenantId, warehouseId, now = new Date()) → Overview` | Warehouse check, then the ten tiles under the runner | `GET /tenants/{t}/warehouses/{w}/reporting/overview` |
+| `serviceReport` | `(tenantId, clientId, {from, to, warehouseId?}, now = new Date()) → ServiceReport` | 21-8: period guard (400), client (404), warehouse (404), then the figures — one transaction, 5 s `statement_timeout` | `GET /tenants/{t}/reporting/clients/{c}/service` |
+| `portalServiceReport` | same | 21-8: the same read, its transaction stamped `{ clientId }` (the `PORTAL_READS` architecture scan reads this body) | `GET /tenants/{t}/portal/service` (client from `PortalSession`) |
 
 `Overview` = `{asOf, stale, window: {todayFrom, d7From, to}, tiles: {dockToStock, pickRate, shortPicks, grnVariances, orderAccuracy, oversell, expiryAlerts, syncHealth, dispatchPipeline, sm8}}`. Each tile carries `state: 'ok' | 'unavailable'`. Every figure is `{value: number | null, drill: {apiPath, query, reconciles}}`; a windowed figure is `{today, d7}` of those. `value` is null when the tile is unavailable **or** the figure has no data (an empty median or ratio) — never a fake 0. `drill` is always present, unavailable tiles included.
 
@@ -129,9 +131,53 @@ Every windowed drill carries `from` (today's or the 7-day start) and `to = asOf`
 
 None produced, none consumed. The dashboard is pull-only and the web reloads it only on a warehouse switch or Refresh — no polling (UX-DR19).
 
-## The 21-8 hook
+## The service report (story 21-8, CAP-10)
 
-Every tile takes `ReportingScope {tenantId, warehouseId, clientId: null}`. Story 21-8 slices by client by giving `clientId` a value; the tiles over `orders` / `ledger_events` (both carry `client_id`) then add the predicate, and the relational-only tiles need a join through `skus.client_id`. No tile may assume the field is always null.
+**The 21-8 hook is done — differently from how it was sketched.** The Overview tiles still take `ReportingScope {…, clientId: null}` and their figures are unchanged; slicing the ten warehouse tiles by client would have changed their meaning. Instead a separate read, `service.ts`, computes three figures for **one client** over an **inclusive IST date period**, behind two routes so the operator and the client see the same truth (two queries would drift):
+
+```mermaid
+sequenceDiagram
+  participant O as web /reports (operator)
+  participant P as web /portal/service (client)
+  participant C as ReportingController / PortalController
+  participant F as ReportingFacade
+  participant PG as Postgres
+
+  O->>C: GET reporting/clients/{c}/service?from&to[&warehouseId]
+  P->>C: GET portal/service?from&to[&warehouseId] (client = session)
+  C->>F: serviceReport / portalServiceReport
+  Note over F: assertServicePeriod → 400 before any read
+  F->>PG: ONE tx (portal: stamped { clientId }); a 5 s WHOLE-read deadline — each statement re-arms statement_timeout to the time left
+  F->>PG: client 404 → warehouse 404 → the four queries
+  Note over F: 57014 → 503 report-unavailable, nothing partial
+  F-->>C: ServiceReport (no client id)
+  C-->>O: ServiceReportDto (rebuilt key by key)
+```
+
+**Period.** `assertServicePeriod` — `assertMeteringPeriod`'s detail strings (real dates, `from ≤ to`, ≤ 366 days), checked in the facade so both routes refuse identically. Window `[istMidnightOf(from), min(istMidnightOf(to + 1), asOf))`, server-stamped columns only; a `from` after today is an empty window (0s and nulls).
+
+**Definitions** (*c* the client, *wh* the optional warehouse). Every query **inner-joins a client-policied table** (`skus`, `orders` or `ledger_events`) **and** carries `client_id = c` — the stamp protects only those tables, and the other rows (placements, GRNs, picklist lines, pack failures) are reached only through one of them.
+
+| Figure | Definition | Population (named on the web tile) |
+|---|---|---|
+| `dockToStock.medianMinutes`, `placements` | The 9-1 tile SQL: `putaway_placements` recorded in the window, `join skus s … s.client_id = c`, GRN `created_at` → placement `created_at`, negatives excluded | placements made in the period |
+| **the dispatched CTE** | `dispatchedOrderEventsPredicate` (billing's — imported from `inventory.facade`; an order counts in the window of its FIRST dispatch), grouped by `reference_doc->>'orderId'`, `min(recorded_at)` = dispatched at, inner-joined `orders o … o.client_id = c` | — |
+| `pickAccuracy.linesDispatched` | the DISTINCT order lines of the CTE orders' `dispatch.dispatched` events (one event per line is the command's shape, not a constraint — the count does not rely on it) | lines dispatched in the period |
+| `linesShortPicked`, `accuracy` | of those lines, the ones with ANY `picklist_lines` row with `reason_code is not null` (written only on a short; survives the wave-cancel flip). `accuracy = (dispatched − short) ÷ dispatched`. A short later recovered still counts against the line, once | |
+| `packFailures`, `packFailuresCountingSince` | `pack_verification_failures` in the window `join orders o … o.client_id = c`; the 0058 stamp. Shown beside the ratio, never folded in | |
+| `dispatchTimeliness.ordersDispatched` | `count(*)` of the CTE — **equals `countDispatchedOrdersInTx`** (the count the client is invoiced for), pinned in `test/service-report.spec.ts` for the facade's clipped window | orders dispatched in the period |
+| `onTime`, `onTimeRate`, `medianMinutes` | interval `dispatchedAt − o.created_at` clamped at 0; on time ≤ 24 h (`SERVICE_TARGET_HOURS`, fixed); the median over ORDERS | |
+| `lateNotDispatched` | orders of c (+ wh) received in the window, not `cancelled`, received ≤ `asOf − 24 h`, with no `dispatch.dispatched` event before `asOf` (the 0039 `orderId` index) | orders received in the period |
+
+Ratios 0–1 to 4 dp, null with an empty denominator; medians minutes to 1 dp.
+
+**What reconciles to the ledger.** Every timeliness figure and the accuracy denominator come from `dispatch.dispatched`. Dock-to-stock and short picks are projections over rows written in the same transaction as their ledger events (9-1's argument). Pack failures come from a fact table not backfilled before 0058 — hence `packFailuresCountingSince`.
+
+**Why accuracy windows on dispatch.** The dispatch event is immutable and client-stamped, so last month's figure cannot change; `picklist_lines.updated_at` is rewritten by a wave cancel (the rejected design windowed on it, double-counting a recovered short as a miss plus a hit).
+
+**Isolation.** Two layers: `portalServiceReport` stamps the transaction `{ clientId }` (`test/architecture.spec.ts` `PORTAL_READS`), and every query carries the predicate. `test/client-isolation.spec.ts` runs each query shape as `wms_rls_probe` under one client's stamp with only the `client_id = c` literals removed (joins kept) and gets that client's rows only.
+
+**Member-open** on the operator route (floor-performance figures, no money), like the Overview. Any client of the tenant is reportable — a suspended one and `self` included; the portal refuses a suspended client at its guard.
 
 ## Gotchas
 
@@ -144,3 +190,5 @@ Every tile takes `ReportingScope {tenantId, warehouseId, clientId: null}`. Story
 ## Load
 
 `bun scripts/loadtest-overview.ts` seeds ~25k ledger events over 7 days for one warehouse (through `InventoryFacade.appendLedgerEventInTx` in batches) plus, at volume, every relational source a tile reads (picks, GRNs/putaways/over-receipts, orders/lines with ingested and backordered slices, waves/picklists/lines with short slices, batch alerts, invoices/lines/e-way bills, both fact tables), then reads the Overview 40 times and reports p95 overall and per tile. Reported, not a CI gate. Measured 2026-10-06 (local compose Postgres 18): **p95 ≈ 25 ms** overall, slowest tile `orderAccuracy` (p95 ≈ 10 ms), 0 stale reads — against the 2 s NFR-6 budget.
+
+**Service report (21-8).** After the Overview reads, the script gives every seeded dispatch event its `orders` row (received 6 h earlier) and a short-picked picklist line for every fourth line, then reads the service report for the seeded (self) client over a **366-day** period ending today `--reads` times. Measured 2026-10-10 (local compose Postgres 18, 25k events, 5,000 dispatched orders/lines, ~500 placements, 250 pack failures, 836 undispatched orders): **p95 ≈ 40 ms** (median 37 ms) against the read's 5 s whole-read budget. **The seed covers ~7 days of volume** — a 366-day window over it — so this proves the 366-day *window* is admitted and cheap at that density, **not year-scale cost**; a year of real volume (~50× the rows) is unmeasured. (21-8 also repaired the seed for 0064's GRN and over-receipt document-pairing CHECKs, which had broken it since 21-6.)
