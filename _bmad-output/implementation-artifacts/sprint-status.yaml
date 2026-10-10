@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-10-2026 10:18
+last_updated: 11-10-2026 00:44
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -230,7 +230,7 @@ development_status:
   # Added by the epic-21 retro (2026-10-10, human): patch stories for the open
   # findings — 21-9 handheld late ASN receipt (A1), 21-10 client suspension (A3),
   # 21-11 hardening + portal decoupling + pinned tests (A4-A6). Epic reopened.
-  21-9-handheld-late-asn-receipt: backlog
+  21-9-handheld-late-asn-receipt: in-progress
   21-10-client-suspension: backlog
   21-11-epic-21-hardening: backlog
   epic-21-retrospective: done
