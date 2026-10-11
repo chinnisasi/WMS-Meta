@@ -21,7 +21,7 @@ Eight module-exclusive tables (21-6 added `advance_shipment_notices` and `asn_li
 | `asn_lines` (21-6) | `announced_qty` / `received_qty`, milli-units. **No line status** — the ASN's status is derived from its lines. | `announced_qty > 0`, `received_qty >= 0`; **no ceiling CHECK** (an approved over-receipt drives received past announced, as on a PO line). RLS inherits through the parent (`client_invoice_lines`' shape). |
 | `goods_receipt_notes` (`schema.ts:1154`) | One GRN header per submit. `occurred_at` is device time (AD-1), `recorded_at` the server ingest instant. 21-6: `asn_id`. | `goods_receipt_notes_tenant_id_code_unique`; `status IN ('recorded')` (`0013:82`); `goods_receipt_notes_blind_pairing` — **widened by 0064 to three arms**: a PO and nothing else, an ASN and nothing else, or neither with `blind_reason_code IS NOT NULL AND IN ('unannounced-delivery','po-not-found','other')`. The `IS NOT NULL` is new: 0013's arm passed a row with neither (`NULL IN (…)` is NULL, which a CHECK admits). The command's 400 is the friendly front end of it. |
 | `goods_receipt_lines` (`schema.ts:1204`) | **Physical truth.** `qty` = everything that arrived; `applied_qty` = the within-open slice that hit the ledger and bumped `received_qty`. The difference pends as an `over_receipts` row. 21-6: `asn_line_id` — the line actually credited (null on an unmatched line). | `qty > 0`, `applied_qty >= 0`, `applied_qty <= qty` (`0013:95-99`); `goods_receipt_lines_one_line_reference` — never both `po_line_id` and `asn_line_id` (0064). |
-| `over_receipts` (`schema.ts:1241`) | One row per excess, awaiting `review.decide`. 21-6: `asn_id`, `asn_line_id`. | `status IN ('pending','approved','rejected')`, `excess_qty > 0` (`0013:84-86`); `over_receipts_document_pair` — exactly one of `(po_id, po_line_id)` and `(asn_id, asn_line_id)`, each pair together (0064). |
+| `over_receipts` (`schema.ts:1241`) | One row per excess, awaiting `review.decide`. 21-6: `asn_id`, `asn_line_id`. 21-9: a late receipt's whole line, with or without a line. | `status IN ('pending','approved','rejected')`, `excess_qty > 0` (`0013:84-86`); `over_receipts_document_pair` — exactly one document (`po_id` or `asn_id`), and a line only beside its own document. 0064 required each pair together; **0066 (21-9) made the line optional**: `(po_id NOT NULL AND asn_id NULL AND asn_line_id NULL) OR (asn_id NOT NULL AND po_id NULL AND po_line_id NULL)`. |
 | `qc_holds` (`schema.ts:1294`) | One Ops-Manager quarantine decision over a `(tenant, warehouse, sku, bin)` scope. `bin_id` is the **origin** bin captured at hold time — release returns stock there, never to a caller-chosen bin. | `qc_holds_open_scope_unique` — partial unique index `WHERE status = 'open'` on (tenant, warehouse, sku, bin), the DB backstop behind the command's 409; `status IN ('open','released')` and `qc_holds_release_pairing` (released ⇒ both `released_by` and `released_at` set; open ⇒ both null) (`drizzle/0014_fine_karen_page.sql:33-40`). |
 
 **Not owned, read or written through seams:** `bins`/`zones` are tenancy master data — the Receiving and QC-hold system bins are ensured through `ensureReceivingBinInTx` / `ensureQcHoldBinInTx` (`src/modules/tenancy/receiving-bin.ts:51,114`), never written here. `batches` is catalog's — created through `CatalogFacade.ensureBatchesInTx`. All stock movement goes through `InventoryFacade`; this module writes **no** stock table (the `architecture.spec.ts` stock-table guard enforces it at build time).
@@ -92,8 +92,8 @@ Seven tables. `tenantTimestamps` = `created_at`/`updated_at` (`timestamptz NOT N
 
 | Column | Type | Null | Default | Guard | Meaning |
 |---|---|---|---|---|---|
-| `po_id` · `po_line_id` | uuid | **YES** | — | `over_receipts_document_pair` | Set on a PO receipt's excess; null on an ASN's (a blind receipt never pends an excess) |
-| `asn_id` · `asn_line_id` (21-6) | uuid | **YES** | — | same | Set on an ASN receipt's excess |
+| `po_id` · `po_line_id` | uuid | **YES** | — | `over_receipts_document_pair` | Set on a PO receipt's excess; null on an ASN's (a blind receipt never pends an excess). **21-9: `po_line_id` may be null beside `po_id`** — a late receipt's line that matched no PO line |
+| `asn_id` · `asn_line_id` (21-6) | uuid | **YES** | — | same | Set on an ASN receipt's excess. **21-9: `asn_line_id` may be null beside `asn_id`** (as above) |
 | `excess_qty` | bigint | NO | — | `..._excess_qty_positive` | Milli-units. **Parked, not in stock, until approved** |
 | `status` | text | NO | `'pending'` | `over_receipts_status_check` | `pending \| approved \| rejected` |
 | `decided_by` / `decided_at` | uuid / timestamptz | **YES** | — | — | Stamped together on decision |
@@ -211,7 +211,38 @@ sequenceDiagram
   end
 ```
 
-**The lifecycle.** `announced`, `partially_received` and `received` are **derived** (`deriveAsnStatusInTx`, `asn.command.ts`): `received` when every line has `received ≥ announced`, `announced` when every line received 0, else `partially_received` — re-derived in the same transaction as every receipt, every approval and every amend; a terminal status (`closed`, `cancelled`) is never re-derived (an approval on a short-closed ASN bumps its line and leaves it closed). Rejecting an over-receipt never changes `received_qty`. **Receiving lands on `announced`, `partially_received` AND `received`** (spec change log, 2026-10-08 — a scan queued while the ASN was partly received and replayed after must reach the ledger): on a `received` ASN everything beyond announced pends as an over-receipt, exactly as on a PO. Only `closed` and `cancelled` refuse 409 `asn-not-open`. The device snapshot still lists only `announced` and `partially_received`. A closed or cancelled ASN leaves the open list and the snapshot, and nothing carries forward (no successor — that is the PO's lifecycle, not the ASN's).
+### Late receipts — a terminal document holds the receipt (story 21-9)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops as Ops
+  actor Op as Operator — device (stale cache)
+  participant Ib as inbound
+  participant Inv as inventory
+  participant Pt as putaway
+
+  Ops->>Ib: cancel / close the ASN, or close the PO
+  Op->>Ib: grn.submit {asnId | poId, lines} (queued before, replayed after)
+  Note over Ib: lock SKUs → document → warehouse check<br/>(document-warehouse-mismatch FIRST) → status
+  alt closed PO with an open carried successor (≤10 hops, same warehouse)
+    Note over Ib: RE-TARGET: GRN po_id = successor (poCode in the snapshot)<br/>a line whose SKU matches ONE open successor line → normal fold<br/>anything else pends on the successor, no line
+    Ib->>Inv: grn.received for the applied slice (successor line)
+  else cancelled / closed ASN, or closed PO with none
+    Note over Ib: TERMINAL: every line applied 0, excess = qty<br/>over_receipts(pending) on the document — its line when matched, else NULL<br/>no grn.received, no received_qty, no status re-derive
+  end
+  Ib-->>Op: 201 (device prints "held for approval")
+  Ops->>Ib: approve (or reject) in the queue
+  Ib->>Inv: grn.received {grnId, poId|asnId[, line]} into Receiving
+  Note over Ib: a lined row credits its line; a null-line row credits none<br/>a terminal document is never re-derived
+  Ib-->>Pt: putaway qty = applied + Σ approved excess → a task
+```
+
+**Which arm.** A PO is `open` → the fold as before; `closed` → walk `carried_from_po_id` forward (the PO whose `carried_from_po_id` is this one, each hop locked `FOR UPDATE` and its status read under the lock) to the first `open` PO in the receipt's warehouse, at most `MAX_SUCCESSOR_HOPS = 10`; found → **re-target**, none → **terminal**. An ASN in `TERMINAL_ASN_STATUSES` (`closed`, `cancelled`) → **terminal** (an ASN has no successor). Any status outside the allow-lists still fails closed (`po-not-open` / `asn-not-open`, unreachable under the CHECKs). In the re-target arm the line resolves by the SCANNED SKU alone (what physically arrived): exactly one open successor line of that SKU → the normal fold on it, whatever closed line the device named (none, an unknown id, another SKU's); zero or several → pends on the successor with no line. In the terminal arm a line matches when its id is known on the document, its SKU equals the line's and — on a closed PO — the line was not `carried` (a carried line's quantity lives on a successor, so crediting it would count the units twice); everything else pends with a null line. **Re-targeted pending rows (a null-line row or an excess) sit on the OPEN successor, so they block its close (409 `over-receipt-pending`) until decided** — the same rule as any excess on an open PO. A re-targeted GRN records only the successor; nothing names the PO the device scanned (PENDING). Neither arm emits `unmatchedLines` or `rejectedLines` — the device would print "booked" or "not booked", and the line is neither; every line reports only through `excessQty`.
+
+**Invariants that now hold only for on-time receipts:** "the GRN's `po_id` is the PO the device named" (re-target books the successor), "every GRN line of a document receipt either applied or rejected" (a late line pends whole), and "a document's received quantity moves at submit" (a late receipt moves it only on a lined approval). Billing and reporting effects are in PENDING (inbound).
+
+**The lifecycle.** `announced`, `partially_received` and `received` are **derived** (`deriveAsnStatusInTx`, `asn.command.ts`): `received` when every line has `received ≥ announced`, `announced` when every line received 0, else `partially_received` — re-derived in the same transaction as every receipt, every approval and every amend; a terminal status (`closed`, `cancelled`) is never re-derived (an approval on a short-closed ASN bumps its line and leaves it closed). Rejecting an over-receipt never changes `received_qty`. **Receiving lands on `announced`, `partially_received` AND `received`** (spec change log, 2026-10-08 — a scan queued while the ASN was partly received and replayed after must reach the ledger): on a `received` ASN everything beyond announced pends as an over-receipt, exactly as on a PO. `closed` and `cancelled` refused 409 `asn-not-open` until 21-9; since 21-9 a receipt against either pends whole (above), and only amend still answers `asn-not-open`. The device snapshot still lists only `announced` and `partially_received`. A closed or cancelled ASN leaves the open list and the snapshot, and nothing carries forward (no successor — that is the PO's lifecycle, not the ASN's).
 
 **The list's progress figure is `linesComplete`** — lines whose received has reached announced — shown on the web as "N of M lines received". `announcedTotal`/`receivedTotal` stay on the row but sum across UoMs and are indicative only.
 
@@ -273,7 +304,7 @@ The skeleton: hash → `assertPermission('asn.manage')` (owner + ops_manager, `p
 
 ### `grn.submit` — `ReceivingCommand.submitGoodsReceipt` (`receiving.command.ts:227`)
 
-**Story 21-6 — one receiving command, three documents.** A receipt names exactly one of `poId`, `asnId`, or `blindReasonCode` (400 otherwise); a `poLineId` only beside `poId`, an `asnLineId` only beside `asnId`. The ASN is locked exactly where the PO is (SKUs → ASN → its lines), a document in another warehouse is 409 `document-warehouse-mismatch` (POs too), and both documents settle through ONE fold — see *The receiving fold*.
+**Story 21-6 — one receiving command, three documents.** A receipt names exactly one of `poId`, `asnId`, or `blindReasonCode` (400 otherwise); a `poLineId` only beside `poId`, an `asnLineId` only beside `asnId`. The ASN is locked exactly where the PO is (SKUs → ASN → its lines), a document in another warehouse is 409 `document-warehouse-mismatch` (POs too), and both documents settle through ONE fold — see *The receiving fold*. **Story 21-9:** submit never refuses a document for its status — a terminal document holds the receipt, a closed PO with an open successor re-targets (see *Late receipts*); the warehouse check runs BEFORE the status, so a terminal document of another warehouse is `document-warehouse-mismatch` (it was `*-not-open`).
 
 **The hash rule (load-bearing — devices hold queued ops).** The payload hash is built from a hand-assembled object where `JSON.stringify` drops `undefined` and keeps `null`. 21-6 adds `asnId: command.asnId ?? undefined` (after `poId`) and `asnLineId: line.asnLineId ?? undefined` (after `poLineId`) — the 10.3 `weightsGrams` precedent — so every pre-21-6 PO or blind op hashes byte-for-byte as before. `test/asn.spec.ts` pins the pre-21-6 fingerprint as a golden literal (mutating `?? undefined` to `?? null` fails it). After hashing, the command **normalises** every optional line field (`poLineId`, `asnLineId`, `batchCode`, `mfgDate`, `weightsGrams` → `?? null`) before validation: the sync-report replay rebuild passes stored lines through raw, so an absent key must mean exactly what `null` means (an old payload without `weightsGrams` used to 500 in `assertWeightShape`).
 
@@ -285,7 +316,7 @@ Device-authenticated. Guards in order:
 5. `assertWarehouseInTenant`, `loadSkus` (404 naming the unknown SKU).
 6. Unit conversion + precision refusal (`:345-352`) — below this point every quantity is milli-units.
 7. `ensureReceivingBinInTx` (`:355`).
-8. PO arm (only when `poId !== null`): PO row `.for('update')`, 404 if absent, **409 `po-not-open` if closed** — a stale queued receipt retracts visibly. PO lines locked `.for('update')` (`:358-388`).
+8. PO arm (only when `poId !== null`): PO row `.for('update')`, 404 if absent, 409 `document-warehouse-mismatch` if another warehouse's, then the status: `open` → as before; `closed` → the successor walk (re-target, or the terminal arm) — **no longer 409 `po-not-open`** (21-9). The booked PO's lines locked `.for('update')`. The ASN arm mirrors it (404 → warehouse → `closed`/`cancelled` = terminal).
 9. `ensureBatchIdentity` (`:394`) — one `CatalogFacade.ensureBatchesInTx` per batch-tracked SKU; a batch code on an untracked SKU, or a missing one on a tracked SKU, is 400 before any write.
 
 Writes: `goods_receipt_notes` (code from `allocateGrnCode`), `goods_receipt_lines`, `purchase_order_lines.received_qty` increments, `over_receipts` rows, `devices.last_seen_at` heartbeat, `idempotency_keys`. Ledger: one `grn.received` movement per applied line via `InventoryFacade.appendLedgerEventInTx` (`:537`), `fromBinId: null → toBinId: receivingBin`. Emits `grn.recorded` (`:636`) plus one `over_receipt.requested` per pending excess (`:644`).
@@ -294,7 +325,7 @@ Writes: `goods_receipt_notes` (code from `allocateGrnCode`), `goods_receipt_line
 
 Guards: `assertPermission('review.decide')` → replay → row `.for('update')`, 404 if absent, **409 `over-receipt-decided` if not `pending`** (decisions are terminal).
 
-Approve: lock the SKU row (the 11.4 kit race), **then the document and its line (21-6, decision 3) — the lock order everywhere is over-receipt row → SKU → PO or ASN → line**; check the cumulative ceiling; ensure the **Receiving** bin (not the QC bin — the excess is ordinary intake), append a further `grn.received` movement for `excess_qty` carrying the GRN line's batch identity and the same `{grnId, poId?, poLineId?, asnId?, asnLineId?}` reference the submit wrote (`grnReferenceDoc`), bump the PO line's or the ASN line's `received_qty`, and for an ASN re-derive its status. **Approve never refuses on the document's status** — a pre-21-6 excess left pending on a closed PO, or one on a `received`/`closed` ASN, still applies. Reject: no movement at all and no lock beyond its own row. Both arms: conditional `UPDATE … WHERE status='pending'`, an `audit_events` row, and outbox `over_receipt.approved` | `over_receipt.rejected` (`:751`, `:821`).
+Approve: lock the SKU row (the 11.4 kit race), **then the document and its line (21-6, decision 3; 21-9: a row may carry its document and NO line — approving it locks the document, appends `grn.received` naming `{grnId, poId | asnId}` only, and credits no line) — the lock order everywhere is over-receipt row → SKU → PO or ASN → line**; check the cumulative ceiling; ensure the **Receiving** bin (not the QC bin — the excess is ordinary intake), append a further `grn.received` movement for `excess_qty` carrying the GRN line's batch identity and the same `{grnId, poId?, poLineId?, asnId?, asnLineId?}` reference the submit wrote (`grnReferenceDoc`), bump the PO line's or the ASN line's `received_qty`, and for an ASN re-derive its status. **Approve never refuses on the document's status** — a pre-21-6 excess left pending on a closed PO, or one on a `received`/`closed` ASN, still applies. Reject: no movement at all and no lock beyond its own row. Both arms: conditional `UPDATE … WHERE status='pending'`, an `audit_events` row, and outbox `over_receipt.approved` | `over_receipt.rejected` (`:751`, `:821`).
 
 Corrections are new events, never edits — that is why approval appends a second `grn.received` rather than amending the first.
 
@@ -325,6 +356,8 @@ For each input line (21-6: ONE fold for a PO and an ASN — an ASN line's openin
 - **Unmatched arm (21-6)** — a line of a PO/ASN receipt with **no line reference**, or whose **SKU differs from the referenced line's**, applies in full with no line reference, no ceiling and no over-receipt (the old no-`poLineId` arm, now also taking SKU mismatches). Goods that arrived always reach the ledger (zero-scan-loss); the document line is simply not credited. The response lists them: `unmatchedLines[{index, reason: 'no-line-reference' | 'line-sku-mismatch'}]` (present only when non-empty, so a pre-21-6 snapshot is byte-identical).
 - **Unknown PO line** → pushed to `rejected` with code `po-line-not-found` (an unknown ASN line: `asn-line-not-found`, `poLineId: null` + `asnLineId`); **non-`open` PO line** → `po-line-not-open` (ASN lines carry no status). Order: unknown → SKU mismatch → line status. All leave the *other* lines settling (`:450`, `:461`). This is the partial-settlement contract: the response carries `rejectedLines` only when non-empty (`:628`), and a receipt where *every* line was rejected still records a GRN with zero settled lines (`:495`).
 - **Otherwise**: `applied = max(0, min(qty, remaining))`, `excess = qty − applied` (`:471-473`). `applied` drives the ledger event and the `received_qty` bump; `excess > 0` becomes a pending `over_receipts` row (`:484`).
+- **Terminal arm (21-9)** — a closed PO with no open successor, or a cancelled/closed ASN: every line `applied = 0`, `excess = qty` (the open remainder counts as 0 even when `announced − received > 0`), one pending row per line against the document — its line when the id is known, the SKU matches and the line was not `carried`, else null; the GRN line's own line reference equals the row's. `po-line-not-open` is defensive since 21-9 (an open PO has no cancelled or carried line) and stays in the DTO enum for older clients.
+- **Re-target arm (21-9)** — a closed PO with an open successor: the line resolves by its SCANNED SKU to the successor's ONE open line of that SKU and takes the "otherwise" path there, whatever closed line it named; zero or several open lines of the SKU pend on the successor with no line.
 
 The GRN line itself always stores the **physical** `qty` with `applied_qty` alongside — so the DB CHECK `applied_qty <= qty` holds by construction and the excess is recoverable from the row pair without consulting `over_receipts`.
 
@@ -368,9 +401,10 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 | A GRN line records physical truth; only the within-open slice applies. | The fold (`receiving.command.ts:471`) + `goods_receipt_lines_applied_le_physical` CHECK (`0013:99`). |
 | `received_qty` may exceed `ordered_qty` (approved over-receipts). | The *absence* of a CHECK, recorded as a decision at `0013:91-94`. Do not "fix" this. |
 | A PO is not stock. | This module writes no stock table; `architecture.spec.ts` stock-table guard fails the build if one appears. |
-| Receipts land only against an **open** PO; a cancelled/carried *line* is rejected per-line while siblings settle. | `receiving.command.ts:375` (409) and `:459` (per-line rejection). |
-| 21-6: receipts land only against an `announced`/`partially_received` ASN, in the document's own warehouse. | 409 `asn-not-open` / `document-warehouse-mismatch` under the document lock. |
-| 21-6: a GRN references exactly one document (or none, with a reason); an over-receipt exactly one document pair. | `goods_receipt_notes_blind_pairing`, `goods_receipt_lines_one_line_reference`, `over_receipts_document_pair` (0064), probed by refused inserts in the migration's own post-assertion. |
+| A receipt APPLIES only against an open document; against a terminal one (closed PO, cancelled/closed ASN) it is accepted and every line pends (21-9 — it used to be refused); a closed PO with an open successor books on the successor. | The terminal and re-target arms of the fold, under the document lock. |
+| A receipt lands only in its document's own warehouse — checked before the document's status (21-9). | 409 `document-warehouse-mismatch` under the document lock. |
+| 21-9: a terminal document is never reopened nor re-derived — by a late submit or by an approval. | The terminal arm skips `deriveAsnStatusInTx`; `deriveAsnStatusInTx` leaves a terminal ASN as it is; a PO's status is never derived. |
+| 21-6: a GRN references exactly one document (or none, with a reason); an over-receipt exactly one document, and a line only beside its own document (21-9: the line is optional). | `goods_receipt_notes_blind_pairing`, `goods_receipt_lines_one_line_reference`, `over_receipts_document_pair` (0064, relaxed by 0066), each probed by refused inserts in its migration's own post-assertion. |
 | 21-6: no PO or ASN closes past an undecided excess; approve never refuses on document status. | `assertNoPendingOverReceiptsInTx` under the document lock; the approve arm's document lock. |
 | One open QC hold per `(tenant, warehouse, sku, bin)`. | Command pre-check 409 (`qc.command.ts:246`) + partial unique index `qc_holds_open_scope_unique`, whose violation is translated to the same 409 (`:316-325`). |
 | Held stock returns to the bin the hold recorded — never a caller-chosen one. | `qc_holds.bin_id` captured at place time; release passes `row.binId` as `toBinId` (`qc.command.ts:505`). |
@@ -389,13 +423,13 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 
 | Type | Reference kind | Batch arm | Serial arm | Shape |
 | --- | --- | --- | --- | --- |
-| `grn.received` (`ledger-registry.ts:221`) | `grn-receipt` (`grnId`, optional `poId`/`poLineId`/`asnId`/`asnLineId` — 21-6; each omitted when absent, on submit AND approve, so a PO or blind event's canonical bytes are unchanged; an unmatched line names its document but no line) | yes | **no** — there is no serial intake path yet | `fromBinId: null → toBinId: Receiving bin` |
+| `grn.received` (`ledger-registry.ts:221`) | `grn-receipt` (`grnId`, optional `poId`/`poLineId`/`asnId`/`asnLineId` — 21-6; each omitted when absent, on submit AND approve, so a PO or blind event's canonical bytes are unchanged; an unmatched line names its document but no line; 21-9: approving a null-line late row names `{grnId, poId | asnId}` only) | yes | **no** — there is no serial intake path yet | `fromBinId: null → toBinId: Receiving bin` |
 | `qc.held` (`:239`) | `qc-hold` (`holdId`, `fromBinId`) | yes | no | origin bin → QC-hold bin, one event per batch arm |
 | `qc.released` (`:247`) | `qc-hold` (`holdId`) | yes | no | QC-hold bin → origin bin, replaying the hold's arms |
 
 **Outbox types** (in-transaction append, AD-7 — a replayed command appends nothing because it returns before the append):
 
-`vendor.created` · `po.created` · `po.amended` · `po.closed` (payload `{ purchaseOrder, successor }`) · `asn.created` · `asn.amended` · `asn.closed` · `asn.cancelled` (21-6, payload `{ asn }`) · `grn.recorded` (full GRN snapshot — `asnId`/`asnCode`, line `asnLineId`, `unmatchedLines` only when present) · `over_receipt.requested` · `over_receipt.approved` · `over_receipt.rejected` (21-6: `poId`/`poLineId` null on an ASN's excess, `asnId`/`asnLineId` present only then) · `qc_hold.placed` · `qc_hold.released`.
+`vendor.created` · `po.created` · `po.amended` · `po.closed` (payload `{ purchaseOrder, successor }`) · `asn.created` · `asn.amended` · `asn.closed` · `asn.cancelled` (21-6, payload `{ asn }`) · `grn.recorded` (full GRN snapshot — `asnId`/`asnCode`, line `asnLineId`, `unmatchedLines` only when present; 21-9: `poCode` only on a re-targeted receipt, `poId` then the successor) · `over_receipt.requested` · `over_receipt.approved` · `over_receipt.rejected` (21-6: `poId`/`poLineId` null on an ASN's excess, `asnId`/`asnLineId` present only then; **21-9: a null-line row carries `asnId` WITHOUT `asnLineId`, or `poId` with `poLineId: null`**) · `qc_hold.placed` · `qc_hold.released`.
 
 **Audit rows** (`audit_events`, `reference` = the idempotency key): `over_receipt.approved|rejected` (`receiving.command.ts:810`), `qc_hold.placed` (`qc.command.ts:369`), `qc_hold.released` (`qc.command.ts:546`), `asn.created|amended|closed|cancelled` (21-6). The PO and vendor commands write no audit row. **21-7b:** a portal-announced ASN's `asn.created` row carries the CLIENT USER as actor — the only record that it came from the portal (no `origin` column, decision 3; no route reads it yet — the operator badge is PENDING). Its outbox `asn.created` payload is the operator `{asn}`, identical to an operator-keyed one.
 
@@ -430,6 +464,12 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 13. **(21-7b) The portal announce and the operator create share ONE `idempotency_keys` table** (unique on `(tenant_id, key)`). The portal fingerprint therefore starts with `surface: 'portal'`: without it, a portal POST whose fields equal an operator create's (minus `clientId`, which both carry) under the same key would re-serve the operator's `{asn}` snapshot — `clientId`, `warehouseId`, `statusNote` — to the portal. Both directions answer 422; both hashes are pinned by goldens read from `idempotency_keys` (`test/portal-asn.spec.ts`).
 
 14. **(21-7b) `finish` builds the stored snapshot through a callback.** The operator commands pass `operatorSnapshot` (`{asn}`), the announce passes the `portalAsnInTx` read-back — the outbox payload stays the operator `{asn}` for both. Do not let the portal shape leak into the outbox, or the operator shape into the portal snapshot.
+
+---
+
+15. **(21-9) A late receipt reports only through `excessQty`.** Never route a terminal-document line into `unmatchedLines` (the device prints "booked without crediting") or `rejectedLines` ("not booked") — it is neither; it is held. The mobile fixture test pins the "held for approval" note for the all-excess 201.
+
+16. **(21-9) Approved excess is putaway work.** Approval appends `grn.received` into the Receiving bin but never touches `applied_qty` (GRN lines are immutable). Anything that derives putaway work from `applied_qty` alone strands approved excess — the task list, the placement's remaining check and the Overview "awaiting putaway" tile all read `applied_qty + Σ approved over_receipts.excess_qty` (`approvedExcessByLine` / `approvedExcessOfLineInTx` in `putaway.command.ts`, the same sum inline in `kpis.ts`).
 
 ---
 
