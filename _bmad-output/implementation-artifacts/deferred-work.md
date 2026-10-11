@@ -672,3 +672,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-9-handheld-late-asn-receipt.md`
   summary: The approved-excess putaway rule is implemented three times (putaway facade, putaway command, kpis.ts awaiting tile) with no cross-scenario agreement test.
   evidence: Code review C14 — a shared SQL fragment or a test comparing task counts to the tile across mixed scenarios would stop drift.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-10-client-suspension.md`
+  summary: Delete `getClientStatusInTx` (clients.facade.ts) — unused since 21-10 moved every create-gate to `shareLockClientInTx`; a stray future use would reopen the suspension race.
+  evidence: Code review C12 — no callers in src. The 21-10 spec froze it as unchanged on the false premise that it had other (read) callers. Fold into 21-11 hardening.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-10-client-suspension.md`
+  summary: Test the rate-card cancel/discard failure path on the extracted ConfirmRow (refusal verb, panel stays open, retry reuses the key), and the documented 409 conflict / 401 arms of PATCH clients/{c}/status.
+  evidence: Code review C13, C14 — untested before the refactor as well; covered indirectly by the clients-card retry test.
