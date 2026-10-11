@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 11-10-2026 20:10
+last_updated: 10-11-2026 23:07
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -231,7 +231,7 @@ development_status:
   # findings — 21-9 handheld late ASN receipt (A1), 21-10 client suspension (A3),
   # 21-11 hardening + portal decoupling + pinned tests (A4-A6). Epic reopened.
   21-9-handheld-late-asn-receipt: done
-  21-10-client-suspension: review
+  21-10-client-suspension: done
   21-11-epic-21-hardening: backlog
   epic-21-retrospective: done
 
@@ -1050,7 +1050,7 @@ action_items:
     action: "Story 21-10: client suspend/reactivate owner command + Settings action,
       making the client-suspended gates reachable (X2)"
     owner: "story 21-10 (BE + FE)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
   - id: "epic-21-retro-item-89-story-21-11-hardening-portal-controller"
     epic: 21
