@@ -680,3 +680,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-10-client-suspension.md`
   summary: Test the rate-card cancel/discard failure path on the extracted ConfirmRow (refusal verb, panel stays open, retry reuses the key), and the documented 409 conflict / 401 arms of PATCH clients/{c}/status.
   evidence: Code review C13, C14 — untested before the refactor as well; covered indirectly by the clients-card retry test.
+
+- source_spec: none
+  summary: 21-11b — frontend hardening from the epic-21 retro: one charge-label source (F2), a `failed` arm on useTenantWarehouses with one failed-read rendering for warehouse selects (F3), and decoupling the portal from operator code by moving LineRows and the outbound/shell primitives into shared components (A5).
+  evidence: Split from 21-11 by the human (2026-10-11): independently shippable FE-only goal; 21-11a takes the backend hardening and pinned tests first.
