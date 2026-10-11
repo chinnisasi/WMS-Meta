@@ -2,8 +2,9 @@
 title: 'Epic-21 backend hardening — portal controller scan, replay under the lock, status pin, dead-helper removal, and the two pinned tests'
 type: 'chore'
 created: '2026-10-11'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '592f70373d5cd6787806f01408de47587eb868a8'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -130,13 +131,13 @@ Paths are relative to `workspace/core/backend/wms-be`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `test/architecture.spec.ts` -- the controller scan + detector -- X3.
-- [ ] The five command files -- replay under the lock -- B2; plus one same-key race per command in its spec.
-- [ ] `test/client-dimension.spec.ts` -- the status pin -- B6.
-- [ ] `clients.facade.ts` -- delete `getClientStatusInTx` -- the 21-10 deferral.
-- [ ] `test/clients.spec.ts` -- the HTTP cross-client wave -- S2a.
-- [ ] `test/client-invoices.spec.ts` -- discard → re-prepare identical -- S2b.
-- [ ] Meta docs:
+- [x] `test/architecture.spec.ts` -- the controller scan + detector -- X3.
+- [x] The five command files -- replay under the lock -- B2; plus one same-key race per command in its spec.
+- [x] `test/client-dimension.spec.ts` -- the status pin -- B6.
+- [x] `clients.facade.ts` -- delete `getClientStatusInTx` -- the 21-10 deferral.
+- [x] `test/clients.spec.ts` -- the HTTP cross-client wave -- S2a.
+- [x] `test/client-invoices.spec.ts` -- discard → re-prepare identical -- S2b.
+- [x] Meta docs:
   - `clients.md:40,41,132`;
   - `inbound.md:302`;
   - IMPLEMENTATION-GUIDE §1: a lock helper must **not** also check status (the `loadOpenPo` lesson), or the replay under the lock is unreachable; cite the race-test pattern;
@@ -148,6 +149,13 @@ Paths are relative to `workspace/core/backend/wms-be`.
 - Given the full BE suite, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Baseline: wms-be `592f70373d5cd6787806f01408de47587eb868a8` (`baseline_commit`). Backend only.
+- Work on `feat/21-11a-epic-21-be-hardening` in wms-be (already checked out). Leave everything uncommitted: no commit, push or PR.
+- Run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming the story.
+- Real Postgres and Valkey must be up for the suites (wms-be docker-compose).
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
+- Do not touch wms-fe or wms-mobile.
 
 ## Spec Change Log
 
@@ -169,6 +177,25 @@ Design review (2026-10-11), one lens: claims, coverage and testability.
 | 10 | The cross-client wave asserted dispatch only; the risk is the shared picklist | low | Fixed: one-picklist and `pick.picked` attribution asserts |
 | 11 | The B6 regex and `conname` filter are sound | — | No change |
 | 12 | The docs list is complete; the PENDING line for unaudited commands was missing | low | Fixed |
+
+**Code review (2026-10-12)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V); 29 raw findings, 25 distinct.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | V, B | The scan reads only `portal.controller.ts`; a portal route in another controller bypasses it | medium — verified, `architecture.spec.ts` `PORTAL_CONTROLLER` | patch: pin `PortalSessionGuard` users to that file |
+| C2 | E | An allowed portal read could receive a client id from the query or body | medium | patch: every call passes `session.clientId`; detector |
+| C3 | B, E | The delegation check accepts extra work inside its arguments | low | patch: pin the exact delegation text |
+| C4 | E | A `PORTAL_READS` file missing from the class map yields `undefined` pairs silently | low | patch: throw |
+| C5 | B | ASN `close` has no race test (a different path from cancel) | medium | patch |
+| C6 | B | The wave test does not count pick events, and sits under the 21-10 banner | low | patch |
+| C7 | B | The status pin looks the constraint up by name only | low | patch: `conrelid` |
+| C8 | B | The CAP-5 test regenerates the draft that the later `stale` test uses | low | patch: state or remove the dependency |
+| C9 | B, E | Docs: `clients.md` says create locks; the command class comment is stale; `catalog.md` misses the SKU-correction replay; the `inbound.md` ASN intro and PO anchors are stale; the guide says `PoCommand` | low | patch: docs |
+| C10 | V, B, E | The PENDING unaudited list is incomplete and reads as exhaustive; same-key concurrent creates are a separate class | low | patch: non-exhaustive, extended, create class noted |
+| C11 | E | Same-key concurrent creates (ASN create/announce, PO create) answer 409 instead of replaying | medium — real; pre-existing, a different class from B2 | defer (PENDING via C10) |
+| C12 | B | The race helpers are copied into three spec files | low — the spec chose per-spec helpers (the repo convention) | reject |
+| C13 | B, E | `codeOnly` does not handle regex literals | low — the controller has none; the fix needs a parser | reject |
+| C14 | B | The wave test does not check billing metering rows | low — outside this pin's intent (CAP-2 and attribution) | reject |
 
 ## Design Notes
 
