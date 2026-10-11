@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-11-2026 23:19
+last_updated: 10-12-2026 00:16
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -234,7 +234,7 @@ development_status:
   21-10-client-suspension: done
   # Split by the human (2026-10-11): 21-11 by repo — 21-11a backend hardening + the
   # two pinned tests; 21-11b frontend consistency + portal decoupling.
-  21-11a-epic-21-be-hardening: in-progress
+  21-11a-epic-21-be-hardening: review
   21-11b-epic-21-fe-hardening: backlog
   epic-21-retrospective: done
 

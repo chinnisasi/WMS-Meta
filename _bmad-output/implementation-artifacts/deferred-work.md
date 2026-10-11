@@ -674,7 +674,7 @@
   evidence: Code review C14 — a shared SQL fragment or a test comparing task counts to the tile across mixed scenarios would stop drift.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-10-client-suspension.md`
-  summary: Delete `getClientStatusInTx` (clients.facade.ts) — unused since 21-10 moved every create-gate to `shareLockClientInTx`; a stray future use would reopen the suspension race.
+  summary: ~~Delete `getClientStatusInTx` (clients.facade.ts) — unused since 21-10 moved every create-gate to `shareLockClientInTx`; a stray future use would reopen the suspension race.~~ **DONE 2026-10-11 by story 21-11a** (`spec-21-11a-epic-21-be-hardening.md`) — the helper is deleted; `clients.md` and `inbound.md` no longer name it.
   evidence: Code review C12 — no callers in src. The 21-10 spec froze it as unchanged on the false premise that it had other (read) callers. Fold into 21-11 hardening.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-10-client-suspension.md`
