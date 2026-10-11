@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-12-2026 00:16
+last_updated: 10-12-2026 00:46
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -234,7 +234,7 @@ development_status:
   21-10-client-suspension: done
   # Split by the human (2026-10-11): 21-11 by repo — 21-11a backend hardening + the
   # two pinned tests; 21-11b frontend consistency + portal decoupling.
-  21-11a-epic-21-be-hardening: review
+  21-11a-epic-21-be-hardening: done
   21-11b-epic-21-fe-hardening: backlog
   epic-21-retrospective: done
 
@@ -1062,7 +1062,7 @@ action_items:
       pin; asn-not-open description; one FE charge-label source; useTenantWarehouses
       failed arm (X3 B2 B6 X4 F2 F3)"
     owner: "story 21-11"
-    status: open
+    status: in-progress
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
   - id: "epic-21-retro-item-90-story-21-11-decouple-portal-from-operato"
     epic: 21
@@ -1076,7 +1076,7 @@ action_items:
     action: "Story 21-11: pinned tests — HTTP cross-client wave e2e; delete-draft,
       re-prepare, identical invoice lines (S2, CAP-5)"
     owner: "story 21-11"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
   - id: "epic-21-retro-item-92-doc-reconciliation-in-the-retro-pr-3pl-s"
     epic: 21
