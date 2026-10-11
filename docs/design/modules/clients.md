@@ -4,7 +4,7 @@
 
 Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first — the command skeleton, migration checklist and vocabulary pattern below are assumed, not repeated.
 
-Story 21-1 stood up the table and the `self` client; 21-2 added the `app.client_id` RLS clause; **21-2b gave it an admin surface and made attribution real**: owners register and rename client brands, a catalog import names the client its new SKUs belong to, and orders, purchase orders and every ledger movement take their client **from their SKUs**. Status transitions (suspend/depart) and deletion are still absent (PENDING). **21-7 adds the client portal**: a fifth role `client` paired with `users.client_id`, a portal session token carrying `client_id`, the operator fence, and `PortalSessionGuard` + ten read-only `portal/` routes — see *The client portal* below. **21-7b makes it read-mostly plus ASN**: the portal's first write, `POST portal/inbound/asns`, and the two reads its form needs.
+Story 21-1 stood up the table and the `self` client; 21-2 added the `app.client_id` RLS clause; **21-2b gave it an admin surface and made attribution real**: owners register and rename client brands, a catalog import names the client its new SKUs belong to, and orders, purchase orders and every ledger movement take their client **from their SKUs**. Departure and deletion are still absent (PENDING); **21-10 adds suspend and reactivate** — see *Suspension* below. **21-7 adds the client portal**: a fifth role `client` paired with `users.client_id`, a portal session token carrying `client_id`, the operator fence, and `PortalSessionGuard` + ten read-only `portal/` routes — see *The client portal* below. **21-7b makes it read-mostly plus ASN**: the portal's first write, `POST portal/inbound/asns`, and the two reads its form needs.
 
 ---
 
@@ -26,9 +26,10 @@ RLS: `clients_tenant_isolation` carries the `app.client_id` clause on `id` (21-2
 | `POST /tenants/{t}/clients` `{code, name}` | `clients.manage` (owner-only) | 201 `{client}`, code trimmed + uppercased, `active`; 400 `validation-failed` (shape, or the reserved `SELF`); 409 `duplicate-client-code` (sequential or concurrent — the unique index is the arbiter); 403 `role-denied`; 422 `idempotency-key-reuse` |
 | `PATCH /tenants/{t}/clients/{clientId}` `{name}` | `clients.manage` | 200 `{client}` (an unchanged name writes and audits nothing); 400 for the `self` client (its name mirrors the tenant); 404 unknown/foreign id; 400 malformed id |
 | `PATCH /tenants/{t}/clients/{clientId}/tax-details` (21-5) | **`billing.invoice`** (owner + accountant) | `{legalName?, gstin?, billingLine1?, billingLine2?, billingCity?, billingStateCode?, billingPincode?}` — absent = unchanged, `null` or blank = cleared → 200 `{client}` (every client read now carries `taxDetails`); 400 `validation-failed` for a malformed GSTIN or one whose prefix is not a registration code, a state code off `GSTIN_STATE_CODES`, a GSTIN in another state than the billing state (checked over the MERGED values), a bad pincode, an over-long field, or the `self` client (never invoiced); 404 unknown; an unchanged patch writes and audits nothing |
+| `PATCH /tenants/{t}/clients/{clientId}/status` (21-10) | `clients.manage` | `{status: active\|suspended}` → 200 `{client}`; 400 `validation-failed` (any other status — `departed` included — a malformed id, or the `self` client); 409 `client-not-active` (departed — its status cannot change); 404 unknown/foreign; 422 key reuse. A same-status request writes and audits nothing but **stores the key** |
 | `POST /tenants/{t}/catalog/skus/{skuId}/client` `{clientId}` | `clients.manage` | catalog-owned — see `catalog.md`: `200 {skus}` (every SKU moved — the group); 409 `sku-has-history` naming the member with history |
 
-Commands: `ClientsCommand.create` / `.rename` / (21-5) `.updateTaxDetails` (`src/modules/clients/clients.command.ts`) follow the house skeleton — normalise + hash before the tx; authority → replay → shape validation → write → audit (`client.created` / `client.renamed` / `client.tax-details-updated`, target type `client`, reference = the Idempotency-Key) → key LAST. **No outbox event** — nothing consumes a client's existence yet.
+Commands: `ClientsCommand.create` / `.rename` / (21-5) `.updateTaxDetails` / (21-10) `.updateStatus` (`src/modules/clients/clients.command.ts`) follow the house skeleton — normalise + hash before the tx; authority → replay → shape validation → write → audit (`client.created` / `client.renamed` / `client.tax-details-updated` / `client.suspended` / `client.reactivated`, target type `client`, reference = the Idempotency-Key) → key LAST. **No outbox event** — nothing consumes a client's existence yet.
 
 ## The seams
 
@@ -36,7 +37,8 @@ Commands: `ClientsCommand.create` / `.rename` / (21-5) `.updateTaxDetails` (`src
 - `clients.facade.ts` — the read seam, file-level `…InTx` functions on the caller's transaction (the `ensureReceivingBinInTx` shape) plus the injectable `ClientsFacade.listClients`:
   - `assertClientInTenantInTx` → 404 `not-found`
   - `getClientsInTx` (bulk `{id, code, systemOwned}`), `getClientLabelsInTx` (bulk id → refusal label: a client's code, the tenant's own as "<tenant name> (your company)" — never `self`), `listClientsInTx`
-  - `lockClientInTx` (21-3) — the client row `FOR UPDATE` plus its status, 404 when absent: billing's rate-card activate/cancel serialise every dated transition of one client on it (a lock, never a write); `getClientStatusInTx` is the unlocked read the draft create uses. 21-5's client-invoice prepare, refresh and issue lock it too (client row → invoice row)
+  - `lockClientInTx` (21-3) — the client row `FOR UPDATE` plus its status, 404 when absent: billing's rate-card activate/cancel serialise every dated transition of one client on it (a lock, never a write). Since 21-10 the draft create reads status through `shareLockClientInTx` (below); `getClientStatusInTx`, the unlocked read, is **unused since 21-10 and must not be used by a create-gate** (deletion scheduled in 21-11). 21-5's client-invoice prepare, refresh and issue lock it too (client row → invoice row)
+  - `shareLockClientInTx` (21-10) — the same facts under `FOR SHARE`, 404 when absent: the gates that CREATE something under a client and refuse a non-active one (the rate-card draft, the portal announce, the portal-user invite) read status through it, so a suspend (`FOR UPDATE`) cannot commit between their read and their insert. Lock order: the client first, then documents — nothing locks a card or an ASN before its client. `getClientStatusInTx` is unchanged and, since 21-10, has no caller (deletion scheduled in 21-11)
   - `getClientInTx` (21-5) — one client's full snapshot including `taxDetails`, 404 when absent: the recipient a client invoice prints
   - `assertSingleClientInTx(tx, tenant, clientIds, subject)` — **the one attribution rule**: one distinct client or 409 `mixed-client` naming the codes (`mixedClient()`)
 
@@ -72,6 +74,28 @@ Two layers, both required and both proved: the transaction stamp (RLS — the `w
 
 Decisions (2026-10-09): any warehouse of the tenant; announce only — no portal amend, close or cancel (the 3PL cancels a mistaken notice; portal cancel is PENDING); no origin marker — the `asn.created` audit row's actor (the client user) is the only record that an ASN came from the portal (an operator badge is PENDING); no portal write cap (accepted risk, PENDING). The result is an ordinary ASN: operators, the device snapshot and receiving treat it exactly as one an operator keyed. The whole announce write set (header, line, key, audit, outbox, read-back) is proved admitted under a client stamp as `wms_rls_probe` (`test/client-isolation.spec.ts`, 21-7b block, with a 42501 positive control), and `test/architecture.spec.ts` pins the command's `{ clientId: command.clientId }` stamp.
 
+## Suspension (story 21-10)
+
+An owner moves a client brand between `active` and `suspended` — `PATCH clients/{c}/status`, `ClientsCommand.updateStatus`, and the Settings row actions Suspend / Reactivate. `departed` is outside the body's tuple (`CLIENT_STATUS_TARGETS = ['active', 'suspended']`, one tuple for the DTO `@IsIn`, its OpenAPI enum and the command's own shape check); departure stays PENDING.
+
+**Order:** status shape (400, above the tx) → hash `{arm: 'status', tenantId, clientId, status}` (pinned by a golden) → `clients.manage` → replay → id shape → lock the client `FOR UPDATE` (404) → replay again under the lock → `self` (400) → departed (409 `client-not-active`) → same status: a no-op that **writes the key** → update `status`, `updatedAt` → audit → key. No outbox event.
+
+**Why the no-op stores its key, unlike rename:** a status is not idempotent in value. After someone else reactivates, a late retry of a stored no-op "suspend" must replay the stored answer — never suspend again.
+
+**What it stops** — exactly the gates that already read status, per request (the portal token carries only `client_id`, §7e), so it bites on the next call and reactivation restores access at once:
+
+| Gate | Answer while suspended |
+|---|---|
+| `PortalSessionGuard` — every portal call, incl. invoices and the service report | 403 `client-suspended` (the web portal signs out to `/login?portal=suspended`) |
+| Portal sign-in, portal `me` | 403 `client-suspended` |
+| Portal ASN announce | 403 `client-suspended` (re-read in its own transaction, under `FOR SHARE`) |
+| Portal-user invite | 409 `client-not-active` (under `FOR SHARE`) |
+| Rate-card draft (under `FOR SHARE`) and activation (under the client `FOR UPDATE`) | 409 `client-not-active` |
+
+**What it does not stop** (decision 1): operator work — orders, receipts, picks, dispatch — and billing behave as for an active client. Open ASNs stay open (decision 2); an operator can still cancel any. No session is revoked; no per-user status.
+
+**Accepted edges:** existing rate-card drafts can still be edited or discarded while suspended (those paths read no status) — harmless, because activation re-checks under its own lock (21-10 design review #14). An invite issued before the suspension can still be accepted, but that user cannot sign in until the client is reactivated (#16).
+
 ## Attribution (story 21-2b) — derived, never chosen
 
 The SKU is the source of truth. Everything else **derives** its client:
@@ -105,5 +129,5 @@ Invoicing: a client brand's order is **not GST-invoiced** (decision 5) — `orde
 - **SKU codes and barcodes stay unique across the tenant** (decision 2) — an existing code under any client is `duplicate-sku-code`, whose detail now names the owner client.
 - **Residual race (PENDING):** the SKU correction locks the SKU row and re-checks history, but order/PO creation does not lock SKU rows; a correction committing between an order's preflight read and its write could leave that order on the SKU's old client.
 - **The ledger backfill needed the append-only trigger dance** (0040) — any future migration that UPDATEs the ledger repeats it.
-- **Nothing can suspend a client yet** — `suspended` is reachable only by SQL. Since 21-7 two paths DO branch on it: a client user's sign-in and every portal request (403 `client-suspended`) — and, since 21-7b, the portal announce command itself, re-checking inside its own transaction — and the client-user invite (409 `client-not-active`) — PENDING: status transitions and departure.
+- **Suspension exists since 21-10; departure does not** — an owner suspends and reactivates (see *Suspension*); `departed` is still reachable only by SQL (PENDING). A gate that refuses a non-active client while creating something under it must read status through `shareLockClientInTx`, never the unlocked `getClientStatusInTx` — an unlocked read lets a suspend commit between the read and the insert (21-10 design review #2).
 - **`users.client_id` is immutable by construction (21-7)** — never add an `.update(users)` that touches it: the session token's `client_id` claim mirrors it for 15 minutes, and the architecture scan fails the build.

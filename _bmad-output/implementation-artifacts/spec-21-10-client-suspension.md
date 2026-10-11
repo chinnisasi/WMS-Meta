@@ -2,8 +2,9 @@
 title: 'Client suspension — an owner suspends and reactivates a client, making the portal gates reachable'
 type: 'feature'
 created: '2026-10-11'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: '2fea21bbdc9946993bcffabc2d18d209074f8aa9'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -190,17 +191,17 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` clients: `CLIENT_STATUS_TARGETS`, `updateStatus`, `shareLockClientInTx`.
-- [ ] `wms-be` gates: the share lock in the rate-card draft, ASN announce and portal invite.
-- [ ] `wms-be` api: the route, DTO and `@ApiResponse` arms; `openapi.json`.
-- [ ] `wms-be` tests: `clients.spec.ts` (matrix, golden, late retry, portal end to end) and the races.
-- [ ] `wms-fe`:
+- [x] `wms-be` clients: `CLIENT_STATUS_TARGETS`, `updateStatus`, `shareLockClientInTx`.
+- [x] `wms-be` gates: the share lock in the rate-card draft, ASN announce and portal invite.
+- [x] `wms-be` api: the route, DTO and `@ApiResponse` arms; `openapi.json`.
+- [x] `wms-be` tests: `clients.spec.ts` (matrix, golden, late retry, portal end to end) and the races.
+- [x] `wms-fe`:
   - `api:generate` and the wrapper;
   - the extracted `confirm-row.tsx`, with rate cards moved onto it;
   - the clients-card panel union, labels, actions and copy;
   - the `clientReason` arms;
   - tests.
-- [ ] Meta docs:
+- [x] Meta docs:
   - `modules/clients.md` (`:7,108`: suspension exists; what it stops and what it doesn't; existing drafts stay editable; a pre-suspension invite can be accepted but cannot sign in);
   - `API-SURFACE.md`;
   - both repo contracts;
@@ -213,6 +214,13 @@ context:
 - Given the full BE and FE suites, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Baselines: wms-be `2fea21bbdc9946993bcffabc2d18d209074f8aa9` (`baseline_commit`), wms-fe `86bdf8580c0ca72d4310f48894eecaf832bbe61d`.
+- Work on `feat/21-10-client-suspension` in wms-be and wms-fe (already checked out). Leave everything uncommitted: no commit, push or PR.
+- In wms-be, run `bun run test -- <file>`; never bare `bun test`, and never two jest invocations at once (globalSetup sweeps kill the other run's DBs). The ledger idempotency-race test can flake under full-suite load only; rerun it alone before blaming the story. In wms-fe, `bun test` is correct.
+- Real Postgres and Valkey must be up for the BE suites (wms-be docker-compose).
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
+- Do not touch wms-mobile.
 
 ## Spec Change Log
 
@@ -241,6 +249,32 @@ Design review (2026-10-11), two lenses: backend (K) and web and tests (W).
 | 17 | W | Other pickers show no status | low | Decided: unchanged (operator work continues) |
 | 18 | W | The FE design docs were missing from the docs task | low | Fixed |
 | 19 | K, W | Gate line refs, per-request reads, token claims, portal-shell sign-out | — verified | No change |
+
+**Code review (2026-10-11)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V) over the combined diff; 28 raw findings, 23 distinct.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | B, E | The suspend confirm text and DTO description overstate the server: existing drafts stay editable, and only NEW portal users are blocked | medium — verified against `clients.md` accepted edge #14 and the invite gate | patch |
+| C2 | V, B | The invite gate's share lock has no race test; reverting it passes everything | medium — pre-verified gap | patch: third parked request |
+| C3 | V | Replay under the lock is never exercised; deleting it turns a concurrent same-key retry into 409 | medium — pre-verified gap | patch: same-key race |
+| C4 | B | `clientReason`'s `client-not-active` arm gives "departed" text for every action; the `validation-failed` fallback is wrong for a status change | low | patch: branch on action |
+| C5 | B, E | Keep is clickable mid-request, so a "cancelled" suspend still lands | low — a one-attribute fix | patch |
+| C6 | E | A late status response closes or overwrites a panel opened meanwhile | low | patch: same-panel guard |
+| C7 | B | `CLIENT_STATUS_TARGETS` is not type-checked against the schema vocabulary | low | patch: `satisfies` |
+| C8 | E | Race-test cleanup can leak a parked suspend into later tests if `waitParked` throws | low | patch: settle in-flight in `finally` |
+| C9 | B | `clients.md` contradicts itself about `getClientStatusInTx` | low | patch: doc |
+| C10 | B | FE guide refs are stale; `ConfirmRow` is listed under the wrong key lifetime | low | patch: doc |
+| C11 | B | The PENDING "revisit with the status transitions" note is stale | low | patch: doc |
+| C12 | B, E | `getClientStatusInTx` now has no callers, so a dead export invites a future gate to reopen the race | medium — verified (`clients.facade.ts:209`, no callers). The spec's "other callers are reads" premise was wrong; the frozen Never forbids changing it | defer: delete in 21-11 (doc warns meanwhile) |
+| C13 | V | The rate-card cancel/discard failure path is untested after the `ConfirmRow` rewire | low — untested before the refactor too | defer |
+| C14 | B | The documented 409 `conflict` and 401 arms are untested | low | defer |
+| C15 | B | Terminal refusals (404, departed) leave a stale list and an open panel | low — adds branches; repeating just re-shows the refusal | reject |
+| C16 | E | The suspend's `FOR UPDATE` would block FK `KEY SHARE` inserts | false — no foreign key references `clients` (grep) | reject |
+| C17 | B | A replayed no-op returns the stored snapshot, which can contradict the current state | false — intended (decision recorded in Design Notes; the late-retry test pins it) | reject |
+| C18 | B | The generated client, `openapi.json` and the spec were omitted from the reviewed diff | false — excluded on purpose as generated noise; the spec was provided as the claims file | reject |
+| C19 | E | `ConfirmRow` with a null session does nothing silently | low — pre-existing behaviour of the extracted rate-cards row | reject |
+| C20 | B | `CLIENT_STATUS_TARGETS` should live in `clients.schema` | low — location is the spec's choice | reject |
+| C21 | B | `clients.md` should forbid `getClientStatusInTx` with an architecture rule | low — superseded by deleting it in 21-11 | reject |
 
 ## Design Notes
 
