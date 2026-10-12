@@ -772,3 +772,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
   summary: The 9-2b Expo wiring was never run on a device — `push-expo.ts`, the gate's pending tap, badge-in's take and the inbox's `?tab`/`?tap` handling are verified by code review only.
   evidence: Code review. wms-mobile has no screen harness (no component tests, no Detox/Maestro) and no EAS project or FCM/APNs credentials to send a real push. Every decision is pinned in `push-routing.test.ts` / `push.test.ts`; the wiring between them is not.
+
+- source_spec: none
+  summary: 9-3b — async audit export of 100k events with a completion notification (export job table + worker, server-side CSV, storage or signed download, the first per-user notification audience).
+  evidence: Split from 9-3 by the human (2026-10-12). No export/object-storage infrastructure exists; 9-2's notification rows have no recipient column.
+
+- source_spec: none
+  summary: 9-3c — ledger tamper-evidence operations (scheduled verifyChain/anchorChain job, a WORM S3 Object Lock anchor store behind LedgerAnchorStore, a subscriber turning ledger.chain_broken into a severity-1 alert, the digest export surface, and the pre-0026 legacy-event cutover).
+  evidence: Split from 9-3 by the human (2026-10-12). verify/anchor/digest exist as functions (ledger.service.ts) but nothing calls them; no S3 client.
+
+- source_spec: none
+  summary: 9-3d — the NFR-5 7-year audit retention lifecycle (partitioning of ledger_events/audit_events, archive tiering, restore-verified backups); an infrastructure story after Epic 9.
+  evidence: Split from 9-3 and deferred by the human (2026-10-12) — mostly IaC the architecture defers (ARCHITECTURE-SPINE.md:312); no table is partitioned today.
