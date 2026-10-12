@@ -692,3 +692,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-1b-dashboard-click-through.md`
   summary: A cross-repo contract check between the backend's tile drill queries (kpis.ts) and the frontend's parseDrill SPECS — today the FE round-trip test uses a hand copy, so a new backend drill key silently turns that tile's link into "Link not applied".
   evidence: Code review C19 — ReportingDrillDto.query is Record<string,string>, so generated types can't catch it; a backend-emitted fixture of the Overview's drills consumed by the FE test, or a BE test pinning drill keys to a shared list, would close it.
+
+- source_spec: none
+  summary: 9-2b — mobile pushes for task assignment, approval-needed and at-risk cutoff (expo-notifications, a device push token at enrollment, an Expo push sender as an outbox consumer, a server-side at-risk cutoff sweep).
+  evidence: Split from 9-2 by the human (2026-10-12). Open product questions first: the handheld has no "task assigned to a person" concept (warehouse-wide inbox), and approvers (owner/ops_manager) have no mobile login today.
