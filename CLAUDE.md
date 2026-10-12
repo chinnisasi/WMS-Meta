@@ -74,6 +74,7 @@ Every story produces its design **before** any implementation, and that design i
 - Load-bearing claims asserted but not verified — **check them against the code, do not trust the spec**
 - A migration or data change with no stated way to prove it worked
 - Anything the spec says is "obvious" or "trivial"
+- The standing checklists in `docs/design/IMPLEMENTATION-GUIDE.md` §9 (portal surface, idempotency surface, periods/IST, verify-before-freezing) — walk every one that applies
 
 ## Cross-repo ordering rules
 
