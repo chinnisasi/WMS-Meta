@@ -23,6 +23,7 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **channels** | [`channels.md`](channels.md) | The sealed-credential connection vault + the frozen-three provider registry, standing buffers held through the reservation core (AD-13), and the outbox availability sync with the RN-5 breaker (7-1) |
 | **billing** | [`billing.md`](billing.md) | Client billing (AD-25, Epic 21): rate cards (21-3) — versioned per-client prices, frozen after activation by DB triggers; the in-force and period-segments reads metering (21-4) and client invoices (21-5) build on |
 | **invoicing** | [`invoicing.md`](invoicing.md) | GST invoices (8-1): one per dispatched order derived from dispatch facts, exact paise/bps tax math, per-tenant FY numbering, the `order.dispatched` delivery (first subscriber — ACKs data faults) and the manual price/regenerate command |
+| **notifications** | [`notifications.md`](notifications.md) | The web notification panel (9-2): a projection of six modules' raise/resolve outbox events (`notifications`, `notification_reads`), routed by the capability that acts, a dot (never a count) driven by `surfaced_at` vs the member's last open. Mobile pushes are 9-2b |
 
 ## Planned
 
@@ -30,8 +31,8 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 |---|---|---|
 | `invoicing` (remaining) | 8 | E-way bills and the HSN summary (8-2), extending the 8-1 invoice core |
 | `compliance` (remaining) | 16–18 | Customs, excise and controlled-substance registers. Temperature excursions is built above |
-| `reporting` | 9 | Operational dashboard, notification panel, global audit trail, async export |
-| `notifications` | 9 | The notification panel and mobile pushes |
+| `reporting` | 9 | Operational dashboard, global audit trail, async export |
+| `notifications` (remaining) | 9 | Mobile pushes (9-2b). The web panel is built above |
 
 Each is a spine placeholder today: a registered NestJS module with empty `providers` and `exports`, declaring the AD-6 boundary before anything implements it. `carriers` was one until story 4-6b, and the shape of that build is the model — the module already existed, so the story added providers rather than inventing a boundary.
 
@@ -39,6 +40,6 @@ Each is a spine placeholder today: a registered NestJS module with empty `provid
 
 **A module owns its tables exclusively.** A sibling reaches it only through its facade or through an event — never by touching its tables, and never by importing past `*.facade`, `*.module` or `*.dto`.
 
-`test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports, per module — **for the nine module table-sets it covers today** (stock/ledger, order/wave/pick, catalog identity, carrier credentials, clients, transfers, replenishment, channels, invoices — recounted from the file's `describe` blocks at story 8-1). Tenancy, inbound, putaway and compliance have no block, so their ownership rests on review alone. When you add a module that owns tables, you add its block there too — and because the detector is only meaningful when something could violate it, the block includes hard-coded specifier strings that self-test the regex.
+`test/architecture.spec.ts` enforces this by scanning source for writes and past-the-facade imports, per module — **for the nine module table-sets it covers today** (stock/ledger, order/wave/pick, catalog identity, carrier credentials, clients, transfers, replenishment, channels, invoices — recounted from the file's `describe` blocks at story 8-1; rate cards (21-3) and the notification panel (9-2) have joined since — `../SYSTEM-DESIGN.md` §Modules keeps the current list). Tenancy, inbound, putaway and compliance have no block, so their ownership rests on review alone. When you add a module that owns tables, you add its block there too — and because the detector is only meaningful when something could violate it, the block includes hard-coded specifier strings that self-test the regex.
 
 Where two modules genuinely need each other's reads, the join happens in the **api shell** (`src/api/`), not by one module importing the other. The device catalog snapshot is the worked example: it composes across `inbound` and `outbound` in the controller, because making `inbound` import `outbound` was tried, reverted, and is documented as having caused a cross-suite flake.

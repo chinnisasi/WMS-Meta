@@ -117,6 +117,8 @@ setMergeTargets(...);
 
 The guard belongs in **both** arms — the `catch` too (`zone-bin-setup.tsx:698`), or a superseded failure overwrites a current success with an error banner.
 
+**A read that must not overtake a write (9-2).** The bell's status read and the panel's `opened` POST touch the same server state. A status read sent alongside an in-flight `opened` can be answered before the open commits and re-light the dot the open just cleared. `useNotificationStatus` (`lib/use-notifications.ts`) keeps the in-flight `opened` promise in a ref; a status read that starts while it is set awaits it (failure included) before sending, then re-checks its seq. A read that was already in flight when the open began is dropped by the seq guard as usual. Use the same shape whenever a background read and a user-triggered write share state.
+
 Related but distinct: a mutation that settles after its tree unmounts. `WavesTable` keeps a `mounted` ref and returns early in both arms of `submit()` (`outbound-waves.tsx:625-634`, `:670`, `:681`) — switching warehouse remounts the outbound tables.
 
 ### 1.4 Cross-surface invalidation
@@ -197,6 +199,37 @@ export default async function OutboundPage({ searchParams }: { searchParams: Pro
   - add a `CASES` entry to `drill-screens.test.tsx`, and add any new filter key to `DRILL_ONLY_KEYS`;
   - add the page to `PAGE_CASES`.
 
+### 1.7 A discriminated union from a newer backend — drop unknown arms at the mapping (9-2)
+
+A generated union (`NotificationListResponse['items'][number]`, discriminated on `sourceType`) describes the backend **this build was generated from**. A newer backend can add an arm before the client is regenerated, and an exhaustive `switch` that reads `entry.summary.skuId` on an unknown arm throws. The bell lives in the shell, so one unknown entry crashed the shell when the panel opened (code review FE1).
+
+The pattern (`lib/notifications.ts`):
+
+```ts
+const KNOWN_SOURCE_TYPES = { 'stock-adjustment': true, /* …every arm… */ } as const
+  satisfies Record<SourceType, true>;          // a new generated arm without a row here is a compile error
+
+export function knownNotifications(items: readonly unknown[]): NotificationEntry[] {
+  return items.filter((item): item is NotificationEntry =>
+    typeof item === 'object' && item !== null &&
+    Object.prototype.hasOwnProperty.call(KNOWN_SOURCE_TYPES, (item as { sourceType?: unknown }).sourceType as string));
+}
+```
+
+- **Filter where the response is mapped** — in the loader (`useNotifications`), before any component sees the rows — not in each renderer.
+- **Keep a `never`-checked default arm** in every switch over the discriminant (`unknownSource(entry, fallback)`): unreachable for the generated union, but a safe fallback rather than a crash if an unknown arm ever slips past.
+- **Use `hasOwnProperty`**, not `in` or an index read: a `sourceType` of `"constructor"` or `"toString"` must not pass.
+- Test it: a fixture carrying an unknown arm renders the rest (`notifications.test.ts`, `notification-bell.test.tsx`, `notifications-view.test.tsx`).
+
+### 1.8 A plain URL parameter beside a drill — `?queue=` (9-2)
+
+Not every URL parameter is a drill. `/conflicts?queue=<id>` only picks the starting tab; it filters nothing, so it does not belong in `parseDrill`'s `SPECS` (where an unknown key would make a drill unsupported). The rules (`lib/conflicts-queues.ts`, `app/(app)/conflicts/page.tsx`):
+
+- **No `list`, so `parseDrill` reads a plain visit** (`null`) and ignores `queue`.
+- **Parse to a closed vocabulary** (`CONFLICTS_QUEUES`); a repeated value or an unknown id is `null` and the page opens on its default tab. A tab the role cannot see falls back like any other.
+- **Join it into the remount key** (`` `${drillKey(drill)}|${queue ?? 'default'}` ``), so following a link to another queue from the same page remounts on it — the §1.5 keyed-state rule, not an effect.
+- A drill still wins: while drilled, the tab is the drill's.
+
 ---
 
 ## 2. Writing a mutation
@@ -225,6 +258,8 @@ async function confirmCancel(orderId: string) {
 AD-5: every mutating request carries a client-minted ULID (`lib/ulid.ts:28` — hand-rolled to the backend's 26-char Crockford base32 format, no dependency). `fetchApi*` wrappers for mutations take it as a required parameter, so forgetting it does not compile.
 
 > **Two id vocabularies — never confuse them.** Entity ids (orders, SKUs, bins, holds, excursions…) are dashed lowercase **UUIDv7** (`wms-be/src/shared/primitives/ids.ts`); ULIDs are the **Idempotency-Key vocabulary only**, never an entity id. 12-7's trace viewer shipped with the two swapped — a spec invented a "order ids are ULIDs" gate, the implementation and its tests enshrined it, and the surface could not load a single real order until three review layers caught it. Before writing any id shape check or id-input affordance, read the BE's id vocabulary first-hand (`ids.ts`, the route's own param validation) and test with a fixture in that shape — not with a fabricated value in the shape you assumed.
+
+**The one exception (9-2):** `fetchApiMarkNotificationsOpened` (`POST …/notifications/opened`) takes no key and is deliberately **not** the keyed-POST helper — the backend documents the route as naturally idempotent (it sets last-opened to now). Do not copy this to any other write.
 
 **The key's lifetime is the *intent*, not the HTTP attempt.** Three shapes, all correct (the per-draft shape comes in two forms since epic 21):
 
