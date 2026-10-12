@@ -158,7 +158,7 @@ A switch invalidates the state in the same render, with no effect ordering to ge
 
 ### 1.6 Reading a filter from the URL — the drill pattern (9-1b)
 
-This is the house rule for any screen that takes a filter from its URL. The only case today is an Overview tile's drill.
+This is the house rule for any screen that takes a filter from its URL. Two cases today: an Overview tile's drill (9-1b), and a document's "View ledger" link (9-3a, §1.9) — a ledger drill with a display-only `doc`.
 
 **Parse on the server, mount keyed.** The route's server `page.tsx` awaits `searchParams` (a Promise in Next 16; each value is `string | string[]`), which makes the route render dynamically on each request (`ƒ` in the build output) rather than being prerendered. It calls the pure `parseDrill(screen, params)` from `lib/drill.ts` and renders the screen keyed on the result:
 
@@ -181,7 +181,7 @@ export default async function OutboundPage({ searchParams }: { searchParams: Pro
 
 **Drilled mode:**
 
-1. **Filter on the server only.** The list hook takes the drill and calls its `lib/drill-fetch.ts` fetcher. That fetcher sends exactly the drill's keys minus `list`, values verbatim. A path-scoped list (ledger, orders) puts the drill's warehouse in the path. That warehouse comes from the apiPath, and `drillHref` gives no link if the query names a different one. The screen's own tab, status and kind state is ignored and its controls are hidden. Never narrow the rows on the client: the backend proves that the drill, paged to exhaustion, equals the figure, and client-side narrowing would break that.
+1. **Filter on the server only.** The list hook takes the drill and calls its `lib/drill-fetch.ts` fetcher. That fetcher sends exactly the drill's keys minus `list` (and, for a document drill, minus the display-only `doc`/`label` — §1.9), values verbatim. A path-scoped list (ledger, orders) puts the drill's warehouse in the path. That warehouse comes from the apiPath, and `drillHref` gives no link if the query names a different one. The screen's own tab, status and kind state is ignored and its controls are hidden. Never narrow the rows on the client: the backend proves that the drill, paged to exhaustion, equals the figure, and client-side narrowing would break that.
 2. **Paging.** The cursor goes back verbatim, on the screen's existing paging (`DataTable` Prev/Next, or a queue's Next). Never decode or rebuild a cursor.
 3. **The warehouse is the drill's, for that view only.** `lib/warehouses` is never written. Any control that would write the active warehouse is hidden: the outbound and replenishment pickers. A drilled view renders for the drill's warehouse even when the active warehouse is unset or the warehouses read failed (the Ledger is the example). It labels that warehouse with the shared `warehouseDisplayLabel` from `lib/drill.ts`: `CODE Name`, or `Warehouse <short id>`.
 4. **One section is drilled, and the drill stays on screen.** `drillFor(drill, list)` gives each section its drill or `null`. The other sections on the page render normally for the active warehouse. Hide anything that would move the drilled section off screen, such as the `/conflicts` queue tab strip. Otherwise the drill would stay applied out of sight, with no banner to clear it.
@@ -229,6 +229,34 @@ Not every URL parameter is a drill. `/conflicts?queue=<id>` only picks the start
 - **Parse to a closed vocabulary** (`CONFLICTS_QUEUES`); a repeated value or an unknown id is `null` and the page opens on its default tab. A tab the role cannot see falls back like any other.
 - **Join it into the remount key** (`` `${drillKey(drill)}|${queue ?? 'default'}` ``), so following a link to another queue from the same page remounts on it — the §1.5 keyed-state rule, not an effect.
 - A drill still wins: while drilled, the tab is the drill's.
+
+### 1.9 Document drills — display-only keys, one key per document (9-3a)
+
+FR-28: every ledger event is two navigations from its document. Five document surfaces link "View ledger" to `/inventory/ledger` filtered to that document — the GRN table, the PO table ("Receipts in the ledger" — a putaway names its GRN, not the PO), the expanded order detail, an approved adjustment card and an adjusted variance card. The link is a **ledger drill** (§1.6) built by one helper, `ledgerDocHref(doc, id, warehouseId, label?)` (`lib/drill.ts`):
+
+```
+/inventory/ledger?list=ledger&warehouseId=<the document's own warehouse>&doc=grn&grnId=<id>&label=GRN-0042
+```
+
+- **`doc` and `label` are display-only and never sent.** `doc` names the kind for the banner; `label` is the human handle (the GRN or PO code, the order's channel ref), trimmed and capped at 120 characters (`MAX_DRILL_LABEL_LENGTH`; a longer one parses unsupported). `fetchLedgerDrill` (`lib/drill-fetch.ts`) strips both before the request — an unknown key would be a backend `400` (`forbidNonWhitelisted`), so a display key that reached the wire would break every document link. `DISPLAY_ONLY_DRILL_KEYS` names them; `drill-screens.test.tsx` pins that the outgoing request carries neither (its document-drill `CASES` entry, with `doc` and `label` in `DRILL_ONLY_KEYS`).
+- **One key per document, exactly.** `LEDGER_DOC_KEYS` maps `grn → grnId`, `po → poId`, `order → orderId`, `adjustment → adjustmentPendingId`, `variance → countVarianceId`. `parseDrill`'s `documentDrillShapeOk` admits a drill with a `doc` only when **its** key is present and nothing but `warehouseId` and `label` sits beside it (`doc=grn&poId=X` is unsupported); a drill **without** `doc` may carry none of the document-only keys (`doc`, `label`, `grnId`, `poId`, `adjustmentPendingId`, `countVarianceId` — `orderId` is also a dashboard key). A half-document drill would list the wrong rows under the right banner.
+- **The document's own warehouse.** Every link carries the document's `warehouseId` — a GRN in WH-B opens WH-B's ledger even when WH-A is active (rule 3 of §1.6). The order link uses the warehouse threaded down from `OrdersTable`.
+- **Wording.** `drillBannerWord(drill)` ("Showing ledger events for GRN GRN-0042"; a PO "Showing ledger receipts for PO …"), `describeDrill`'s document arm (the document, then the warehouse label), the page description and `ledgerDrillEmptyMessage` ("No receipt events for PO … yet.") all branch on `ledgerDrillDocument(drill)`; a dashboard drill keeps its words. Without a `label` the document is named by its id tail (§1.10).
+- **Link only when the document knows it has events.** An adjustment or variance links only when the row says `ledgerLinked` (the backend recorded the event its decision posted); a rejected adjustment, a recounted variance and anything decided before 9-3a get no link — never a link to an empty or a wrong list. GRNs, POs and orders always link (their events always carry the key).
+- **`transferId` is API-only** — there is no transfer web surface (PENDING), so no drill key exists for it.
+- **Adding a document:** a `LEDGER_DOC_KEYS` entry and noun (`LEDGER_DOC_NOUN`), the key in `SPECS.ledger.fields` and `DOCUMENT_ONLY_KEYS` (unless the dashboard already sends it), the backend filter, and the round trip in `drill.test.ts`.
+
+### 1.10 Short ids on UUIDv7 — show the tail, not the head (9-3a)
+
+Every id the backend mints is a **UUIDv7**, whose first 48 bits are a millisecond timestamp. The first 8 hex characters therefore change only every ~65 seconds and are near-identical across a day's rows — a short id built from the **head** (`id.slice(0, 8)`) shows the same text for every row on screen (code review FE2). **On a new surface, shorten with the tail:** `shortIdTail(id)` = `id.slice(-8)` (`lib/audit.ts`), the random part. 9-3a's surfaces use it — the audit Who and Target columns and a document drill with no `label`. The older `Warehouse <short id>` (`warehouseDisplayLabel`) and the banner's `SKU …`/`Order …` labels still take the head; changing them is a house-wide change (PENDING), not something to do piecemeal.
+
+### 1.11 Retry must reset the cursor and the table together — the reload epoch (9-3a)
+
+A paged hook (`useAuditTrail`, `lib/use-audit-trail.ts`) holds the requested cursor; `DataTable` holds its own Prev/Next stack. A `ReadFailure` Retry that re-fetched the **same** cursor while the table kept its stack left them disagreeing — Prev offered on what the hook now treated as a fresh read (code review FE3). The pattern:
+
+- the hook's `reload()` clears the result **and** the requested cursor (Retry reads page 1 again) and bumps a revision it returns as **`epoch`**;
+- the table is keyed on the filter tuple **and** the epoch — `` key={`${auditFilterKey(applied)}#${trail.epoch}`} `` — so a filter change or a Retry remounts it with an empty stack;
+- the requested cursor is stamped with the scope (tenant + filter key, the `useQcHolds` pattern), so a stale cursor under a new filter reads as page 1, and the result is filtered at render on the same stamp (§1.5). The filter key must include **every** filter the request sends (`targetId` was missing — FE4).
 
 ---
 
@@ -332,6 +360,7 @@ Three rules inside it:
 | `prepareReason` / `clientInvoiceActionReason` / `clientInvoiceReadReason(error, subject)` *(21-5)* | `lib/client-invoices.ts:355` / `:388` / `:419` | `period-not-ended`, `client-not-billable`, `nothing-to-invoice`, `invoice-exists` · `invoice-has-gaps`, `invoice-not-draft`, `invoice-transition-invalid`, `nothing-to-invoice` · `invalid-cursor` |
 | `lineRecordsReason(error, status)` *(21-5b)* | `lib/invoice-records.ts:159` | `invoice-group-changed`, `invalid-cursor` |
 | `usageReason` *(21-4)* | `lib/usage.ts:227` | — |
+| `auditReason` *(9-3a)* | `lib/audit.ts:246` | `role-denied` → "Only the owner can read the audit trail", `report-unavailable` → "Narrow the filters or dates", `validation-failed` → the server's detail, `invalid-cursor` |
 | `rateCardReason(error, action)` *(21-3)* | `lib/rate-cards.ts:276` | `rate-card-effective-date`, `rate-card-effective-overlap`, `rate-card-no-lines`, `rate-card-not-draft`, `rate-card-not-cancellable`, `client-not-active` |
 | `rejectionReason` (seven **file-local** copies) | `auth-forms.tsx:257`, `warehouse-create-form.tsx:133`, `zone-bin-setup.tsx:845`, `import-catalog.tsx:266`, `sku-table.tsx:316`, `users-card.tsx:288`, `devices-card.tsx:283` | `duplicate-email`/`invite-pending`/`invite-invalid` · `duplicate-warehouse-code` · `duplicate-zone-code`/`duplicate-bin-code`/`grid-too-large`/`bin-not-empty`/`bin-retired`/`bin-merge-hold-open`/`bin-full`/`bin-blocked` · `import-too-large`/`unsupported-file-type`/`file-unreadable` · `duplicate-barcode` · `email-exists`/`last-owner` · — |
 

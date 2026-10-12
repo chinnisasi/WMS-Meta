@@ -1,6 +1,6 @@
 # Reporting module
 
-> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. The audit trail and exports (9-3) join this module next.
+> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. Story 9-3a adds the **audit trail read** (FR-28) — the owner's filterable, cursor-paged view of `audit_events`, the module's third read-only exception. Async export (9-3b) joins it next.
 
 Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line` below is relative to `wms-be/`. Read `../IMPLEMENTATION-GUIDE.md` first — and its §7a, the read-only exception this module exists under.
 
@@ -8,7 +8,7 @@ Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line
 
 ## Owns
 
-**No tables.** The module is a read model: `kpis.ts` (one function per tile), `window.ts` (the IST windows), `sql.ts` (the SQL helpers `rowsOf`/`n`/`nf`/`ratio`/`ts`/`countingSinceInTx`, moved out of `kpis.ts` by 21-8), `service.ts` (21-8 — the service report's period guard and queries), `reporting.facade.ts` (the warehouse check, the best-effort runner, the service reads). It exports `ReportingFacade` alone; the api shell is its only consumer — `ReportingController` (`src/api/reporting.controller.ts`, DTOs in `src/api/reporting.dto.ts`) and, since 21-8, `PortalController`'s `GET portal/service`.
+**No tables.** The module is a read model: `kpis.ts` (one function per tile), `window.ts` (the IST windows), `sql.ts` (the SQL helpers `rowsOf`/`n`/`nf`/`ratio`/`ts`/`countingSinceInTx`, moved out of `kpis.ts` by 21-8), `service.ts` (21-8 — the service report's period guard and queries), `audit.ts` (9-3a — the audit trail read, `audit_events` only), `reporting.facade.ts` (the warehouse check, the best-effort runner, the service reads, the audit guard and read). It exports `ReportingFacade` alone; the api shell is its only consumer — `ReportingController` (`src/api/reporting.controller.ts`, DTOs in `src/api/reporting.dto.ts`) and, since 21-8, `PortalController`'s `GET portal/service`.
 
 The two facts the dashboard needed that nothing stored before are **outbound-owned**, not reporting's (see `outbound.md`):
 
@@ -25,7 +25,9 @@ Retries never inflate the facts: a failed pack records its attempt's idempotency
 
 Everywhere else a module reads a sibling's state only through its facade (AD-6). Reporting's tiles read the owning modules' tables **directly, read-only**, by human decision (9-1, decision 6): ten aggregate counts through ten facades would be ten bespoke "count my rows in this window" methods with one consumer each — a second definition of every KPI, free to drift from the one here.
 
-**The second exception (21-8, ratified at the epic-21 retro, 2026-10-10).** `service.ts` — the per-client service report — reads `putaway_placements`, `goods_receipt_notes`, `orders`, `picklist_lines`, `pack_verification_failures` and `ledger_events` the same way, on stricter terms: every query inner-joins a client-policied table and carries an explicit `client_id` predicate, and the dispatched-order population reuses `dispatchedOrderEventsPredicate` from `inventory.facade`, so `ordersDispatched` equals the invoiced count (`test/service-report.spec.ts`). The directory-wide guards below cover it. A third read model still needs its own human decision (`IMPLEMENTATION-GUIDE.md` §7a).
+**The second exception (21-8, ratified at the epic-21 retro, 2026-10-10).** `service.ts` — the per-client service report — reads `putaway_placements`, `goods_receipt_notes`, `orders`, `picklist_lines`, `pack_verification_failures` and `ledger_events` the same way, on stricter terms: every query inner-joins a client-policied table and carries an explicit `client_id` predicate, and the dispatched-order population reuses `dispatchedOrderEventsPredicate` from `inventory.facade`, so `ordersDispatched` equals the invoiced count (`test/service-report.spec.ts`). The directory-wide guards below cover it.
+
+**The third exception (9-3a, human decision 2, 2026-10-12).** `audit.ts` reads tenancy's `audit_events` — and only that table — for the owner's audit trail. Its own guard block is below (§The audit trail). A fourth read model still needs its own human decision (`IMPLEMENTATION-GUIDE.md` §7a).
 
 The exception is bounded by guards in `test/architecture.spec.ts` ("reporting is a read-only exception…"):
 
@@ -42,10 +44,12 @@ The exception is bounded by guards in `test/architecture.spec.ts` ("reporting is
 | `overview` | `(tenantId, warehouseId, now = new Date()) → Overview` | Warehouse check, then the ten tiles under the runner | `GET /tenants/{t}/warehouses/{w}/reporting/overview` |
 | `serviceReport` | `(tenantId, clientId, {from, to, warehouseId?}, now = new Date()) → ServiceReport` | 21-8: period guard (400), client (404), warehouse (404), then the figures — one transaction, 5 s `statement_timeout` | `GET /tenants/{t}/reporting/clients/{c}/service` |
 | `portalServiceReport` | same | 21-8: the same read, its transaction stamped `{ clientId }` (the `PORTAL_READS` architecture scan reads this body) | `GET /tenants/{t}/portal/service` (client from `PortalSession`) |
+| `auditTrail` | `(tenantId, actorUserId, AuditTrailQuery) → Page<AuditTrailEntry>` | 9-3a: `audit.view` guard in its own transaction (403 `role-denied`), then one page of `audit_events` under a 5 s budget (503 `report-unavailable`) | `GET /tenants/{t}/reporting/audit` — **never a portal read** |
+| `auditRead` | `(tx, tenantId, query) → Page` | a plain field set to `readAuditPageInTx`, so a suite can force a statement timeout without a second production path (the `serviceRead` precedent) | `auditTrail` only |
 
 `Overview` = `{asOf, stale, window: {todayFrom, d7From, to}, tiles: {dockToStock, pickRate, shortPicks, grnVariances, orderAccuracy, oversell, expiryAlerts, syncHealth, dispatchPipeline, sm8}}`. Each tile carries `state: 'ok' | 'unavailable'`. Every figure is `{value: number | null, drill: {apiPath, query, reconciles}}`; a windowed figure is `{today, d7}` of those. `value` is null when the tile is unavailable **or** the figure has no data (an empty median or ratio) — never a fake 0. `drill` is always present, unavailable tiles included.
 
-Member-open: reads are never capability-gated.
+Member-open, except the audit trail: the Overview and the service report are not capability-gated; `auditTrail` is owner-only (`audit.view`, 9-3a).
 
 ## The flow
 
@@ -138,6 +142,8 @@ A new drill shape must have a `parseDrill` field for each of its keys (`wms-fe/s
 | The warehouse is checked before any tile runs | `overview()` asserts first, in its own short transaction; a spec spies `runTiles` and asserts it was never called on a 404 |
 | A tile never 500s the page | the runner maps every error to `unavailable` |
 | Reporting writes nothing; only the api shell imports it | `test/architecture.spec.ts` |
+| The audit read touches `audit_events` only, and the role check happens before it | `test/architecture.spec.ts` (the third-exception block); a spec asserts an ops manager is 403 `role-denied` |
+| Paging the audit trail to its end yields every row once, ties included | `test/audit-trail.spec.ts` — 120 rows, many sharing one `created_at` |
 | Fact writes never change a refusal | both writers run after the refused work rolled back / released, inside `try/catch` that logs; a spec renames both tables away and asserts the 422 / 409 stand |
 
 ## Events
@@ -191,6 +197,53 @@ Ratios 0–1 to 4 dp, null with an empty denominator; medians minutes to 1 dp.
 **Isolation.** Two layers: `portalServiceReport` stamps the transaction `{ clientId }` (`test/architecture.spec.ts` `PORTAL_READS`), and every query carries the predicate. `test/client-isolation.spec.ts` runs each query shape as `wms_rls_probe` under one client's stamp with only the `client_id = c` literals removed (joins kept) and gets that client's rows only.
 
 **Member-open** on the operator route (floor-performance figures, no money), like the Overview. Any client of the tenant is reportable — a suspended one and `self` included; the portal refuses a suspended client at its guard.
+
+## The audit trail (story 9-3a, FR-28)
+
+**What it is.** The owner's view of every state-changing action — who, what, when, and the thing it changed — over `audit_events` (tenancy's table, written at step 10 of every keyed command; `IMPLEMENTATION-GUIDE.md` §1). One route, `GET /tenants/{t}/reporting/audit`; the web's Audit section on `/reports` is its only consumer. **The trail is complete from 9-3a onward:** about twenty keyed commands wrote no audit row before it, and no backfill reconstructs them (no trustworthy actor exists for past actions).
+
+```mermaid
+sequenceDiagram
+  participant W as web /reports Audit section
+  participant C as ReportingController
+  participant F as ReportingFacade
+  participant PG as Postgres
+
+  W->>C: GET reporting/audit?actorUserId&actionPrefix&targetType&targetId&from&to&cursor&limit
+  Note over C: TenantSessionGuard (portal token → 403 role-denied)<br/>assertOwnTenantToken → 403 permission-denied<br/>DTO shape + assertInstantRange → 400
+  C->>F: auditTrail(t, session.userId, query)
+  F->>PG: tx 1: getMemberRoleIn → assertPermission('audit.view')
+  Note over F: not the owner → 403 role-denied, nothing read
+  F->>PG: tx 2: set_config('statement_timeout','5000',true)
+  F->>PG: audit.ts: one keyset page of audit_events (no join)
+  Note over F: 57014 → 503 report-unavailable, nothing partial
+  F-->>C: {items, nextCursor}
+  C-->>W: AuditTrailResponse {items, nextCursor, systemActorId}
+```
+
+**Access.** `TenantSessionGuard` (the client-portal fence) and `assertOwnTenantToken` in the controller, then the facade's guard **in its own transaction** — `assertPermission(await getMemberRoleIn(tx, tenantId, actorUserId), 'audit.view')`, the `channels.facade` gated-read shape — before the read transaction opens. Keeping the role read out of `audit.ts` is what lets the read model touch `audit_events` and nothing else. `audit.view` is the 42nd capability, **owner-only** (human decision 3: the trail names every member's actions — the user-management rationale), the second gated read after the channel mappings (`permissions.ts`'s header comment says so).
+
+**Filters** (all optional, AND-ed; `AuditTrailQueryDto`, `src/api/reporting.dto.ts`):
+
+| Filter | Shape | SQL |
+|---|---|---|
+| `actorUserId` | uuid | `actor_user_id = $` — the system's actions by sending `systemActorId` |
+| `actionPrefix` | `^[a-z][a-z_.-]{0,63}$` (`AUDIT_ACTION_PREFIX_RE`; the read re-checks it) | `action LIKE escape($p) \|\| '%' ESCAPE '\'`, where `escapeLikePrefix` escapes `\` first, then `%` and `_` — so `stock_adjustment.` never matches `stockXadjustment.y`. A `%` in the input is a 400 at the DTO |
+| `targetType` | one of `AUDIT_TARGET_TYPES` (45 values at 9-3a), published as the query enum in `openapi.json` | `target_type = $` |
+| `targetId` | uuid | `target_id = $` |
+| `from` / `to` | ISO-8601 instants with a zone (`@IsInstant`); `from ≥ to` → 400 (`assertInstantRange`) | half-open `[from, to)` on **`created_at`** |
+
+**Ordering and paging on `created_at`, never `occurred_at`.** `created_at` is the server's commit stamp. Putaway, a sync-resolved op and an excursion stamp `occurred_at` from device or command time, which can be hours old; ordering or paging on it would put an action out of place and break the cursor. Order `created_at DESC, id DESC`; the cursor is `{createdAt: created_at::text, id}` (the `inventory.facade` precedent — every row a transaction writes shares its `now()` to the microsecond, and a millisecond-truncated cursor would skip the rest of that tie group), validated on decode (`invalid-cursor` 400). `limit` 1–200, default 50.
+
+**Rows.** `AuditEventDto {id, recordedAt (created_at), occurredAt, actorUserId, actorKind: 'user' | 'system', action, targetType, targetId}`. `reference` is never returned — it holds idempotency keys, which mean nothing to an owner; the **target** is the document. `actorKind` is `system` when the actor is `SYSTEM_ACTOR_ID` (`shared/primitives/audit.ts`, moved there from replenishment so reporting need not import a sibling). The response also carries **`systemActorId`**, published as a one-value enum, so a client filters on the system actor without hard-coding the uuid (the web types its constant to that generated literal — a backend change fails the web's compile).
+
+**The 503.** The whole read runs in one transaction under a transaction-local `statement_timeout` of 5 s (`AUDIT_STATEMENT_TIMEOUT_MS`, `armAuditDeadline`); a timeout (SQLSTATE `57014`) answers `503 report-unavailable` — "narrow the filters or the dates" — never a partial page. It is the **expected** answer for a broad filter over a very large history (the 21-8 pattern). The test forces it through the `auditRead` field and pins the armed 5 s setting.
+
+**Indexes (migration 0069).** The read's four shapes: `audit_events_tenant_created_idx (tenant_id, created_at DESC, id DESC)` (the unfiltered page), `audit_events_tenant_actor_created_idx (tenant_id, actor_user_id, created_at DESC)`, `audit_events_tenant_target_idx (tenant_id, target_type, target_id)` and `audit_events_tenant_action_created_idx (tenant_id, action text_pattern_ops, created_at DESC)` (a prefix `LIKE` uses it under any collation). The old `audit_events_tenant_id_occurred_at_idx`, which nothing read, is dropped.
+
+**Guards** (`test/architecture.spec.ts`, "the audit read is reporting's THIRD read-only exception"): `audit.ts` imports only `auditEvents` from the schema; no raw `sql` template names another table after `from`/`join`/`into`/`update`; the file contains no `join`; it never names `getMemberRoleIn`, `assertPermission` or `users`; the facade carries the guard line verbatim. The portal block pins that `auditTrail` is not on `PORTAL_READS`, not a delegation, and never called by `portal.controller.ts`. The directory-wide reporting guards (writes nothing, owns no table, only the api shell imports it) cover the file too.
+
+**Not here (PENDING):** export (9-3b), anchoring and chain alerts (9-3c), retention (9-3d); deep links from a target to its document; a portal audit read or a `client_id` on `audit_events`.
 
 ## Gotchas
 

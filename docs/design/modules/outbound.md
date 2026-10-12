@@ -490,6 +490,8 @@ Reference docs are **annotated, not inferred** (`const referenceDoc: LedgerRefer
 
 **Audit actions**: the same names, except picking, which splits `pick.picked` from `pick.short-picked` (`pick.command.ts:1337`) — *"why did this order go out under-filled"* is a different question from *"who picked this line"*, and one action name for both makes it unanswerable. A zero-unit short pick has no `picks` row, so its audit row targets `picklist_line`.
 
+**9-3a (the audit rule).** An **ingested** order's `order.created` reference was `{"channel": {connectionId, externalEventId}}` (RD-2); it now also carries the per-delivery idempotency key as a sibling, `{"channel": {…}, "key": K}`, so the guard can tie the key to its row (`order.created` is one of the named composite references matched by containment — a manual order's reference is still the key). Five arms store their key and change nothing, so they write **no** audit row and are named in the guard's `AUDIT_NO_OP_ARMS`: a channel redelivery and a dedup loser (both answer the first order's snapshot), a cancel of an already-cancelled order (and the racing loser), a wave release of an already-released wave and a wave cancel of an already-cancelled one (and their racing losers).
+
 ---
 
 ## Gotchas

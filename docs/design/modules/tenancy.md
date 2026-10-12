@@ -19,7 +19,7 @@ This module is the spine every other module calls into. `assertPermission` + `ge
 | `bins` (`schema.ts:201`) | Putaway/pick locations | `bins_warehouse_id_code_unique`; `capacity` is milli-units with `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`, `drizzle/0027_uom_vocabulary.sql:360`); 11-5 adds the nullable physical capacity `length_mm`/`width_mm`/`height_mm` (`> 0 AND <= 100000`) and `max_weight_grams` (`<= 100000000`) — integer WYSIWYG, CHECKs only in migration `0034`; 12-4 replaces the loose free-text `type` with the eight-value `LocationType` vocabulary (shelf/pallet/floor/staging/floor-stack/yard/tank/silo) backstopped by `bins_type_check` (CHECK only in migration `0037`); `retired_at`/`retired_by` stamped together (`bins_retired_pairing`, `drizzle/0016_numerous_bloodscream.sql:6`) and never cleared; `system_owned` marks the Receiving/QC-hold bins |
 | `devices` (`schema.ts:1099`) | Floor handhelds: enrollment code hash, label, badge PIN hash, operator binding, revocation, and (9-2b) the push registration — Expo token + warehouse | `devices_enrollment_code_hash_unique` is a **partial** index (`where enrollment_code_hash is not null`) — it is what makes redemption single-shot. `devices_status_check` ∈ {`active`,`revoked`} (`drizzle/0012_lonely_the_renegades.sql:40`) |
 | `rejected_ops` (`schema.ts:3134`) — **5-6** | One row per dropped terminal op a device's replay pass reported: the op ULID, its type, the `rejected`/quarantined classification and refusal verbatim, the payload as uploaded (the apply arm's re-execution input), the badge-in attribution jsonb, and the resolution columns | `rejected_ops_tenant_id_op_id_unique` — the per-row dedupe that makes at-least-once uploads safe (a re-posted row updates nothing). CHECKs (`classification`/`status`) live **only in migration `0047`** |
-| `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with inbound, putaway, outbound and carriers** — it is the one table this module owns that siblings write |
+| `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with every module that has a keyed command** — it is the one table this module owns that siblings write; since 9-3a every keyed command writes a row (`IMPLEMENTATION-GUIDE.md` §1 step 10), and reporting reads it (the audit trail, its third read-only exception) |
 | `idempotency_keys` (`schema.ts:238`) | AD-5 storage: `(tenant_id, key)` unique + payload hash + response snapshot | Also written by every other module. Extra `idempotency_keys_key_idx` exists solely for registration's key-only replay lookup |
 
 Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy declared **only** in migration SQL (`drizzle/0001_greedy_scarecrow.sql:55-70`).
@@ -74,7 +74,7 @@ The three push columns are written only by the device's own `PUT`/`DELETE …/de
 **No column holds the sealed offline-store key** — it is returned once at enrollment and persists only in `idempotency_keys.response_snapshot`.
 
 ### `audit_events`
-`actor_user_id` · `action` (the outbox event name) · `target_type` · `target_id` · `reference` (nullable — the idempotency key) · `occurred_at` default `now()`. **Append-only by convention, not by trigger** — unlike `ledger_events`.
+`actor_user_id` (NOT NULL — `SYSTEM_ACTOR_ID` for schedulers and sweeps) · `action` (usually the outbox event name) · `target_type` (a literal from `AUDIT_TARGET_TYPES`, `shared/primitives/audit.ts`) · `target_id` · `reference` (nullable — the idempotency key; a few pre-9-3a actions keep a composite reference carrying it) · `occurred_at` default `now()` · `created_at` (the server commit stamp — **the audit read orders, pages and windows on it**, because a few writers stamp `occurred_at` from device or command time). **Append-only by convention, not by trigger** — unlike `ledger_events`. **Indexes (0069):** `(tenant_id, created_at DESC, id DESC)`, `(tenant_id, actor_user_id, created_at DESC)`, `(tenant_id, target_type, target_id)`, `(tenant_id, action text_pattern_ops, created_at DESC)` — the audit read's four shapes (`reporting.md` §The audit trail); 0069 dropped the unread `(tenant_id, occurred_at)` index.
 
 ### `idempotency_keys`
 
@@ -228,7 +228,7 @@ Creates the tenant + its Owner user + the idempotency row in one transaction.
 3. `normalizeGstin(gstin)` (8-1; prefix check 8-1d) behind the replay check, then `hashPassword` — a replay must not pay the ~100 ms scrypt round, nor be refused by a rule added after it committed. The optional `gstin` joins the hash in its lenient form (`normalizeGstinInput`, `?? null`).
 4. Insert `tenants` (with `tenantId = id`), then `users` with `role: 'owner'`; a `users_email_unique` violation → 409 `duplicate-email` `:107-114`.
 
-Writes: `tenants`, `users`, `idempotency_keys`. Emits `tenant.registered`.
+Writes: `tenants`, `users`, `audit_events` (**9-3a:** `tenant.registered`, target `tenant` → the new tenant, actor the new owner — no session exists yet; written under the new tenant's scope), `idempotency_keys`. Emits `tenant.registered`.
 
 No capability check — there is no role to read yet.
 
@@ -245,7 +245,7 @@ Returns the token plus `user {id,email,role,status,clientId}` and (21-7) `client
 
 ### `WarehouseCommand.create` / `ZoneCommand.create`
 
-Guards in order: `warehouse.create` / `zone.create` → replay → (zone only) `assertWarehouseInTenant` → (warehouse only) `assertAddress(origin)` → `normalizeGstin(gstin)` → insert. Duplicate code → 409 `duplicate-warehouse-code` / `duplicate-zone-code` naming the code. Emits `warehouse.created` / `zone.created`.
+Guards in order: `warehouse.create` / `zone.create` → replay → (zone only) `assertWarehouseInTenant` → (warehouse only) `assertAddress(origin)` → `normalizeGstin(gstin)` → insert. Duplicate code → 409 `duplicate-warehouse-code` / `duplicate-zone-code` naming the code. Emits `warehouse.created` / `zone.created`; **9-3a** adds the audit row of the same name (target `warehouse` / `zone`).
 
 Note the ordering difference: `WarehouseCommand` has no parent assert; `ZoneCommand` runs its parent assert **after** the replay lookup (`zone.command.ts:97`).
 
@@ -257,7 +257,7 @@ Guards: `bin.create` → replay → `assertWarehouseInTenant` → `assertZoneInW
 
 **Bulk-asset creation (12-4):** a `tank`/`silo` requires `maxWeightGrams` — absent AND null both refuse (`assertBulkAssetWeightDefined`, 400 `validation-failed` naming the type); a bulk asset is never gridded (`refuseBulkAssetGrid` backstops the narrowed grid DTO) and `PATCH …/bins/{id}` refuses to clear its weight (`refuseBulkAssetWeightClear`).
 
-**Emits nothing.** The spec named `zone.created` / `bins.generated` / `bin.blocked` only, so a manually created bin produces no outbox row (`:218-220`).
+**Emits nothing** to the outbox. The spec named `zone.created` / `bins.generated` / `bin.blocked` only, so a manually created bin produces no outbox row (`:218-220`). **9-3a** adds its audit row: `bin.created` (target `bin`). `generateGrid` writes one `bin.grid_generated` row whose target is the **zone** gridded, not each bin.
 
 ### `BinCommand.generateGrid` (`bin.command.ts:290`)
 
@@ -323,7 +323,7 @@ The UPDATE re-carries every validity condition including `inviteExpiresAt > now(
 
 ### Device commands — see **Key algorithms** below
 
-`mintEnrollmentCode` (`device.manage`), `enroll` (unauthenticated), `badgeIn` (device token, no idempotency key), `revokeDevice` (`device.manage`), `selfTestEcho` (badge-in session), `registerPush` / `unregisterPush` (9-2b — badge-in session, no idempotency key).
+`mintEnrollmentCode` (`device.manage`), `enroll` (unauthenticated), `badgeIn` (device token, no idempotency key), `revokeDevice` (`device.manage`), `selfTestEcho` (badge-in session), `registerPush` / `unregisterPush` (9-2b — badge-in session, no idempotency key). **9-3a:** `selfTestEcho` is the one keyed endpoint exempt from the audit rule (`AUDIT_EXEMPT_ENDPOINTS` in the test guard — it echoes a payload and changes nothing an owner audits); badge-in, sign-in and push registration are unkeyed and outside it.
 
 ### `SyncReportCommand` (5-6, `sync-report.command.ts:471`)
 
@@ -399,12 +399,13 @@ Guards are transport only — with one exception since 21-7, **the fence**: `Ten
 3. Read the pending row by code hash; wrong tenant / expired / absent → one 400 `enrollment-code-invalid`, **checked before the burn** so the code survives for its real tenant (`:379-388`).
 4. Generate the offline-store key and seal it under `DEVICE_ENCRYPTION_KEY`; a missing key is mapped to 503 `device-encryption-unavailable` rather than a raw 500 (`:397-411`).
 5. The redemption UPDATE re-carries **every** validity condition — id, tenant, code hash, `status = 'active'`, `expires_at > now()` (`:428-436`). Two concurrent redemptions cannot both succeed. It nulls `enrollment_code_hash`/`_expires_at` and sets `label`, `pin_hash`, `enrolled_at`.
+6. **The audit row (9-3a, `:482-516`).** Enrollment is unauthenticated, so there is no requesting user: the actor is **the user who minted the code**, read from this device's own `device.enrollment_code_minted` audit row (`tenant`, `action`, `target_id` = the pending device — the mint has always written it in the same transaction as the pending row). Then `device.enrolled` (target `device`, `reference` = the key, server time). **A missing mint row refuses `400 enrollment-code-invalid`** — the one indistinguishable 400 — and the rollback un-burns the code; never an untyped 500, never an actorless row. Unreachable through the API; pinned in `test/devices.spec.ts` by deleting the mint row by hand. **Consequence for retention (9-3d):** the enroll's actor is resolvable only while the mint row exists, so a retention job must keep the mint row of any device whose enrollment row it keeps (PENDING).
 
 Returns the device token, the TTL, and `offlineStoreKeySealed` — delivered exactly once; the server never needs it again.
 
 **Badge-in** (`:491`). **21-7:** binding is an allowlist — a floor role (`isFloorRole`) or, keeping its pre-21-7 behaviour, the accountant; anyone else (the `client` user) is refused 403 `role-denied` AFTER the PIN + binding check and BEFORE the device update (a wrong PIN stays 401, a refused badge-in binds nothing); the three per-command device role re-checks (`enrollment.command.ts`, `receiving.command.ts`, `sync-report.command.ts`) are the floor-role allowlist `isFloorRole` (`owner | ops_manager | operator`) instead of `=== 'accountant'` denylists. Not a state change beyond the binding + last-seen, so **no idempotency key** (the sign-in pattern). Device row locked `.for('update')`; unknown / revoked / not-yet-enrolled → 403 `device-revoked` (all identical). PIN verified against `device.pinHash ?? DUMMY_HASH` — one scrypt round always. `bound` (`:513-516`) requires an **active** user in this tenant and either an unbound device or the *same* operator: a device is single-operator until re-enrollment. Wrong operator or wrong PIN → one 401 `badge-invalid`.
 
-**Revoke** (`:589`). Status flip + `revoked_at`/`revoked_by` + `wipe_flag` + audit + `device.revoked`, one transaction. **Since 9-2b it also nulls `push_token`, `push_warehouse_id` and `push_registered_at`** in the same UPDATE — a revoked handheld is never pushed to again. A re-revoke of an already-revoked device re-serves the state with **no second audit row and no second outbox event** (`:595-613`) while still writing its idempotency row.
+**Revoke** (`:589`). Status flip + `revoked_at`/`revoked_by` + `wipe_flag` + audit + `device.revoked`, one transaction. **Since 9-2b it also nulls `push_token`, `push_warehouse_id` and `push_registered_at`** in the same UPDATE — a revoked handheld is never pushed to again. A re-revoke of an already-revoked device re-serves the state with **no second audit row and no second outbox event** (`:595-613`) while still writing its idempotency row — a named no-op arm in the audit guard (`devices.revoke:already-revoked`, `AUDIT_NO_OP_ARMS`).
 
 **Push registration (9-2b).** `PUT …/devices/push-registration` → `registerPush` (`:725`); `DELETE` → `unregisterPush` (`:761`). The controller runs `assertOwnTenant` (403 `permission-denied`) and `requireBadgeIn` — a bare enrollment credential has `userId = null` → **401 `unauthenticated`** (`DeviceSessionGuard` alone would accept it). The command, in one tenant transaction:
 

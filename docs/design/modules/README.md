@@ -24,6 +24,7 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 | **billing** | [`billing.md`](billing.md) | Client billing (AD-25, Epic 21): rate cards (21-3) — versioned per-client prices, frozen after activation by DB triggers; the in-force and period-segments reads metering (21-4) and client invoices (21-5) build on |
 | **invoicing** | [`invoicing.md`](invoicing.md) | GST invoices (8-1): one per dispatched order derived from dispatch facts, exact paise/bps tax math, per-tenant FY numbering, the `order.dispatched` delivery (first subscriber — ACKs data faults) and the manual price/regenerate command |
 | **notifications** | [`notifications.md`](notifications.md) | The web notification panel (9-2): a projection of six modules' raise/resolve outbox events (`notifications`, `notification_reads`), routed by the capability that acts, a dot (never a count) driven by `surfaced_at` vs the member's last open; and the mobile pushes (9-2b): `push_deliveries` queued by an outbox subscriber, sent by a worker through the `PushGateway` port, at most once per (event, device) |
+| **reporting** | [`reporting.md`](reporting.md) | No tables — read models under three named read-only exceptions: the operational dashboard (9-1), the per-client service report (21-8) and the owner's audit trail over `audit_events` (9-3a, `audit.view`) |
 
 ## Planned
 
@@ -31,7 +32,7 @@ Two cross-cutting references sit beside these: [`../API-SURFACE.md`](../API-SURF
 |---|---|---|
 | `invoicing` (remaining) | 8 | E-way bills and the HSN summary (8-2), extending the 8-1 invoice core |
 | `compliance` (remaining) | 16–18 | Customs, excise and controlled-substance registers. Temperature excursions is built above |
-| `reporting` | 9 | Operational dashboard, global audit trail, async export |
+| `reporting` (remaining) | 9 | Async audit export (9-3b). Ledger anchoring and chain alerts (9-3c) and the retention lifecycle (9-3d) were split from the same story |
 
 Each is a spine placeholder today: a registered NestJS module with empty `providers` and `exports`, declaring the AD-6 boundary before anything implements it. `carriers` was one until story 4-6b, and the shape of that build is the model — the module already existed, so the story added providers rather than inventing a boundary.
 
