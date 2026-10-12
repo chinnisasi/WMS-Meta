@@ -313,3 +313,36 @@ git status --short                           # must show NO untracked files
 ```
 
 Run the **full** suite, not a scoped subset. `architecture.spec.ts` is what guards module boundaries, and a scoped run skips it.
+
+## 9. Design-review checklists (epic-21 retro, action P1)
+
+Epic 21's reviews found the same classes of defect story after story: client isolation in 9 stories, idempotency surfaces in 7, IST/period edges in 6, and unverified claims frozen into specs in 9 (`_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md`, P1). A design review walks the checklist that applies **before** the spec is committed. Each item points at the rule it checks, so the rule lives in one place.
+
+**Portal surface** — any story that adds or changes a portal read, write or route:
+
+- [ ] **Two layers:** the facade method opens `withTenantTransaction(…, { clientId })` **and** the query carries `client_id = $client` on a client-policied table (`skus`, `orders`, `ledger_events`), reaching inherited rows only by an inner join to it (§7e).
+- [ ] **The controller scan still passes:** the new facade method is in `PORTAL_READS` / `PORTAL_WRITES` before the route calls it (§7e, 21-11a).
+- [ ] **A portal write** re-reads the user and takes `shareLockClientInTx` in its own transaction, before the replay lookup (§7e).
+- [ ] **Widened vocabularies:** every consumer of a role or status list that the story widens has been read. Denylists (`=== 'accountant'`) silently admit the new value; use allowlists (§7e, 21-7 D7).
+- [ ] **The response is an exact key allowlist,** never a spread of an operator view. An unknown id and another client's id are the same 404.
+- [ ] **The frontend boundary:** the portal reaches no operator hook or component (`src/lib/portal-boundary.test.ts`, 21-11b).
+
+**Idempotency surface** — any story that adds or changes a keyed command:
+
+- [ ] **A hash discriminator** (`arm:` / `surface:`) whenever two routes or surfaces could send a byte-identical payload, because `idempotency_keys` is unique on `(tenant_id, key)` across all of them (§7e).
+- [ ] **A lock-taking command replays again under the lock,** before any state check (§1). **A lock helper must not also check status**, or the second replay is unreachable (the `loadOpenPo` lesson, 21-11a).
+- [ ] **A same-key race test** where the duplicate path can produce a different answer: the parked-waiter pattern (§1).
+- [ ] **A no-op that stores the key** when replaying a *stale* answer would be wrong after a later change (a status flip, 21-10), and a no-op that writes nothing when it is pure value (rename). Decide which, and say so in the spec.
+- [ ] **An existing operator hash and response stay byte-identical,** pinned by an `idempotency_keys` golden, when a portal twin is added.
+
+**Periods and IST** — any story that takes a date, a period or a day boundary:
+
+- [ ] **One helper per side, no new copy.**
+  - BE: `shared/primitives/time.ts` (`isIsoDate`, `istMidnightOf`, `addIsoDays`, `istDateOf`); the period rules have the shape of `assertMeteringPeriod` (`billing/metering.ts`).
+  - FE: `istDateOf` (`lib/rate-cards.ts`) and `parseCustomRange` (`lib/usage.ts`), so a period the server would refuse is never sent.
+- [ ] **Windows are half-open** `[from, min(to+1 day, asOf))` on server-stamped columns, never device time. A `from` after today is an empty window, not an inverted one.
+- [ ] **Boundary fixtures:** exactly on the edge, and one unit past it. The browser default (a non-IST viewer between 00:00 and 05:30 IST) is tested where a default period is computed client-side.
+
+**For every spec** — verify before freezing:
+
+- [ ] **Every line reference, caller list and "X already does Y"** in the spec has been opened and read in the code, not taken from an investigation summary. The most expensive epic-21 misses were confident claims: "pallet" existed (21-3), `getClientStatusInTx` had other callers (21-10), approve "already handles" null lines (21-9).

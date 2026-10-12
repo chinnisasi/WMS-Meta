@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-12-2026 08:10
+last_updated: 10-12-2026 08:12
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -1084,7 +1084,7 @@ action_items:
       as-built notes; IMPLEMENTATION-GUIDE 7a ratifies reporting/service.ts; FE guide
       mapper and key tables; PENDING X5/A1/R1/R2 (S1 B1 X5 F4)"
     owner: "retro PR (immediate)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
   - id: "epic-21-retro-item-93-process-three-standing-design-review-che"
     epic: 21
@@ -1092,7 +1092,7 @@ action_items:
       — portal surface (stamp, predicate, controller scan, widened-role consumers),
       idempotency surface discriminator, one IST/period helper per side (P1)"
     owner: "Claude (next story design review)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
   - id: "epic-21-retro-item-94-duplication-cleanup-at-next-touch-be-per"
     epic: 21
