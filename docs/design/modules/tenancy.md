@@ -17,7 +17,7 @@ This module is the spine every other module calls into. `assertPermission` + `ge
 | `warehouses` (`schema.ts:130`) | Stocking sites | `warehouses_tenant_id_code_unique` |
 | `zones` (`schema.ts:159`) | Floor areas | `zones_warehouse_id_code_unique` — scoped to the **warehouse**, not the tenant |
 | `bins` (`schema.ts:201`) | Putaway/pick locations | `bins_warehouse_id_code_unique`; `capacity` is milli-units with `bins_capacity_whole_units` (`% 1000 = 0 AND > 0`, `drizzle/0027_uom_vocabulary.sql:360`); 11-5 adds the nullable physical capacity `length_mm`/`width_mm`/`height_mm` (`> 0 AND <= 100000`) and `max_weight_grams` (`<= 100000000`) — integer WYSIWYG, CHECKs only in migration `0034`; 12-4 replaces the loose free-text `type` with the eight-value `LocationType` vocabulary (shelf/pallet/floor/staging/floor-stack/yard/tank/silo) backstopped by `bins_type_check` (CHECK only in migration `0037`); `retired_at`/`retired_by` stamped together (`bins_retired_pairing`, `drizzle/0016_numerous_bloodscream.sql:6`) and never cleared; `system_owned` marks the Receiving/QC-hold bins |
-| `devices` (`schema.ts:1099`) | Floor handhelds: enrollment code hash, label, badge PIN hash, operator binding, revocation | `devices_enrollment_code_hash_unique` is a **partial** index (`where enrollment_code_hash is not null`) — it is what makes redemption single-shot. `devices_status_check` ∈ {`active`,`revoked`} (`drizzle/0012_lonely_the_renegades.sql:40`) |
+| `devices` (`schema.ts:1099`) | Floor handhelds: enrollment code hash, label, badge PIN hash, operator binding, revocation, and (9-2b) the push registration — Expo token + warehouse | `devices_enrollment_code_hash_unique` is a **partial** index (`where enrollment_code_hash is not null`) — it is what makes redemption single-shot. `devices_status_check` ∈ {`active`,`revoked`} (`drizzle/0012_lonely_the_renegades.sql:40`) |
 | `rejected_ops` (`schema.ts:3134`) — **5-6** | One row per dropped terminal op a device's replay pass reported: the op ULID, its type, the `rejected`/quarantined classification and refusal verbatim, the payload as uploaded (the apply arm's re-execution input), the badge-in attribution jsonb, and the resolution columns | `rejected_ops_tenant_id_op_id_unique` — the per-row dedupe that makes at-least-once uploads safe (a re-posted row updates nothing). CHECKs (`classification`/`status`) live **only in migration `0047`** |
 | `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with inbound, putaway, outbound and carriers** — it is the one table this module owns that siblings write |
 | `idempotency_keys` (`schema.ts:238`) | AD-5 storage: `(tenant_id, key)` unique + payload hash + response snapshot | Also written by every other module. Extra `idempotency_keys_key_idx` exists solely for registration's key-only replay lookup |
@@ -65,6 +65,11 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 | `enrolled_at` | timestamptz | **YES** | — | — | |
 | `pin_hash` | text | **YES** | — | — | **scrypt.** No attempt lockout exists (epic-3 retro a6) |
 | `last_seen_at` | timestamptz | **YES** | — | — | |
+| `push_token` (9-2b) | text | **YES** | — | partial index `devices_push_token_idx` WHERE NOT NULL | The handheld's Expo push token. **At most one device per tenant holds a token** (the PUT clears it elsewhere); across tenants the latest `push_registered_at` owns it |
+| `push_warehouse_id` (9-2b) | uuid | **YES** | — | — | The warehouse the handheld registered with its token — new-work pushes are scoped to it. No FK (the house convention); checked by `assertWarehouseInTenant` at the PUT |
+| `push_registered_at` (9-2b) | timestamptz | **YES** | — | — | Stamped by every PUT — the send-time ownership read's "latest registration wins" |
+
+The three push columns are written only by the device's own `PUT`/`DELETE …/devices/push-registration`, cleared together by revoke and by `clearPushTokenIn` (migration `0068_mobile_pushes.sql`).
 
 **No column holds the sealed offline-store key** — it is returned once at enrollment and persists only in `idempotency_keys.response_snapshot`.
 
@@ -115,12 +120,17 @@ Second index: `rejected_ops_tenant_status_created_at_id_idx` — the review queu
 - `assertPermission(role, capability)` — `permissions.ts:143`
 - `getMemberRoleIn(tx, tenantId, userId)` — `tenancy.service.ts:111`
 - `assertWarehouseInTenant(tx, tenantId, warehouseId)` — `tenancy.service.ts:76`
+- **The push-target functions (9-2b, `tenancy.service.ts:164-310`)** — the notifications module's only way to `devices`; tenancy owns every read and write of the table:
+  - `listPushTargets(tx, tenantId)` `:233` → `PushTarget[]` `{deviceId, token, warehouseId, operatorUserId, role}` — every **base-eligible** handheld, in the caller's tenant transaction: device `active`, `push_token` and `operator_user_id` non-null, the operator's `users` row `active`, `client_id IS NULL`, role a floor role or `accountant` (the badge-in allowlist, `PUSH_TARGET_ROLES`). Ordered by device id.
+  - `getPushTargetsIn(tx, tenantId, deviceIds)` `:244` → `Map<deviceId, PushTarget>` — the same predicate over the given devices: the sender's send-time re-check. A device that no longer qualifies is simply absent.
+  - `clearPushTokenIn(tx, tenantId, deviceId, token)` `:261` → `boolean` — clears the three push columns **only `WHERE push_token = token`** (compare-and-clear), so a handheld that re-registered a fresh token keeps it.
+  - `pushTokenOwners(authDb, tokens)` `:290` → `Map<token, {tenantId, deviceId}>` — for each token, the row with the latest `push_registered_at` (ties by id), **across tenants**, on the BYPASSRLS `AUTH_DATABASE`. Read-only: the caller's resulting clear stays in its own tenant. Not in the spec, which described the read without naming its seam.
 - `hashCommandPayload` / `parseRequiredIdempotencyKey` / `IdempotencyKey` — `idempotency-guard.ts`
 - `idempotencyKeyReuse()` — `registration.command.ts:147`
 - `TenantSessionGuard` / `CurrentSession` / `DeviceSessionGuard` / `CurrentDeviceSession`
 - `ensureReceivingBinInTx` / `ensureQcHoldBinInTx` — `receiving-bin.ts:51,114`. Inbound calls these so bin master data stays tenancy-owned even when a GRN or a QC hold creates a bin.
 
-**`EnrollmentCommand`** (`enrollment.command.ts:200`) is exported so the api shell's `DevicesController` can reach it: `mintEnrollmentCode`, `enroll`, `badgeIn`, `revokeDevice`, `list`, `selfTestEcho`.
+**`EnrollmentCommand`** (`enrollment.command.ts:200`) is exported so the api shell's `DevicesController` can reach it: `mintEnrollmentCode`, `enroll`, `badgeIn`, `revokeDevice`, `list`, `selfTestEcho`, and (9-2b) `registerPush`, `unregisterPush`. `EXPO_PUSH_TOKEN_RE` (`^Expo(nent)?PushToken\[[^\]]{1,200}\]$`) is exported too — the DTO and the command share it.
 
 **`SyncReportCommand`** (`sync-report.command.ts:471`, 5-6) export exists for the same reason: `recordSyncReport` (badge-in), `listRejectedOps` (any member, keyset), `resolveRejectedOp` (`review.decide`).
 
@@ -313,7 +323,7 @@ The UPDATE re-carries every validity condition including `inviteExpiresAt > now(
 
 ### Device commands — see **Key algorithms** below
 
-`mintEnrollmentCode` (`device.manage`), `enroll` (unauthenticated), `badgeIn` (device token, no idempotency key), `revokeDevice` (`device.manage`), `selfTestEcho` (badge-in session).
+`mintEnrollmentCode` (`device.manage`), `enroll` (unauthenticated), `badgeIn` (device token, no idempotency key), `revokeDevice` (`device.manage`), `selfTestEcho` (badge-in session), `registerPush` / `unregisterPush` (9-2b — badge-in session, no idempotency key).
 
 ### `SyncReportCommand` (5-6, `sync-report.command.ts:471`)
 
@@ -394,9 +404,19 @@ Returns the device token, the TTL, and `offlineStoreKeySealed` — delivered exa
 
 **Badge-in** (`:491`). **21-7:** binding is an allowlist — a floor role (`isFloorRole`) or, keeping its pre-21-7 behaviour, the accountant; anyone else (the `client` user) is refused 403 `role-denied` AFTER the PIN + binding check and BEFORE the device update (a wrong PIN stays 401, a refused badge-in binds nothing); the three per-command device role re-checks (`enrollment.command.ts`, `receiving.command.ts`, `sync-report.command.ts`) are the floor-role allowlist `isFloorRole` (`owner | ops_manager | operator`) instead of `=== 'accountant'` denylists. Not a state change beyond the binding + last-seen, so **no idempotency key** (the sign-in pattern). Device row locked `.for('update')`; unknown / revoked / not-yet-enrolled → 403 `device-revoked` (all identical). PIN verified against `device.pinHash ?? DUMMY_HASH` — one scrypt round always. `bound` (`:513-516`) requires an **active** user in this tenant and either an unbound device or the *same* operator: a device is single-operator until re-enrollment. Wrong operator or wrong PIN → one 401 `badge-invalid`.
 
-**Revoke** (`:554`). Status flip + `revoked_at`/`revoked_by` + `wipe_flag` + audit + `device.revoked`, one transaction. A re-revoke of an already-revoked device re-serves the state with **no second audit row and no second outbox event** (`:595-613`) while still writing its idempotency row.
+**Revoke** (`:589`). Status flip + `revoked_at`/`revoked_by` + `wipe_flag` + audit + `device.revoked`, one transaction. **Since 9-2b it also nulls `push_token`, `push_warehouse_id` and `push_registered_at`** in the same UPDATE — a revoked handheld is never pushed to again. A re-revoke of an already-revoked device re-serves the state with **no second audit row and no second outbox event** (`:595-613`) while still writing its idempotency row.
 
-**Fail-closed re-authorization.** `selfTestEcho` (`:720`) is the model every device-authenticated command follows: re-resolve the device row (`:732-741`, 403 `device-revoked`) and re-read the operator's role from the DB (`:745-758`, `accountant` → 403 `role-denied`) **before** the replay lookup. Revocation is therefore effective on the device's next request — that is what buys the 30-day token its long TTL.
+**Push registration (9-2b).** `PUT …/devices/push-registration` → `registerPush` (`:725`); `DELETE` → `unregisterPush` (`:761`). The controller runs `assertOwnTenant` (403 `permission-denied`) and `requireBadgeIn` — a bare enrollment credential has `userId = null` → **401 `unauthenticated`** (`DeviceSessionGuard` alone would accept it). The command, in one tenant transaction:
+
+1. (PUT) the token must match `EXPO_PUSH_TOKEN_RE` — the DTO refuses first (400 `validation-failed`); the command re-asserts the invariant it owns.
+2. `lockOwnBoundDevice` (`:777`, the `selfTestEcho` model): the device row `FOR UPDATE`; it must be `active`, enrolled (`pin_hash` set) and bound to **this session's** operator, else **403 `device-revoked`** — a device revoked or rebound since the session was minted cannot register. Unlike `selfTestEcho` there is no role re-read: whether the operator may receive a push is decided at enqueue and again at send (the push-target predicate).
+3. (PUT) `assertWarehouseInTenant` → 404 `not-found`.
+4. (PUT) clear the same token from every **other** device row of the tenant (a token belongs to one device).
+5. Write the three columns (DELETE: null them), stamping `push_registered_at` and `last_seen_at`.
+
+Both answer **204** and take **no `Idempotency-Key`**: they are natural upserts — a retry writes the same values (the `notifications/opened` exception family, API-SURFACE). No audit row and no outbox event: a registration is transport configuration, not a business state change.
+
+**Fail-closed re-authorization.** `selfTestEcho` (`:848`) is the model every device-authenticated command follows: re-resolve the device row (403 `device-revoked`) and re-read the operator's role from the DB (not a floor role → 403 `role-denied`) **before** the replay lookup. Revocation is therefore effective on the device's next request — that is what buys the 30-day token its long TTL.
 
 ### Bin grid generation (`bin.command.ts:142-174`)
 
@@ -488,6 +508,8 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 | `device.sync_report.recorded` (5-6) | `recordSyncReport` | **audit-only** (per report; the per-row `device.rejected_op.raised` above is the outbox event) — an `audit_events` row (action = the event name, `target_type` = `device`), no outbox row: the per-row dedupe + `rejected_ops` rows carry the durable facts |
 
 `createBin` emits nothing (see Commands).
+
+**Read by notifications (9-2b):** the mobile pushes reach `devices` only through the four push-target functions above, and the cross-tenant ownership read runs on the `AUTH_DATABASE` handle the sender passes in (`pushTokenOwners(authDb, …)`) — a read, never a write. See `notifications.md` §Mobile pushes.
 
 **Consumed by notifications (9-2):** `device.rejected_op.raised` raises the panel's `rejected-op` entry and `device.rejected_op.resolved` resolves it with its `status` (`applied`, `recounted` or `discarded` — derived from `REJECTED_OP_STATUSES` minus `open`), keyed by `rejectedOpId` and routed to `review.decide`. See `notifications.md`.
 

@@ -2,7 +2,7 @@
 title: 'Mobile pushes — new work, approvals awaiting and wave cutoff at risk, sent to the handhelds that can act'
 type: 'feature'
 created: '2026-10-12'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -84,7 +84,8 @@ context:
   - Only the error **code** is stored or logged, never Expo's message, because it contains the token.
 
 *Staleness*
-- At enqueue, an event whose `occurredAt` is more than 30 minutes old is acked without queueing. This covers the deploy backlog and operator replays of quarantined rows.
+- At enqueue, an event the server recorded more than 30 minutes ago is acked without queueing. The age is measured from the outbox row's server-minted append time, the uuidv7 `eventId`, and never from `occurredAt`, which can be device time. This covers the deploy backlog and operator replays of quarantined rows. *(Amended by the human, 2026-10-12, code review BE1.)*
+- At send, a `pending` row created more than 30 minutes ago is failed as `expired` before claiming.
 - An at-risk event whose cutoff has already passed is acked.
 - Messages carry `ttl: 3600`.
 
@@ -232,19 +233,19 @@ Paths relative to `workspace/core/backend/wms-be/src` (BE) and `workspace/core/m
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: migration 0068, schema, probe, journal and snapshot.
-- [ ] BE: tenancy `listPushTargets`, `getPushTargetsIn` and `clearPushTokenIn`; revoke clears the push columns; the registration routes, DTOs and `openapi.json`.
-- [ ] BE: `PushEnqueueHandler`, `PushGateway` (both adapters), `PUSH_COPY`, `PUSH_ERROR_CLASS`, `NotificationsFacade.sendDuePushes`, `PushSenderWorker`.
-- [ ] BE: `OutboundFacade.sweepCutoffRisk`, `WaveCutoffSweepWorker`.
-- [ ] BE: `.env.example` gets `PUSH_GATEWAY`, `EXPO_ACCESS_TOKEN`, `PUSH_HTTP_TIMEOUT_MS`, `PUSH_SENDER_POLL_MS` and `WAVE_CUTOFF_SWEEP_POLL_MS`.
-- [ ] BE tests:
+- [x] BE: migration 0068, schema, probe, journal and snapshot.
+- [x] BE: tenancy `listPushTargets`, `getPushTargetsIn` and `clearPushTokenIn`; revoke clears the push columns; the registration routes, DTOs and `openapi.json`.
+- [x] BE: `PushEnqueueHandler`, `PushGateway` (both adapters), `PUSH_COPY`, `PUSH_ERROR_CLASS`, `NotificationsFacade.sendDuePushes`, `PushSenderWorker`.
+- [x] BE: `OutboundFacade.sweepCutoffRisk`, `WaveCutoffSweepWorker`.
+- [x] BE: `.env.example` gets `PUSH_GATEWAY`, `EXPO_ACCESS_TOKEN`, `PUSH_HTTP_TIMEOUT_MS`, `PUSH_SENDER_POLL_MS` and `WAVE_CUTOFF_SWEEP_POLL_MS`.
+- [x] BE tests:
   - every backend matrix row;
   - the gateway against a stubbed https server (batch of 100, ticket order, each error class);
   - `OWN_SCHEMA_NAMES` and write ownership;
   - the RLS probe count;
   - a test that the 9-2 projection still writes when the push handler is subscribed and the gateway is down.
-- [ ] Mobile: `expo-notifications`, `push-routing.ts` with tests, `push.ts`, the gate's pending tab, the inbox param + nonce, the foreground permission check, the composition-test stubs, README.
-- [ ] Meta docs:
+- [x] Mobile: `expo-notifications`, `push-routing.ts` with tests, `push.ts`, the gate's pending tab, the inbox param + nonce, the foreground permission check, the composition-test stubs, README.
+- [x] Meta docs:
   - Update:
     - `notifications.md` (queue/send);
     - `tenancy.md`;
@@ -271,6 +272,29 @@ Paths relative to `workspace/core/backend/wms-be/src` (BE) and `workspace/core/m
 - Given no `PUSH_GATEWAY` and no EAS `projectId`, when the full BE suite, lint and typecheck run and the mobile tests and typecheck run, then they pass and no network call is made.
 
 ## Implementation Notes
+
+Built on wms-be `feat/9-2b-mobile-pushes` (`4ca23f0..8448099`: `f8b5089` the story, `8448099` the code-review patch) and wms-mobile on the same branch (`a3d85c3..58681d3`: `067d864`, `58681d3`). Design as built: `docs/design/modules/notifications.md` §Mobile pushes, `tenancy.md` (push registration), `outbound.md` (`sweepCutoffRisk`), `docs/design/mobile/SYSTEM-DESIGN.md` §Push notifications.
+
+**As-built deviations from the spec** (the code is the reference):
+- **Two extra `push_deliveries` columns, `warehouse_id` and `approval_source`,** with `push_deliveries_shape_check` (a warehouse on new-work rows only, a source on approval rows only, `attempts >= 0`) and an `approval_source` CHECK. The spec's column list had nothing the **send-time** audience re-check could read: without them the sender could not re-run "registered to the work's warehouse" or "in 9-2's audience for this source".
+- **A fourth tenancy function, `pushTokenOwners(authDb, tokens)`.** The spec described the cross-tenant ownership read but put it in no module; it lives in `tenancy.service.ts` beside the other three (tenancy owns every `devices` read), takes the `AUTH_DATABASE` handle from the sender, and only reads. Ties on `push_registered_at` break by device id.
+- **The approval sources are `stock-adjustment`, `count-variance`, `over-receipt`** (`APPROVAL_PUSH_SOURCES`). The rejected op is a review, not an approval, and stays off the handheld (UX-DR25). A payload 9-2's `decodeRaise` refuses is not pushed either. A module-load assertion fails the boot if a source has no 9-2 audience.
+- **Staleness is the append time (human-amended, code review BE1)** — the uuidv7 timestamp of the outbox `eventId` (`uuidv7TimestampMs`, new in `shared/primitives/ids.ts`); an id that is not a uuidv7 gets no push, never a fallback to `occurredAt`. **A `pending` row older than 30 minutes is failed `expired`** before every claim (BE2). Consequence: the spec's "config-fault rows older than 1 hour become `failed`" is still coded, but the 30-minute expiry ends such a row first.
+- **Expo Go is detected with `isRunningInExpoGo()`** (from `expo`), not by comparing `Constants.executionEnvironment` as the spec's `registrationDecision` signature implied: per the code's note a dev-client build reports `storeClient` too, so the environment string cannot tell Expo Go apart. `executionEnvironment` is still the input; the Expo port reports `expoGo` (`EXPO_GO`) when `isRunningInExpoGo()` holds.
+- **`push.ts` / `push-expo.ts` split.** The spec put the Expo calls in `push.ts` behind injected ports. As built `push.ts` holds the sequences (the registration controller, `PendingTap`, the tap handler) and imports nothing from Expo; `push-expo.ts` binds the real ports and is the only module importing `expo-notifications`, imported only from `app/`. `push.test.ts` pins the boundary statically, including transitively from every test.
+- **No composition-test stubs were needed.** The device store reaches the push code through an installed hook (`setPushRefresh`), not an import, so `device-store-composition.test.ts` is unchanged and has no `expo-notifications`/`expo-constants` stub.
+- **`registrationDecision` takes a `registered` input** (the token this device last registered, sealed under the new `push-token` secret). `unregister` fires only while a registration stands, so the foreground check never sends a DELETE for a device that never registered. `ask` additionally requires a known warehouse.
+- **Badge-in applies the pending launch tap.** The spec had only the gate apply it; when badge-in is what resolves the phase to `badged`, the badge-in screen routes past the gate, so it `take()`s the tap itself. `tapDecision` holds a tap (`pend`) only on the gate `/` in `uninitialized`/`enrolled`/`badged`; a tap on `/health` `dismissTo`s the inbox.
+- **The jobs shell joins notifications' importer allowlist.** `test/architecture.spec.ts` now allows `jobs/jobs.module.ts` to import notifications through its facade (and checks it reaches no further); `JobsModule` imports `OutboundModule` and `NotificationsModule`. A new architecture test pins that the push enqueue and the 9-2 delivery import no `http(s)`, `fetch` or `PushGateway`.
+- **Gaps the spec left, filled:**
+  - a config fault retries after **30 s** (`PUSH_CONFIG_FAULT_RETRY_MS`) without spending an attempt, and is **logged once per tick across every tenant** — the sender returns the codes, the worker logs (BE4);
+  - a 2xx that is not JSON or whose `data` is not one ticket per message is **`bad-response`** for the whole batch (permanent), and a missing ticket in the sender reads the same; a ticket error without `details.error` is `unknown-error`;
+  - `shouldPlaySound: true` in the foreground handler — Android shows no heads-up banner without it;
+  - `getToken` is bounded by a 15 s timeout (M2); the prompt is not;
+  - the worker's stale bound is the sender's `PUSH_SENDING_STALE_MS`, re-exported through the facade (BE5), and its due-tenant query also picks up tenants with only stale `sending` rows;
+  - the PUT/DELETE answer `403 permission-denied` for another tenant's path (`assertOwnTenant`) beside `device-revoked`; both stamp `last_seen_at`; neither audits nor emits.
+
+Deploy note: set `PUSH_SENDER_POLL_MS` and `WAVE_CUTOFF_SWEEP_POLL_MS` (both off when unset). `PUSH_GATEWAY` defaults to `unconfigured`; `expo` without `EXPO_ACCESS_TOKEN` fails the boot. The handheld registers nothing until an EAS `projectId` is configured (PENDING).
 
 ## Spec Change Log
 
@@ -303,6 +327,27 @@ Design review (2026-10-12), two lenses: backend (K) and mobile/API/tests (M).
 | 21 | K | Migration: NOT NULL, a `gateway` CHECK, probe shapes, retention | low | Fixed; retention → PENDING |
 | 22 | M | Matrix gaps: cutoff boundaries, launch tap, revoked PUT, Expo Go | low | Fixed |
 | 23 | K | Verified: `wave.released` carries the warehouse; transfer `destWarehouseId`; `SOURCE_AUDIENCE` covers the approvals; relay advisory lock | — | No change; "add warehouseId" task dropped |
+
+
+**Code review (2026-10-12)**, two lenses: backend (BE) and mobile (M); 15 findings.
+
+| # | Lens | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| BE1 | BE | Staleness was measured from `occurredAt`, which is device time for a count or transfer confirm queued offline | medium | Fixed: the human amended the rule (Boundaries, Staleness) — the age is the outbox row's uuidv7 append time; an undatable id gets no push |
+| BE2 | BE | No send-time age check: a backoff or config fault could deliver "New work ready" an hour late | medium | Fixed: a `pending` row created more than 30 minutes ago is failed `expired` before each claim |
+| BE3 | BE | Cross-tenant token ownership can regress after tenant B clears its token | low-medium | Deferred: PENDING notifications, deferred-work (a tombstone of superseded tokens) |
+| BE4 | BE | A config fault was logged once per tenant per tick | low | Fixed: the sender returns the codes; the worker logs once per tick across tenants |
+| BE5 | BE | The worker's due-tenant query hardcoded the 5-minute stale interval | low | Fixed: `PUSH_SENDING_STALE_MS` re-exported through the facade |
+| BE6 | BE | The at-risk window does not wrap IST midnight | low | Deferred: PENDING outbound, deferred-work |
+| BE7 | BE | Expo `PUSH_TOO_MANY_EXPERIENCE_IDS` fails a mixed-project batch | low | Deferred: PENDING notifications, deferred-work |
+| M1 | M | The `?tap` nonce was never handled: a tap on the tab already showing did not refresh, and a later tab switch refreshed again | medium | Fixed: `shouldRefreshForTap` + a handled-nonce ref; the catalog effect depends on `params.tap` |
+| M2 | M | `getToken` had no timeout and the syncs are serialised, so one hung fetch blocked every later sync | medium | Fixed: 15 s timeout (`PUSH_TOKEN_TIMEOUT_MS`) |
+| M3 | M | A sync queued on the inbox could prompt after the operator had moved to a task screen | low | Fixed: the live pathname (`ports.onInbox()`) is re-read before the channel and the prompt |
+| M4 | M | No re-sync when the inbox regains focus | low | Fixed: `useFocusEffect`, and again once a snapshot has loaded |
+| M5 | M | A pending launch tap is never expired or cleared on an unenrolled or revoked phase | low | Deferred: PENDING wms-mobile, deferred-work |
+| M6 | M | Badge-in synced twice (its own sync plus the catalog refresh's) | low | Fixed: badge-in syncs only when there is no `lastWarehouseId`; otherwise the refresh does |
+| M7 | M | A DELETE answered `403 device-revoked` kept the stored token, so every foreground retried | low | Fixed: counts as unregistered (revoke already cleared the server's columns) |
+| M8 | M | Weak tests | low | Fixed: tests for M1–M3 and M7, the serialised chain, the transitive import boundary and the PUT/DELETE wire shape (M6's store change is in `device-store.ts`, which no test loads) |
 
 ## Design Notes
 
