@@ -14,7 +14,7 @@ The module exists for one invariant of its own beside AD-15's: **a buffer is a r
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `integrations` (`schema.ts:3538`) | One row per connected provider per tenant: `provider`, `credential_sealed`, `credential_version`, `backorder_policy`, `ingest_warehouse_id` (nullable — 7-2's ingest gate; the single warehouse channel orders land on), `connected_by`, `rotated_at`/`rotated_by`, `last_synced_at`, `last_attempt_at`, `last_error`, `consecutive_failures`, `breaker_state` | See below |
+| `integrations` (`schema.ts:3538`) | One row per connected provider per tenant: `provider`, `credential_sealed`, `credential_version`, `backorder_policy`, `ingest_warehouse_id` (nullable — 7-2's ingest gate; the single warehouse channel orders land on), `connected_by`, `rotated_at`/`rotated_by`, `last_synced_at`, `last_attempt_at`, `last_error`, `consecutive_failures`, `breaker_state`, `sync_episode_id` (9-2 — the open sync-health episode, nullable; migration 0067) | See below |
 | `channel_mappings` | `(integration_id, external_ref) → sku_id` — the mapping rows sync publishes for AND the ingest's per-line translate table | Exposed since 7-2 via `GET/PUT .../connections/{id}/mappings` (full replacement ≤ 200) |
 | `integration_calls` | The append-only per-call meter: `kind` (`availability-sync\|credential-revoke\|order-ingest\|order-writeback` since 7-2), `status`, `latency_ms`, `error`, `at` | AD-7's companion, the meter RN-5 reads; the ingest's refused OUTCOMES meter as statuses (`order-ingest` kind), the writeback's deliveries as `order-writeback` |
 
@@ -58,7 +58,7 @@ Every mutating arm requires `Idempotency-Key`; same-key replay re-serves the sto
 | `updateConnectionConfig` (`backorderPolicy` + 7-2's `ingestWarehouseId`) | own-tenant → key → uuid → non-uuid warehouse → row → vocabulary | `400 validation-failed` (not `accept\|reject`; non-uuid `ingestWarehouseId`); `404` (unknown connection, or a foreign/unknown ingest warehouse named); `422 idempotency-key-reuse` | last-write-wins; policy consumed by 7-2's acceptance, the warehouse by the ingest gate. `ingestWarehouseId` ABSENT leaves it standing, `null` CLEARS it (the FE's '' sentinel → `null`) |
 | `setConnectionMappings` (7-2, route-backed now) | own-tenant → key → uuid → row → per-item shape (no blanks, no duplicate `externalRef`, ≤ 200) → SKUs resolve in-tenant → publish-ceiling arithmetic (`skuCount × activeWarehouseCount` named verbatim in the 400) → full replacement in one tx | `400 validation-failed` (the cap / duplicates / the ceiling arithmetic); `404` (connection, or a mapped SKU outside the tenant) | **FULL replacement** — rows absent from the save are removed before the next publish cycle; an empty list clears the set; `channels.mappings_set` audit |
 | `setConnectionBuffers` | own-tenant → key → uuid → per-item shape → **per-item `applyChannelBuffer` (each its OWN transaction, the reservation core arbitrates)** → final idempotency tx | `400` malformed item; `503 reservation-store-unavailable` (nothing written — the whole request); per-item verdicts otherwise: `applied \| unchanged \| refused` (`buffer-over-ceiling` — the reservation core's `409 unavailable` mapped, the OLD buffer standing) | counter mirrors restore after each commit; a crash mid-request replays safely because targets are ABSOLUTE |
-| `disconnect` | own-tenant → key → PHASE 1 (authority + replay + row read with sealed blob) → PHASE 2 tx re-locks, re-404s (with the double-replay shape for a concurrent loser), releases buffers, deletes row + mappings → 204 → **post-commit: counter mirrors, then the PHASE-1 blob's revoke attempt + meter (7-2, RN-7/review-4 — outside any tx, logged, never blocking)** | `404` (unknown, or a repeat under a NEW key — same-key replays replay the 204); `409 conflict`; `503 reservation-store-unavailable` leaves everything standing | revoke attempted AFTER the delete commits (a port call inside the tx would hold the row lock up to `CHANNEL_HTTP_TIMEOUT_MS` against the pool-nesting gotcha; post-commit is equally correct because the delete is AD-15's local atomic act). **Known window (epic-7 retro D4, pending fix):** the revoke opens the PHASE-1 read's blob — the Phase-2 re-lock's read carries no sealed blob — so a rotate that commits between Phase 1 and the delete leaves the NEW credential deleted-but-never-revoked; the fix re-reads the blob on the re-locked row and revokes that |
+| `disconnect` | own-tenant → key → PHASE 1 (authority + replay + row read with sealed blob) → PHASE 2 tx re-locks, re-404s (with the double-replay shape for a concurrent loser), releases buffers, deletes row + mappings, **and (9-2) appends `channel.sync.recovered` `{reason: 'disconnected'}` when the re-locked row carries an open `sync_episode_id`** → 204 → **post-commit: counter mirrors, then the PHASE-1 blob's revoke attempt + meter (7-2, RN-7/review-4 — outside any tx, logged, never blocking)** | `404` (unknown, or a repeat under a NEW key — same-key replays replay the 204); `409 conflict`; `503 reservation-store-unavailable` leaves everything standing | revoke attempted AFTER the delete commits (a port call inside the tx would hold the row lock up to `CHANNEL_HTTP_TIMEOUT_MS` against the pool-nesting gotcha; post-commit is equally correct because the delete is AD-15's local atomic act). **Known window (epic-7 retro D4, pending fix):** the revoke opens the PHASE-1 read's blob — the Phase-2 re-lock's read carries no sealed blob — so a rotate that commits between Phase 1 and the delete leaves the NEW credential deleted-but-never-revoked; the fix re-reads the blob on the re-locked row and revokes that |
 | `retryConnection` (manual) | own-tenant → key → uuid → row → **breaker state** → scopes read via the core between two transactions → half-open + append in the second tx | `503 reservation-store-unavailable` (the ATP read fails closed — nothing appended, nothing broken); `404` | re-appends the snapshot through the outbox; **half-open is reachable only from `open`** — a retry from a closed breaker re-appends and leaves the breaker closed |
 
 **The webhook ingest is NOT in this table** — it carries no `Idempotency-Key` (the marketplace is the caller; redelivery dedup rides the order path's partial unique on `(tenant, integration_id, external_event_id)`), has no session guard, and is verified instead (below).
@@ -98,6 +98,43 @@ sequenceDiagram
 - **RN-3's deliberately-branching dual 409/503:** a 503 store outage means the ATP read failed closed → the row degrades, NOTHING is published; a 409 `unavailable` from the grant path is a real pool state → the clamped `0` publishes. The codes are machine branches in `channels.publish.ts`, never prose matches.
 - **RN-5's breaker:** `consecutive_failures` on the connection row with `BREAKER_FAILURE_THRESHOLD = 5` (frozen const, `channels.view.ts:131`). `open` refuses further APPENDS (a cycle over an open breaker appends nothing and does not meter); a manual retry half-opens (only from `open`); a half-open failure reopens immediately; the first success closes and resets the rung. The delivery side meters honestly (re-drains re-meter).
 - **Stalls** (`recordSyncStall`) — a scope preparation that throws degrades the row's stamps without appending, so the health read answers `degraded` while nothing lies about a `last_synced_at`.
+
+## Sync-health episodes (story 9-2)
+
+The notification panel's `channel-sync` source. A connection's breaker trips many times over its life, and each trip is a new thing to attend to, so the entry is keyed by an **episode**, not by the connection. `integrations.sync_episode_id` (uuid, nullable, migration 0067) holds the open episode; channels alone writes it.
+
+| Transition (`recordDelivery`, `channels.publish.ts`) | Episode | Event |
+|---|---|---|
+| **closed → open** (the 5th consecutive failure) | mint `uuidv7()`, store it | `channel.sync.degraded {connectionId, episodeId}` |
+| half-open → open (the probe failed again; stored spelling `'half-open'`) | kept | none — the same episode |
+| open → open (a re-drain) | kept | none |
+| open / half-open → **closed** (a success) | cleared to null | `channel.sync.recovered {connectionId, episodeId, reason: 'recovered'}` — only when an episode is stored |
+| **disconnect** while an episode is open (`channels.command.ts`) | deleted with the row | `channel.sync.recovered {connectionId, episodeId, reason: 'disconnected'}` |
+
+```mermaid
+sequenceDiagram
+    participant D as ChannelAvailabilityDelivery
+    participant P as ChannelsPublishService.recordDelivery
+    participant DB as integrations (FOR UPDATE)
+    participant O as Outbox
+    D->>P: outcome (ok | failed)
+    P->>DB: lock the connection row
+    alt failed, breaker closed, failures reach 5
+        P->>DB: breaker open, sync_episode_id = uuidv7()
+        P->>O: channel.sync.degraded {connectionId, episodeId}
+    else failed, breaker half-open or open
+        P->>DB: breaker open (episode kept)
+    else ok, breaker open/half-open, episode stored
+        P->>DB: breaker closed, failures 0, sync_episode_id = null
+        P->>O: channel.sync.recovered {reason: recovered}
+    end
+```
+
+- **All in the delivery's transaction**, beside the breaker write — the event and the episode column never disagree.
+- **Disconnect closes the episode** because the connection is gone and no delivery will ever close its breaker; without it the panel entry would stand open forever. The episode id is read from the Phase-2 re-locked row.
+- **Lag-based health is not a trigger.** `connectionHealth()` still answers `degraded`/`sync-lag` on the dashboard and `/channels`, but only breaker transitions raise or resolve a notification (PENDING).
+- **An episode exists only if this build opened it.** A breaker already open when 9-2 deployed has no `sync_episode_id`, so its later close emits nothing and no entry was ever raised for it.
+- `CHANNEL_SYNC_RECOVERED_REASONS` (`channels.events.ts`) is a runtime tuple pinned to the panel's `channel-sync` resolutions by `test/notifications.spec.ts`. The column is an in-process read only (`CONNECTION_COLUMNS`), never on a wire shape — like the sealed blob.
 
 ## The webhook ingest (story 7-2)
 
@@ -143,11 +180,13 @@ sequenceDiagram
 - The meter rows are kind `order-writeback` and NOTHING ELSE (the delivery handler's own contract line) — refused/failed transport statuses differ only in the metered `status`, never a second kind.
 - The transport (`channel-http.ts`) rides **node:https, not bun fetch** — per-request `rejectUnauthorized` honoring the TLS-off env override is needed by the stub-server tests and the jest runtime's fetch ignores in-process `NODE_TLS_REJECT_UNAUTHORIZED` (a real lesson: the transport shape was rewritten from the design's `fetch` and the change is logged in the spec). Timeouts parse per the poll-gate conventions (`CHANNEL_HTTP_TIMEOUT_MS`, invalid boots loud); credential and body content never reach any log.
 
-## The event
+## The events
 
 | Event | Payload | Carries |
 |---|---|---|
 | `channel.availability.published` (outbox) | `{connectionId, provider, scopes: [{warehouseId, skuId, visibleMilli}], publishedAt}` (a scope's `visibleMilli` is RN-6's `V(c)` in milli-units — the port's `ChannelAvailabilityScope` verbatim) | ids and quantities **never a secret** — the credential material never leaves `integrations.credential_sealed` except opened in process by the delivery handler, which never logs or persists it |
+| `channel.sync.degraded` (outbox, 9-2) | `{connectionId, episodeId}` | ids only — the breaker's closed → open transition (above); consumed by notifications |
+| `channel.sync.recovered` (outbox, 9-2) | `{connectionId, episodeId, reason: 'recovered' \| 'disconnected'}` | ids only — the breaker closing, or a disconnect while an episode is open; consumed by notifications |
 
 The audit events (tenancy's `audit_events`, the actor = the command's user; **no secret hash of the content**):
 

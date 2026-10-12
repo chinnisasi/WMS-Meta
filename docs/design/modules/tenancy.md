@@ -483,10 +483,13 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 | `device.enrollment_code_minted` / `device.enrolled` / `device.revoked` | `EnrollmentCommand` | `{deviceId, …}` — **never** the code, PIN or sealed key |
 | `bin.blocked` | putaway's `BinStateCommand` | — |
 | `bin.capacity_changed` (11-5) | `editBinCapacity` | `{binId, warehouseId, lengthMm, widthMm, heightMm, maxWeightGrams}` |
+| `device.rejected_op.raised` (9-2) | `recordSyncReport` — **only for a row that entered the queue** (`inserted.length > 0`; a re-posted row the `(tenant, op_id)` unique absorbed raises nothing), in the same transaction as the insert | `{rejectedOpId, opId, opType, problemCode, deviceId, operatorUserId}` — the notification panel's `rejected-op` raise (`REJECTED_OP_RAISED_EVENT`, `sync-report.command.ts:257`) |
 | `device.rejected_op.resolved` (5-6) | `resolveRejectedOp` | `{rejectedOpId, opId, opType, classification, problemCode, decision, status, deviceId, deviceLabel, operatorId, operatorEmail, resolvedAt}` |
-| `device.sync_report.recorded` (5-6) | `recordSyncReport` | **audit-only** — an `audit_events` row (action = the event name, `target_type` = `device`), no outbox row: the per-row dedupe + `rejected_ops` rows carry the durable facts |
+| `device.sync_report.recorded` (5-6) | `recordSyncReport` | **audit-only** (per report; the per-row `device.rejected_op.raised` above is the outbox event) — an `audit_events` row (action = the event name, `target_type` = `device`), no outbox row: the per-row dedupe + `rejected_ops` rows carry the durable facts |
 
 `createBin` emits nothing (see Commands).
+
+**Consumed by notifications (9-2):** `device.rejected_op.raised` raises the panel's `rejected-op` entry and `device.rejected_op.resolved` resolves it with its `status` (`applied`, `recounted` or `discarded` — derived from `REJECTED_OP_STATUSES` minus `open`), keyed by `rejectedOpId` and routed to `review.decide`. See `notifications.md`.
 
 ---
 

@@ -696,3 +696,31 @@
 - source_spec: none
   summary: 9-2b — mobile pushes for task assignment, approval-needed and at-risk cutoff (expo-notifications, a device push token at enrollment, an Expo push sender as an outbox consumer, a server-side at-risk cutoff sweep).
   evidence: Split from 9-2 by the human (2026-10-12). Open product questions first: the handheld has no "task assigned to a person" concept (warehouse-wide inbox), and approvers (owner/ops_manager) have no mobile login today.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: Retention for resolved notification entries and tombstones (a job deleting resolved rows older than N days), paired with a partial index on open entries — e.g. `(tenant_id, surfaced_at) WHERE resolved_at IS NULL` — so the bell's status read is index-served.
+  evidence: Design (Boundaries "Docs") + code review BE6 — every occurrence leaves a row forever; `NotificationsFacade.status` filters `resolved_at IS NULL` with no index covering it. The list itself is bounded by the `(tenant_id, raised_at DESC NULLS LAST, id DESC NULLS LAST)` index.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: No backfill at deploy — items already open when 9-2 deployed (pending adjustments and over-receipts, open breaches, batch alerts, QC holds, rejected ops, open breakers) never surface, and their later resolves leave tombstones nothing fills.
+  evidence: Code review BE3 — the projection sees only events relayed after deploy; a breaker open at deploy has no `sync_episode_id`. A backfill would need six modules' tables, which notifications may not read; the candidate is a per-module "re-announce open items" job.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: `surfaced_at` and `last_opened_at` are both `now()` — transaction start, not commit — so a raise whose transaction starts before a member's `opened` and commits after it never lights that member's dot.
+  evidence: Code review BE5 — `notifications.delivery.ts` raise upsert and `NotificationsFacade.opened` both stamp SQL `now()`. The window is one short upsert wide; `clock_timestamp()` narrows it, a commit-ordered sequence closes it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: Lag-based channel sync health as a notification trigger — today only the breaker's closed → open transition raises a `channel-sync` entry; a connection lagging past the 60 s SLO reads `sync-lag` on the dashboard and raises nothing.
+  evidence: Design decision (spec Boundaries "Lag-based health is not a trigger"; Never list). Needs its own episode start/end rule and a debounce.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: The 9-3 export-completion hook — an `export` source telling the requester their async export is ready (TS tuple + CHECK migration + API union arm + an `EVENT_ROUTES` entry).
+  evidence: Design (Boundaries "Docs"). It is the first per-USER audience; `SOURCE_AUDIENCE` routes only by capability or role today, so 9-3 must extend the routing rule.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: The bell's panel refetches the whole SKU catalog (`useSkuMap`) every time it opens.
+  evidence: Code review FE6 — the panel body is lazy by design (the shell never pages the catalog), so each mount walks the catalog again. A module-level cache invalidated by the catalog broadcaster, or a backend summary carrying the SKU code, would fix it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
+  summary: A late-surfaced entry can sort outside the panel's newest 10 — the dot follows `surfaced_at` but the panel orders by `raised_at`, so opening it clears the dot without showing the entry (it is on `/notifications`).
+  evidence: Code review FE7 — a relay backlog projects an old raise late. A "new since last open" marker or ordering the panel by `surfaced_at` would close it.

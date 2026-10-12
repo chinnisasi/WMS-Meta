@@ -2,7 +2,7 @@
 title: 'Notification panel — one bell for what is actionable, routed to who can act, resolving itself when the source clears'
 type: 'feature'
 created: '2026-10-12'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -271,14 +271,14 @@ Paths are relative to `workspace/core/backend/wms-be/src` (BE) and `workspace/co
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be`: migration 0067 (tables, column, CHECK, RLS, probe), schema, the vocabulary tuple + pin.
-- [ ] `wms-be` event changes: rejected-op raised; breach and batch-alert cleared (incl. policy delete); channel episodes + degraded/recovered + disconnect; over-receipt `warehouseId`; variance `overThreshold`.
-- [ ] `wms-be` notifications module: subscribers, facade (list, status, opened), wiring.
-- [ ] `wms-be` api: controller, DTOs (summary union), `openapi.json`.
-- [ ] `wms-be` tests per Boundaries; the architecture block.
-- [ ] `wms-be` `.env.example`.
-- [ ] `wms-fe`: `api:generate`; wrappers and hooks; the bell + lazy panel; the `/notifications` page; entries and links; tests.
-- [ ] Meta docs per Boundaries.
+- [x] `wms-be`: migration 0067 (tables, column, CHECK, RLS, probe), schema, the vocabulary tuple + pin.
+- [x] `wms-be` event changes: rejected-op raised; breach and batch-alert cleared (incl. policy delete); channel episodes + degraded/recovered + disconnect; over-receipt `warehouseId`; variance `overThreshold`.
+- [x] `wms-be` notifications module: subscribers, facade (list, status, opened), wiring.
+- [x] `wms-be` api: controller, DTOs (summary union), `openapi.json`.
+- [x] `wms-be` tests per Boundaries; the architecture block.
+- [x] `wms-be` `.env.example`.
+- [x] `wms-fe`: `api:generate`; wrappers and hooks; the bell + lazy panel; the `/notifications` page; entries and links; tests.
+- [x] Meta docs per Boundaries.
 
 **Acceptance Criteria:**
 - Given a pending over-receipt, when an owner opens the bell, then it is listed newest-first and amber. Clicking it opens the over-receipts queue filtered to pending in its warehouse. After approval, the entry shows resolved.
@@ -286,6 +286,19 @@ Paths are relative to `workspace/core/backend/wms-be/src` (BE) and `workspace/co
 - Given the full BE and FE suites, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Built on wms-be `feat/9-2-notification-panel-and-pushes` (`ce62c62..59402fc`: `f05eb73` the story, `59402fc` the code-review patch) and wms-fe on the same branch (`8807a08..6079207`: `a726028`, `6079207`). Design as built: `docs/design/modules/notifications.md`.
+
+**As-built deviations from the spec** (the code is the reference):
+- **An extra CHECK, `notifications_shape_check`.** Beside the `source_type` CHECK, 0067 pins the row shape: a raised row (summary set) carries both `raised_at` and `surfaced_at`; a tombstone (summary null) is always resolved; `resolved_at` and `resolution` are set together or not at all. The probe proves each refused shape is refused by its named constraint.
+- **`raised_at` and `surfaced_at` are nullable.** The spec listed them without saying. A tombstone has neither, so they cannot be `NOT NULL`; the shape CHECK requires both on any raised row.
+- **An unknown resolution is logged and acked.** Each source's resolutions are a closed list (`SOURCE_RESOLUTIONS`); a resolve whose `status`/`reason` falls outside it is treated as a malformed payload — logged, acked, nothing written. After code review BE4 the count-variance and rejected-op lists are derived from `COUNT_VARIANCE_STATUSES` / `REJECTED_OP_STATUSES` minus `open`, and the breach, batch-alert and channel lists are pinned to the emitters' runtime tuples (compile-time type equality + a runtime test).
+- **The policy delete was refined (code review BE1).** The spec said "for each open breach of that policy, emit `policy-removed`". As built, the delete reads the SKU's tenant-wide default point (`CatalogFacade.getSkuReorderPointInTx`). Default > 0: nothing is emitted; the scope is still a sweep candidate and the next sweep decides the breach (its `recovered` clears the entry, or both stay open). Default 0 or the SKU gone: the open breach is closed in the delete's transaction — `dismissed`, `resolved_by` = the deleting actor, audit `replenishment.breach_dismissed` — and `breach_cleared` · `policy-removed` is emitted. The queue and the panel always agree.
+- **Click-through for three sources (code review FE3).** The spec's table sent stock-adjustment, count-variance and rejected-op to bare `/conflicts`, which opens the over-receipts tab. They link `/conflicts?queue=adjustment-pendings|variances|rejected-ops`, a plain parameter (not a drill key) parsed by `lib/conflicts-queues.ts`.
+- **`opened` is posted once the panel's list has loaded** (code review FE2), not on open; a failed list keeps the dot.
+- **A batch alert's `resolved` reads "Resolved · cleared"** (code review FE9).
+
+Deploy note: set `REPLENISHMENT_SCHEDULER_POLL_MS` (≤ 300000; `.env.example` has 60000) for FR-22's 5-minute bound.
 
 ## Spec Change Log
 
@@ -318,6 +331,27 @@ Design review (2026-10-12), two lenses: backend (K) and API, web and tests (W).
 | 21 | W | The test harness for the relay | low | Fixed: `drainAll` |
 | 22 | W | Docs list gaps; `context:` missing API-SURFACE | low | Fixed |
 | 23 | K | Verified: resolve ids match raise ids; capabilities and guards; cross-module permission import allowed; 0067 numbering; the env var absent | — | No change |
+
+**Code review (2026-10-12)**, two lenses: backend (BE) and frontend (FE); 16 findings.
+
+| # | Lens | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| BE1 | BE | Deleting a reorder policy resolved the panel entry (`policy-removed`) while the breach stayed `open` in the queue | medium | Fixed: the delete decides by the SKU's default point — default > 0 emits nothing (the sweep decides); default 0 closes the breach (`dismissed`, actor stamped, audited) and emits `policy-removed` |
+| BE2 | BE | The list's `ORDER BY` nulls order (bare `desc` = NULLS FIRST) did not match the index's `DESC NULLS LAST` | medium | Fixed: `desc nulls last` on both keys (the patch commit records an EXPLAIN with an Index Scan and no Sort); design-review row 17's index claim is now true |
+| BE3 | BE | Entries already open at deploy never surface; their later resolves leave tombstones | medium | Deferred: PENDING notifications, deferred-work |
+| BE4 | BE | The resolution vocabularies were hand-typed, not pinned to their emitters | low | Fixed: variance and rejected-op lists derived from the status tuples; breach, batch-alert and channel reasons made runtime tuples, pinned by a compile-time type equality and a runtime test |
+| BE5 | BE | `surfaced_at` / `last_opened_at` are transaction-start `now()`: a raise straddling an open can miss the dot | low | Deferred: PENDING notifications, deferred-work |
+| BE6 | BE | No partial index serves `status`'s `resolved_at IS NULL` | low | Deferred: with resolved-entry retention (PENDING, deferred-work) |
+| BE7 | BE | A stray `;;` in 0067 | low | Fixed |
+| FE1 | FE | An unknown `sourceType` from a newer backend crashed the shell | high | Fixed: `knownNotifications` drops unknown arms where the response is mapped (panel and page); `never`-checked default arms with safe fallbacks |
+| FE2 | FE | `opened` was posted before the list loaded — a failed list still cleared the dot | medium | Fixed: posted once, when the entries first reach `ready` |
+| FE3 | FE | Adjustment, variance and rejected-op entries landed on the over-receipts tab of `/conflicts` | medium | Fixed: `/conflicts?queue=<id>` (a plain parameter, not a drill key) opens the right tab |
+| FE4 | FE | A status read racing `opened` could re-light the dot after opening | low | Fixed: a status read started while `opened` is in flight waits for it; an earlier one is dropped by the seq guard |
+| FE5 | FE | The status hook's comment did not say what it does | low | Fixed |
+| FE6 | FE | The SKU catalog is refetched on every bell open | low | Deferred: PENDING wms-fe, deferred-work |
+| FE7 | FE | A late-surfaced entry can fall outside the panel's newest 10 | low | Deferred: PENDING wms-fe, deferred-work |
+| FE8 | FE | Test gaps: no fake-timer no-polling check, focus return on outside click and link follow, and no tests for FE1–FE4 | low | Fixed |
+| FE9 | FE | A batch alert's auto-resolve read "Resolved · resolved" | low | Fixed: reads "Resolved · cleared" |
 
 ## Design Notes
 

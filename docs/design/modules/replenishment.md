@@ -64,7 +64,7 @@ sequenceDiagram
             S->>DB: insert breach (freeze point + ATP) + mint/repoint draft + outbox + audit
         else ATP < point, breach open → no-op
         else ATP ≥ point, breach open → RECOVER
-            S->>DB: status recovered (no event, by design)
+            S->>DB: status recovered + outbox breach_cleared (reason recovered — 9-2)
         end
     end
 ```
@@ -82,7 +82,18 @@ sequenceDiagram
 
 **Re-breach repoint semantics:** a draft is minted exactly when a breach OPENS (one artifact per breach event, no drafting on later sweeps). If a NEW breach opens while an old draft for the same scope is still `draft`, the standing draft is **REPOINTED in place** — the fresh breach's id, the vendor, and the quantity REPLACE whatever a planner had left on it. A draft is always a system-fresh suggestion; stale planner edits are never preserved.
 
-**Breach RECOVER** (`replenishment.sweep.ts:336`): ATP ≥ point → status `recovered`, `resolved_by` stays null, its draft KEPT as a draft, and **deliberately NO outbox event** — a recovery is a surface-visible state change only (the audit-adjacent, not-delivery rule). The kept draft lets a planner decide the recovered breach still wants ordering; dismissal is their other arm.
+**Breach RECOVER** (`replenishment.sweep.ts:339`, `recoverBreach(tx, tenantId, breach)`): ATP ≥ point → status `recovered`, `resolved_by` stays null, its draft KEPT as a draft, and — **since story 9-2** — `replenishment.breach_cleared` (`reason: 'recovered'`) appended in the same transaction, stamped with the same instant as `resolved_at`. The kept draft lets a planner decide the recovered breach still wants ordering; dismissal is their other arm.
+
+> **The "no outbox event" rule is reversed (9-2).** 6-1 and 6-2 deliberately emitted nothing on a breach recovery or a batch-alert auto-resolve, because nothing consumed one. The notifications module is now that consumer: an alert whose clearing nothing hears would stand open in the panel forever. **Every transition out of `open` emits exactly one clearing event, in the transaction that makes it** (`replenishment.events.ts`):
+>
+> | Transition | Where | Event · `reason` |
+> |---|---|---|
+> | breach open → recovered | sweep `recoverBreach` | `breach_cleared` · `recovered` |
+> | breach open → dismissed | `dismissBreach` | `breach_cleared` · `dismissed` |
+> | breach open → actioned | `submitSuggestedPo` | `breach_cleared` · `actioned` |
+> | breach open → dismissed by a policy delete (SKU default 0 only) | `deleteReorderPolicy` | `breach_cleared` · `policy-removed` |
+> | alert open → resolved | expiry scan auto-resolve | `batch_alert_cleared` · `resolved` |
+> | alert open → dismissed | `dismissBatchAlert` | `batch_alert_cleared` · `dismissed` |
 
 ---
 
@@ -117,7 +128,7 @@ sequenceDiagram
         end
     end
     loop each open alert whose scope carries no positive on-hand
-        S->>DB: status resolved (resolved_by null, NO event)
+        S->>DB: status resolved (resolved_by null) + outbox batch_alert_cleared (reason resolved — 9-2)
     end
 ```
 
@@ -130,8 +141,8 @@ sequenceDiagram
 **The lifecycle, lifted from the breach pattern with one sharper edge:**
 
 - **OPEN** (raiseAlert): the row (`ON CONFLICT DO NOTHING` absorbs a racing double-open as the already-open verdict — no aborted tx, no duplicate event), the `replenishment.batch_alert_raised` outbox event + audit row under `REPLENISHMENT_SCHEDULER_ACTOR_ID`.
-- **AUTO-RESOLVE**: every open alert whose scope reads no positive on-hand → `resolved`, `resolved_by` null (nobody acted), deliberately NO event (the breach-recovery rule). A batch that merely stopped TRIGGERING (expiry only matures, age only grows) keeps its alert — it stands until consumption or dismissal.
-- **DISMISSAL** (the `dismissBatchAlert` command): `open → dismissed`, the dismisser stamped, no stock-side effect. **Dismissal is NOT suppression** — the partial unique covers open rows only, so while the batch still trips the tenant's thresholds with stock on hand the scan raises a FRESH alert on a later tick. Deliberate (it exactly matches 6-1's behaviour where a dismissed breach re-opens past a still-below-ATP sweep), tested in the real-facade tick arm, and SAID in the FE's dismissal sentence.
+- **AUTO-RESOLVE**: every open alert whose scope reads no positive on-hand → `resolved`, `resolved_by` null (nobody acted). Since 9-2 each auto-resolve appends one `replenishment.batch_alert_cleared` (`reason: 'resolved'`) — the reversed rule above; it used to emit nothing. A batch that merely stopped TRIGGERING (expiry only matures, age only grows) keeps its alert — it stands until consumption or dismissal.
+- **DISMISSAL** (the `dismissBatchAlert` command): `open → dismissed`, the dismisser stamped, no stock-side effect; since 9-2 it appends `batch_alert_cleared` (`reason: 'dismissed'`). **Dismissal is NOT suppression** — the partial unique covers open rows only, so while the batch still trips the tenant's thresholds with stock on hand the scan raises a FRESH alert on a later tick. Deliberate (it exactly matches 6-1's behaviour where a dismissed breach re-opens past a still-below-ATP sweep), tested in the real-facade tick arm, and SAID in the FE's dismissal sentence.
 - **A blocked batch raises NO NEW alert**; an existing open alert stands while on-hand > 0 and resolves through the normal on-hand-0 rule.
 
 **The phase discipline is kept** (enumerate in a tx; decide; transition alerts in one tx re-reading fresh facts) even though 6.2 has no Valkey/ATP-style fallible outside-tx phase — projection and catalog reads only. Any throw skips the whole scope (the worker logs and retries next tick): a partial scan never half-resolves alerts.
@@ -176,12 +187,12 @@ All follow the frozen skeleton (capability at command-service entry → fingerpr
 
 | Command (`replenishment.command.ts`) | Does | Guards, in order |
 |---|---|---|
-| `upsertReorderPolicy` :376 | Last-write-wins upsert of a per-warehouse override (variance-policy precedent) | `replenishment.manage`; warehouse+SKU in tenant (404); point/qty strictly positive integers (400 `validation-failed` naming the field) |
-| `deleteReorderPolicy` :490 | Removes the override — the SKU-column default resumes on the next sweep | capability; id exists in tenant (404) |
-| `dismissBreach` :556 | Open → `dismissed`, stamps `resolved_by/at`; its draft stays a draft (dismissal is about the breach, not the draft) | capability; breach exists (404); **status open** (`409 breach-not-open` naming the status) |
-| `submitSuggestedPo` :630 | Draft → `submitted` + `submitted_po_id`, mints the REAL PO via `createPurchaseOrderInTx`, breach → `actioned` — one held transaction, all-or-nothing | capability; draft exists (404); **status draft** (`409 suggested-po-submitted`); vendor known or resolvable on edits (null vendor + no edit → `400 suggested-po-vendor-required`); quantityMilli whole-unit precision (the PO command's verbatim refusal — draft untouched); inner PO guards re-run verbatim (vendor gone, SKU gone → refusal verbatim, draft stays draft); code conflict → `409 conflict` |
+| `upsertReorderPolicy` :508 | Last-write-wins upsert of a per-warehouse override (variance-policy precedent) | `replenishment.manage`; warehouse+SKU in tenant (404); point/qty strictly positive integers (400 `validation-failed` naming the field) |
+| `deleteReorderPolicy` :622 | Removes the override — the SKU-column default resumes on the next sweep. **9-2:** then reads the SKU's tenant-wide default (`CatalogFacade.getSkuReorderPointInTx`, in the same tx). **Default > 0:** the scope is still a sweep candidate — nothing more; the next sweep decides the open breach against the default (its `recovered` clears it, or it stays open, queue and panel alike). **Default 0, or the SKU gone:** the scope stops being a candidate and nothing would ever close the breach, so the delete closes it here — the open breach `FOR UPDATE` → `dismissed`, `resolved_by` = the deleting actor (a human removed the rule it was raised under), audit `replenishment.breach_dismissed`, and `breach_cleared` with `reason: 'policy-removed'` | capability; id exists in tenant (404) |
+| `dismissBreach` :733 | Open → `dismissed`, stamps `resolved_by/at`; its draft stays a draft (dismissal is about the breach, not the draft); appends `breach_cleared` · `dismissed` (9-2) | capability; breach exists (404); **status open** (`409 breach-not-open` naming the status) |
+| `submitSuggestedPo` :809 | Draft → `submitted` + `submitted_po_id`, mints the REAL PO via `createPurchaseOrderInTx`, breach → `actioned` (appending `breach_cleared` · `actioned`, 9-2) — one held transaction, all-or-nothing | capability; draft exists (404); **status draft** (`409 suggested-po-submitted`); vendor known or resolvable on edits (null vendor + no edit → `400 suggested-po-vendor-required`); quantityMilli whole-unit precision (the PO command's verbatim refusal — draft untouched); inner PO guards re-run verbatim (vendor gone, SKU gone → refusal verbatim, draft stays draft); code conflict → `409 conflict` |
 | `upsertExpiryPolicy` (6.2) | Last-write-wins upsert of the tenant-wide expiry/aging config — the per-tenant UNIQUE swallows-violation upsert (the count-variance-policy precedent) | capability; `expiryLeadDays`/`agingThresholdDays` whole-day ints ≥ 0 (400 naming the field). There is NO per-field disable and no DELETE — the ABSENT ROW is the disable mechanism |
-| `dismissBatchAlert` (6.2) | Open → `dismissed`, stamps `resolved_by/at`; no stock-side effect — the alert is evidence | capability; alert exists (404, malformed id 404 before any query); **status open** (`409 batch-alert-not-open` naming the current status) |
+| `dismissBatchAlert` (6.2) :1066 | Open → `dismissed`, stamps `resolved_by/at`; no stock-side effect — the alert is evidence; appends `batch_alert_cleared` · `dismissed` (9-2) | capability; alert exists (404, malformed id 404 before any query); **status open** (`409 batch-alert-not-open` naming the current status) |
 
 The **submit arm's transaction shape** is the module's load-bearing rule: ONE held tenant transaction (`withTenantTransaction`), inside which the inbound facade's in-tx PO mint runs on the SAME pooled connection. A nested second transaction while one is held is the documented pool-deadlock shape (`putaway.facade.ts:221-224`, pool `max: 10`) — **never** nest. The mint re-asserts `po.manage` inside (`createPurchaseOrderInTx`, the `findDefaultVendorInTx` house shape), so a hypothetical `replenishment.manage`-without-`po.manage` holder is refused where it would matter; the deterministic inner idempotency key `replenishment-submit-po-<draftId>` stays (harmless, keeps the mint reproducible). Submit stamps `resolvedBy: command.actorUserId` on the actioned breach — the FE's "actioned by" wording reads it.
 
@@ -214,6 +225,7 @@ Keyset cursors are the house `(createdAt, id)` opaque envelope (`decodeCursorSaf
 | `InventoryFacade.atp` | The ONLY ATP read, outside any tx | The architecture spine; fallible 503 is the sweep's skip signal |
 | `CatalogFacade.getSkuReorderDefaultsInTx` | ALL tenant SKUs `{id, code, name, uom, reorderPoint, reorderQty}` | The tenant-wide defaults + the identity source for candidates |
 | `InventoryFacade.batchScopeSumsInTx` / `...ForScopesInTx` (6.2) | Positive `(w, sku, batch)` sums from the `batch_on_hand` projection (milli strings summed, `Number()` at the boundary) | On-hand is the projection's; the scan maintains no stock numbers of its own |
+| `CatalogFacade.getSkuReorderPointInTx` (9-2) | ONE SKU's tenant-wide `reorder_point` (milli; `null` = SKU unknown) on the policy delete's tx | Decides whether the deleted override's scope is still a sweep candidate (default > 0) or its open breach must be closed now (default 0) |
 | `CatalogFacade.getBatchIntakesForSkusInTx` (6.2) | Batch identity `{id, code, expiryDate, status, createdAt}` on the caller's tx | Catalog owns `batches` (AD-6) — the scan never joins batches from an inventory-side table; `status` is what says a batch is blocked |
 | `InboundFacade.createPurchaseOrderInTx` | The PO mint on the submit arm's held tx | The inbound module remains the only PO writer |
 | `InboundFacade.findDefaultVendorInTx` | Deterministic min `(created_at, id)` default vendor | ≥ 2 defaults possible (no single-default unique by design); null when none — a vendor-less draft requires the submit edit |
@@ -226,17 +238,19 @@ HTTP lives in the api shell (`src/api/replenishment.controller.ts`) — 11 route
 
 ## Events
 
-Deliberately exactly three (and two deliberate absences):
+Five outbox events (the two clearing events since 9-2):
 
 | Event | When | Payload | Consumers |
 |---|---|---|---|
-| `replenishment.breach_detected` | Breach OPEN | `{breachId, warehouseId, skuId, atpMilli, pointMilli, breachAt, notifyRole: 'ops_manager'}` | **None yet** — the relay only logs; Epic 9's panel reads `notifyRole` |
-| `replenishment.suggested_po_submitted` | Submit arm | `{suggestedPoId, poId, poCode, warehouseId, vendorId, quantityMilli}` | None yet |
-| `replenishment.batch_alert_raised` | Batch-alert OPEN (6.2) | `{alertId, kind, warehouseId, skuId, batchId, batchCode, notifyRole: 'ops_manager'}` PLUS exactly what THAT kind detected: `expiryDate` on the expiry arm, the frozen `ageDays` on the aged arm | None yet |
-| — | BATCH-ALERT AUTO-RESOLVE (6.2) | **no event, by design** — nobody acted (resolved_by null), surface-visible state change only (the breach-recovery rule) | — |
-| — | BATCH-ALERT DISMISSAL (6.2) | **no event** — the dismissal command writes audit only, the same as the breach dismissal | — |
+| `replenishment.breach_detected` | Breach OPEN | `{breachId, warehouseId, skuId, atpMilli, pointMilli, breachAt, notifyRole: 'ops_manager'}` | **notifications** (9-2) — the `reorder-breach` raise. The panel routes by `replenishment.manage`, not by `notifyRole` |
+| `replenishment.breach_cleared` (9-2) | Every breach transition out of `open` (the table under the sweep's RECOVER) | `{breachId, warehouseId, skuId, reason: 'recovered' \| 'dismissed' \| 'actioned' \| 'policy-removed'}` | **notifications** — the `reorder-breach` resolve |
+| `replenishment.suggested_po_submitted` | Submit arm | `{suggestedPoId, poId, poCode, warehouseId, vendorId, quantityMilli}` — no `notifyRole` | None — not a notification source |
+| `replenishment.batch_alert_raised` | Batch-alert OPEN (6.2) | `{alertId, kind, warehouseId, skuId, batchId, batchCode, notifyRole: 'ops_manager'}` PLUS exactly what THAT kind detected: `expiryDate` on the expiry arm, the frozen `ageDays` on the aged arm | **notifications** — the `batch-alert` raise |
+| `replenishment.batch_alert_cleared` (9-2) | Batch-alert AUTO-RESOLVE and DISMISSAL — one event per alert | `{alertId, warehouseId, reason: 'resolved' \| 'dismissed'}` | **notifications** — the `batch-alert` resolve |
 
-Events are audit-adjacent, not delivery. The `notifyRole` hint is the `count.variance.threshold_exceeded` precedent.
+`BREACH_CLEARED_REASONS` and `BATCH_ALERT_CLEARED_REASONS` (`replenishment.events.ts`) are runtime tuples, pinned equal to the panel's resolution lists by `test/notifications.spec.ts` (a compile-time type equality and a runtime check). **Adding a reason means adding it there too**, or the panel acks the new resolve as malformed and the entry stands open.
+
+The `notifyRole` hints (the `count.variance.threshold_exceeded` precedent) stay on the payloads but nothing reads them.
 
 ---
 
@@ -250,3 +264,4 @@ Events are audit-adjacent, not delivery. The `notifyRole` hint is the `count.var
 - **A dismissed batch alert RE-RAISES — deliberate, but say it.** The partial open-scope unique covers `status='open'` rows only, so a dismissed alert re-opens as a FRESH row on the next scan that still sees the breach conditions. This exactly matches 6-1's re-breach past dismissal, but it cost a test round when the real-facade tick arm first read one row short; the FE's dismissal sentence names the re-raise up front. Any future "suppress until conditions lift" idea needs a new suppression state, not a unique re-key.
 - **The 6.2 boundaries are both INCLUSIVE, on purpose.** Expiry: `expiry ≤ now + lead_days` — the lead-day edge itself alerts and an already-expired date still qualifies (expiry only matures; a late scan must not miss). Aging: `age_days ≥ threshold`, with `age_days` FROZEN via `floor((now − created_at)/86400s)` — so a fixture backdated EXACTLY N days freezes N (the scan runs ε later). A `>`-style exclusive comparison silently drops day-N batches; the e2e arms pin ±1h margins so the assertion never rides a millisecond.
 - **The absent config row is the OFF switch, and the GET answers 404.** No invented default lead/threshold days anywhere in code; a GET that returned a default would silently ARM alerting for a tenant that deliberately has none. The FE's `fetchApiGetExpiryPolicy` folds that 404 to `null` and renders "alerts are OFF" — it is not a failed read.
+- **A clearing event must follow every exit from `open`** (9-2). The notification panel resolves a breach or alert entry only on `breach_cleared` / `batch_alert_cleared`. A new transition out of `open` that forgets its event leaves the entry open in the panel forever, while the queue shows it settled. The first 9-2 build hit the reverse on the policy delete: it emitted `policy-removed` for every open breach while the breach row stayed `open` in the queue (code review BE1). The fix decides by the SKU's default point (see `deleteReorderPolicy`), so the row and the entry always agree.
