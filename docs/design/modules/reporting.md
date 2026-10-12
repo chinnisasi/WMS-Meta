@@ -119,6 +119,17 @@ IST calendar days computed in TS (`IST_OFFSET_MS`, now in `shared/primitives/tim
 
 Every windowed drill carries `from` (today's or the 7-day start) and `to = asOf`; live drills carry `to = asOf` where the list has the filter (the putaway task list has none — it is live by construction).
 
+### The web click-through (story 9-1b — done)
+
+Every linked figure lands on a screen that lists **exactly** its drill's rows, filtered server-side. The web side is described in `../frontend/IMPLEMENTATION-GUIDE.md` §1.6; what matters from here:
+
+- **The link names the list and the warehouse.** `wms-fe/src/lib/drill-routes.ts` adds `list` (the target section — three `/compliance` drills share identical keys, and the putaway drill's one key is a subset of the blind-GRN drill's) and, for a path-scoped drill (ledger, orders), `warehouseId` taken from `apiPath`. The path warehouse is the figure's warehouse. If the query names a different one, the figure gets no link. The ledger drills land on the web Ledger page, `/inventory/ledger`.
+- **The drilled request is the drill, byte for byte.** Each key and value in the URL is sent unchanged (instants are not re-formatted, `list` is dropped), with the opaque cursor passed back as received. No screen adds its own status, kind or tab to a drilled read. This keeps the "paged to exhaustion equals the figure" claim true on the web: `wms-fe/src/lib/drill.test.ts` checks the href → parse → request round trip for every linked drill shape built here.
+- **Capability.** The over-receipt drills link only for a role holding `review.decide` (the `/conflicts` tab's gate). The Overview itself stays member-open.
+- **Unlinked, as before:** picklist lines, pack failures and backorder refusals have no web screen. The channel-connections drill links bare `/channels`.
+
+A new drill shape must have a `parseDrill` field for each of its keys (`wms-fe/src/lib/drill.ts` `SPECS`). Without one, the link is `unsupported` and the screen shows its normal view plus a notice.
+
 ## Invariants
 
 | Invariant | Enforced by |

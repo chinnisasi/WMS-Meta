@@ -2,8 +2,9 @@
 title: 'Dashboard click-through — every Overview tile lands on a screen showing exactly its rows'
 type: 'feature'
 created: '2026-10-12'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'b1fe9425e0538438d10103642e0d31ff72a075f4'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-9-context.md'
@@ -36,6 +37,7 @@ context:
 4. **A read-only "Awaiting putaway" list on `/inbound`** is the putaway tile's target.
 5. **(review) No link for roles that can't see the target.** The GRN-variance tile's over-receipt drill shows no link for a role without `review.decide`.
 6. **(review) The putaway list always shows** on `/inbound`, for the active warehouse, and the tile drills into it.
+7. **(code review, 2026-10-12) Actions in drilled mode.** Per-row actions that apply to their row stay: approve/reject an over-receipt, confirm/cancel an order, resolve/dismiss an alert, e-way row actions on a pending bill. Bulk selection and downloads, and page-level create forms (create order, generate invoice), are hidden while drilled.
 
 ## Boundaries & Constraints
 
@@ -172,20 +174,26 @@ Paths are relative to `workspace/core/frontend/wms-fe/src`; backend references a
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `lib/drill-routes.ts` (+ test) -- `list` + path `warehouseId`; `/inventory/ledger`; capability-aware link.
-- [ ] `lib/drill.ts` (+ test) -- `parseDrill`, `drillKey`, `describeDrill`, the unsupported rules.
-- [ ] `components/shared/drill-banner.tsx` -- the banner (the only router user).
-- [ ] `lib/api/client.ts` -- the wrapper params + `fetchApiListPutawayTasks`.
-- [ ] Hooks and screens -- outbound, conflicts/over-receipts, inbound (goods receipts + the putaway section), replenishment batch alerts, compliance e-way + invoices: drilled mode, hidden controls, remount key from each `page.tsx`.
-- [ ] Ledger page + component + hook; the `/inventory` placeholder link.
-- [ ] Overview -- capability-aware links.
-- [ ] Tests and meta docs per Boundaries.
+- [x] `lib/drill-routes.ts` (+ test) -- `list` + path `warehouseId`; `/inventory/ledger`; capability-aware link.
+- [x] `lib/drill.ts` (+ test) -- `parseDrill`, `drillKey`, `describeDrill`, the unsupported rules.
+- [x] `components/shared/drill-banner.tsx` -- the banner (the only router user).
+- [x] `lib/api/client.ts` -- the wrapper params + `fetchApiListPutawayTasks`.
+- [x] Hooks and screens -- outbound, conflicts/over-receipts, inbound (goods receipts + the putaway section), replenishment batch alerts, compliance e-way + invoices: drilled mode, hidden controls, remount key from each `page.tsx`.
+- [x] Ledger page + component + hook; the `/inventory` placeholder link.
+- [x] Overview -- capability-aware links.
+- [x] Tests and meta docs per Boundaries.
 
 **Acceptance Criteria:**
 - Given an Overview tile whose drill reconciles, when it is clicked, then the target section paged to the end lists exactly the figure's rows, under a banner naming the filter and warehouse.
 - Given the full FE suite, typecheck, lint and the capability mirror, when run, then they pass.
 
 ## Implementation Notes
+
+Baseline: wms-fe `b1fe9425e0538438d10103642e0d31ff72a075f4` (`baseline_commit`). Frontend only.
+- Work on `feat/9-1b-dashboard-click-through` in wms-fe (already checked out). Leave everything uncommitted: no commit, push or PR.
+- In wms-fe, `bun test`, `bun run typecheck`, `bun run lint`, `bun run check:capability-mirror` and `bun run build` are the checks.
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
+- Do not touch wms-be or wms-mobile.
 
 ## Spec Change Log
 
@@ -212,6 +220,32 @@ Design review (2026-10-12), two lenses: drill mapping (D) and screens and tests 
 | 15 | S | E-way bulk selection in drilled mode | low | Fixed: hidden |
 | 16 | D | Code Map path for the inventory DTO | low | Fixed |
 | 17 | S | Overview test and docs gaps | low | Fixed |
+
+**Code review (2026-10-12)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V); 31 raw findings, 21 distinct.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | B, E | A query `warehouseId` on a path-scoped drill overrides the path's, moving the request off the figure's warehouse; a test locks it in | high — verified, `drill-routes.ts` | patch: the path wins; a conflicting pair gets no link |
+| C2 | B | Write actions in drilled mode are inconsistent across screens; no rule | medium | **human decision 7**; patch |
+| C3 | V, B | No test runs a real `page.tsx`; the screen tests rebuild the key and parse themselves; `UnsupportedDrillNotice` is never rendered | high — pre-verified gap | patch: `pages.test.tsx` |
+| C4 | E | The drilled GRN list says "No receipts match this figure" while loading or after a failed read (a false zero) | high — the hook swallows errors | patch: loading text + a failed arm with Retry |
+| C5 | B, E | Conflicts' queue tabs stay clickable while drilled, so the drill persists off-screen with no banner; the replenishment picker stays | medium | patch: hidden while drilled |
+| C6 | E | An unrelated param (`utm_source`) on a target route makes a plain visit "Link not applied" | medium | patch: with no `list`, unknown keys are ignored |
+| C7 | B, E | The Ledger shows "Create a warehouse first" or a warehouse failure for a valid drill | medium | patch: the drilled branch is independent of the active warehouse |
+| C8 | V | The drilled e-way test has no rows, so the hidden selection and row actions are never observed | medium — pre-verified | patch: one non-pending bill |
+| C9 | B, E | Four warehouse-label formatters disagree; an unknown drill warehouse shows "Pick a warehouse" | low | patch: one shared label helper |
+| C10 | B, E | "Awaiting putaway" never refreshes after a change on `/inbound` | low | patch: subscribe to the inbound-changed event |
+| C11 | B, E | The instant check accepts impossible days | low | patch: round-trip check |
+| C12 | B | Drilled lists spanning statuses don't say so | low | patch: "all statuses" in the banner |
+| C13 | B | `DrillBanner` vs `DrilledBanner` across two folders; a dead `onClear` | low | patch: consolidate |
+| C14 | B | The tests' `DRILL_ONLY_KEYS` omit ledger keys; no ledger shape uses `skuId`/`orderId`/`shortPick` | low | patch |
+| C15 | B | The outbound picker test doesn't assert the picker in the normal view | low | patch |
+| C16 | B | The ledger `type` union is hand-copied in `client.ts` | low | patch: the generated type |
+| C17 | E | Effects depend on the drill object, so they refetch on every server refresh | low | patch: depend on `drillKey` |
+| C18 | B | Doc gaps: the dynamic render, and the "Adding a drill target" checklist | low | patch |
+| C19 | V | The frontend drill shapes are a hand copy of the backend's `kpis.ts`; a new backend key breaks a tile silently | medium — a cross-repo contract | defer |
+| C20 | B | The Channels link has no `list` | low — nothing to filter; it links to the bare route | reject (recorded) |
+| C21 | B | The banner re-fetches the warehouse list | low — cached by the hook | reject |
 
 ## Design Notes
 
