@@ -682,5 +682,9 @@
   evidence: Code review C13, C14 — untested before the refactor as well; covered indirectly by the clients-card retry test.
 
 - source_spec: none
-  summary: 21-11b — frontend hardening from the epic-21 retro: one charge-label source (F2), a `failed` arm on useTenantWarehouses with one failed-read rendering for warehouse selects (F3), and decoupling the portal from operator code by moving LineRows and the outbound/shell primitives into shared components (A5).
+  summary: ~~21-11b — frontend hardening from the epic-21 retro: one charge-label source (F2), a `failed` arm on useTenantWarehouses with one failed-read rendering for warehouse selects (F3), and decoupling the portal from operator code by moving LineRows and the outbound/shell primitives into shared components (A5).~~ **DONE 2026-10-12 by story 21-11b** (`spec-21-11b-epic-21-fe-hardening.md`) — `basisLabel`/`chargeQuantityLabel` are the one label source; `useTenantWarehouses` has a `failed` arm and every warehouse-listing surface renders `WarehousesFailure`; `components/shared/` + `lib/resource-state.ts` hold what the portal shares, and `lib/portal-boundary.test.ts` pins the boundary transitively. Mapping: F1 = A5 = retro item-90; F2/F3 = retro item-89 (FE part). Retro item-89 and item-90 to be closed after merge.
   evidence: Split from 21-11 by the human (2026-10-11): independently shippable FE-only goal; 21-11a takes the backend hardening and pinned tests first.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-21-11b-epic-21-fe-hardening.md`
+  summary: Add 503 warehouses-read failure tests for the surfaces 21-11b changed but did not pin — cold-chain trace, excursion queue, zones/bins setup, the settings WarehouseList, and the four relabelled pages (outbound, overview, replenishment, channels) — plus reload transition and tenant-switch-while-failed cases.
+  evidence: Code review C11-C13 — the spec pinned one representative operator surface (inbound-cards); the others share the same component and shape.

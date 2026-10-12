@@ -2,8 +2,9 @@
 title: 'Epic-21 frontend hardening — one charge-label source, honest failed warehouse reads, and a portal that imports no operator hook'
 type: 'refactor'
 created: '2026-10-12'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
+baseline_commit: 'a47e85e4e16045af4f5f1bcdb1b7063e0f37b1bc'
 review_loop_iteration: 0
 context:
   - '_bmad-output/implementation-artifacts/epic-21-context.md'
@@ -29,6 +30,7 @@ context:
 **Decisions (human, 2026-10-12):**
 1. **The one storage label is "per 1,000 units per day"** (the rate-card wording). Invoices change to match. Stored invoice figures are untouched; only the displayed text changes.
 2. **Fix failed warehouse reads on all screens,** not only the three the retro named.
+3. **(code review, 2026-10-12) A failed *refresh* is not silent.** When a refetch fails after a change and a last-good list exists, pickers keep that list, and a one-line non-blocking "Couldn't refresh warehouses — Retry" note appears. This applies to every consumer, including the four former `useOutboundWarehouses` screens, which before this story showed a full failure.
 
 ## Boundaries & Constraints
 
@@ -44,7 +46,7 @@ context:
   - `useTenantWarehouses` returns `ResourceState<TenantWarehouses> & Reloadable`, following §1.1 and the `useOutboundWarehouses` cursor walk at `use-outbound-orders.ts:225-271`.
   - `useOutboundWarehouses` becomes a thin alias, or its callers move; one implementation either way.
   - **Loading adapter.** Consumers that destructure `tenantId` (`zone-bin-setup.tsx:90,113`, `inbound-cards.tsx:71`, `excursion-queue.tsx:66`, `cold-chain-trace.tsx:48`, `warehouse-switcher.tsx:46,76`) use `ready ? data : {tenantId: null, items: []}` while loading. The precedent is `outbound.tsx:59-60`; the rendering is unchanged.
-  - **Refetch after `WAREHOUSES_CHANGED`.** A failed refetch keeps the last-good list (today's behaviour, `use-tenant-warehouses.ts:57-60`). The state goes to `failed` only when there is no data yet.
+  - **Refetch after `WAREHOUSES_CHANGED`.** A failed refetch keeps the last-good list. The state goes to `failed` only when there is no data yet. Otherwise the ready state carries `refreshFailed: reason`, and consumers render the one-line note (decision 3). Pressing Retry on a failed **first** load shows loading briefly; this is accepted (Retry is a new load).
   - **A shared `WarehousesFailure({ state })`** renders `<ReadFailure word="Warehouses not loaded" reason=… onRetry={state.reload} />`.
     - Its prop type is `{ state: 'failed'; reason: string } & Reloadable`, imported only from `lib/resource-state`, so it never pulls in an operator module.
     - **Where it renders:**
@@ -101,7 +103,7 @@ context:
 - a new dependency (no ESLint plugin; the guard is a bun test);
 - renaming the operator-facing exports of `outbound/shell.tsx` (it re-exports);
 - moving pure `lib/*` helpers just for location;
-- a loading-state change.
+- a loading-state change on first load.
 
 ## I/O & Edge-Case Matrix
 
@@ -162,12 +164,12 @@ Paths are relative to `workspace/core/frontend/wms-fe/src`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `lib/rate-cards.ts`, `lib/usage.ts`, `lib/client-invoices.ts` -- one label source -- F2, decision 1.
-- [ ] `lib/use-tenant-warehouses.ts` (+ `use-outbound-orders.ts`), `components/shared/warehouses-failure.tsx`, every consumer -- the failed state -- F3, decision 2.
-- [ ] `components/shared/line-rows.tsx`, `components/shared/surface.tsx`, `lib/resource-state.ts`; re-point the portal and `service-tiles` imports; `outbound/shell.tsx` re-exports -- F1.
-- [ ] `lib/portal-boundary.test.ts` -- the transitive guard and its detector -- F1.
-- [ ] Tests: label pins, the consistency test, the failure cases; existing suites green.
-- [ ] Meta docs: as listed in Boundaries.
+- [x] `lib/rate-cards.ts`, `lib/usage.ts`, `lib/client-invoices.ts` -- one label source -- F2, decision 1.
+- [x] `lib/use-tenant-warehouses.ts` (+ `use-outbound-orders.ts`), `components/shared/warehouses-failure.tsx`, every consumer -- the failed state -- F3, decision 2.
+- [x] `components/shared/line-rows.tsx`, `components/shared/surface.tsx`, `lib/resource-state.ts`; re-point the portal and `service-tiles` imports; `outbound/shell.tsx` re-exports -- F1.
+- [x] `lib/portal-boundary.test.ts` -- the transitive guard and its detector -- F1.
+- [x] Tests: label pins, the consistency test, the failure cases; existing suites green.
+- [x] Meta docs: as listed in Boundaries.
 
 **Acceptance Criteria:**
 - Given a client invoice, when viewed by an operator or in the portal, then its storage line reads "per 1,000 units per day", the same as the rate card and usage.
@@ -175,6 +177,12 @@ Paths are relative to `workspace/core/frontend/wms-fe/src`.
 - Given the full FE suite, typecheck, lint and the capability mirror, when run, then they pass.
 
 ## Implementation Notes
+
+Baseline: wms-fe `a47e85e4e16045af4f5f1bcdb1b7063e0f37b1bc` (`baseline_commit`). Frontend only.
+- Work on `feat/21-11b-epic-21-fe-hardening` in wms-fe (already checked out). Leave everything uncommitted: no commit, push or PR.
+- In wms-fe, `bun test`, `bun run typecheck`, `bun run lint` and `bun run check:capability-mirror` are the checks.
+- Edit meta docs in `/Users/sasidhar/Documents/WMS-Meta` (uncommitted, on the current branch).
+- Do not touch wms-be or wms-mobile.
 
 ## Spec Change Log
 
@@ -196,6 +204,26 @@ Design review (2026-10-12), one lens: claims, coverage and testability.
 | 10 | The switcher's fit and behaviour on refetch failure | low | Fixed: compact variant; last-good kept |
 | 11 | The docs list missed stale refs and named the wrong file for the deferred entry | medium | Fixed |
 | 12 | Count is 25 not 30; CSV is unaffected | low | Fixed |
+
+**Code review (2026-10-12)** — Blind Hunter (B), Edge Case Hunter (E), Verification Gap (V); 24 raw findings, 18 distinct.
+
+| # | Layer | Finding | Verdict | Route |
+|---|---|---|---|---|
+| C1 | B, E | A failed refresh after a change is silent: the last-good list stays with no hint (a just-created warehouse is missing); the alias also moved the four former `useOutboundWarehouses` screens from a visible failure to silence | medium — verified; my spec's frozen boundary | **human decision 3**: keep the list + a one-line "Couldn't refresh" note; patch |
+| C2 | E | Retry on a failed first load shows loading, against "no loading-state change" | low — true | accepted; recorded in the frozen boundary with decision 3 |
+| C3 | B, E | The scanner can drop edges: comments in import clauses, unresolved local specifiers skipped, hooks outside top-level `lib/use-*` | medium | patch: strip comments, throw on unresolved, widen the hook rule, sanity count |
+| C4 | B | The docs claim no operator *type or module* reaches the portal; the guard enforces hooks and components | low | patch: wording |
+| C5 | V | The queues' warehouse-id fallback (a matrix row) is untested | medium — pre-verified gap | patch |
+| C6 | B | Four failure branches hand-copy `Section` markup | low | patch |
+| C7 | B | The `LineRows` constants duplicate asn-card's | low | patch: export and import |
+| C8 | B | Stale docs: Portal ASN entry bullet, README 21-7b line, route rows | low | patch |
+| C9 | B | Issued invoices re-render with the unified label | low — within decision 1 (displayed text only) | patch: record it |
+| C10 | B | The retro IDs (A5/F1, item-89/90) are not mapped | low | patch |
+| C11 | V | Untested failure branches: cold-chain, excursions, zones/bins | low — the spec pinned one representative | defer |
+| C12 | V | Untested: `WarehouseList` and the four relabelled pages | low | defer |
+| C13 | B | More failure tests (reload transitions, tenant switch while failed) | low | defer |
+| C14 | B | A missing-but-ready warehouse shows no label, a failed read shows the id | low — different cases by design | reject |
+| C15 | B | `PENDING.md` not touched | low — the retro items close via sprint-status after merge | reject |
 
 ## Design Notes
 

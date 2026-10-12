@@ -80,11 +80,19 @@ export function useThings(warehouseId: string | null):
 
 ### 1.1 Return shape
 
-Use `ResourceState<T> & Reloadable` (`use-outbound-orders.ts:30-38`) — `loading | ready | failed`, with `reload()`.
+Use `ResourceState<T> & Reloadable` (`lib/resource-state.ts` since 21-11b; `use-outbound-orders.ts` re-exports both, so existing importers are unchanged — a portal module must import from `lib/resource-state`) — `loading | ready | failed`, with `reload()`.
 
-**Do not write a hook that returns `Page | null`.** The eight house hooks do (`use-catalog.ts`, `use-devices.ts`, `use-users.ts`, `use-zone-bins.ts`, `use-warehouse-zones.ts`, `use-tenant-warehouses.ts`, `use-setup-checklist.ts`, `use-inbound.ts`), swallowing failures in a bare `catch {}`. A surface then renders `null` as "Loading…" forever. This was 4.2b's largest review finding (`use-outbound-waves.ts:20-25`). The old hooks are debt; converting one is fair game, copying one is not.
+**Do not write a hook that returns `Page | null`.** The seven remaining house hooks do (`use-catalog.ts`, `use-devices.ts`, `use-users.ts`, `use-zone-bins.ts`, `use-warehouse-zones.ts`, `use-setup-checklist.ts`, `use-inbound.ts`; `use-tenant-warehouses.ts` was converted by 21-11b), swallowing failures in a bare `catch {}`. A surface then renders `null` as "Loading…" forever. This was 4.2b's largest review finding (`use-outbound-waves.ts:20-25`). The old hooks are debt; converting one is fair game, copying one is not.
 
-A failed read renders through `ReadFailure` (`components/outbound/shell.tsx:57`) — banner plus Retry. **Progress copy is never used for a failure.**
+A failed read renders through `ReadFailure` (`components/shared/surface.tsx` since 21-11b; `components/outbound/shell.tsx` re-exports it with `Section` and the class constants, and a portal file must import from `shared/surface`) — banner plus Retry. **Progress copy is never used for a failure.**
+
+**Warehouses: one hook, one rendering (21-11b).** `useTenantWarehouses()` (`lib/use-tenant-warehouses.ts`) is the one warehouses hook — `ResourceState<TenantWarehouses> & Reloadable`, the full cursor chain, refetch on `WAREHOUSES_CHANGED_EVENT`. `useOutboundWarehouses` is an alias, not a second implementation. Two rules of its own:
+
+- A failed **refetch** keeps the last-good list and is **not silent** (decision 3): the ready data carries `refreshFailed: reason`, and the consumer renders `WarehousesRefreshNote({ reason, onRetry })` (`components/shared/warehouses-failure.tsx`) — one non-blocking line, "Couldn't refresh warehouses — Retry" — where it renders its picker or list (inside the switcher; inline above the list elsewhere). The next successful read clears it. The state goes to `failed` only when there is no data yet for the tenant (a failed **first** load); `reload()` clears a `failed` state first, so Retry on a first load shows loading briefly — accepted, it is a new load.
+- **The four former `useOutboundWarehouses` screens** (Outbound, Overview, Replenishment, Channels) share this behaviour since 21-11b: before, any failed read — even a refresh — replaced the whole surface with a failure; now a failed refresh keeps the last-good warehouse and shows the note, and only a failed first load renders `WarehousesFailure`.
+- A consumer that needs `tenantId` while loading uses `ready ? data : { tenantId: null, items: [] }` (the precedent is `outbound.tsx`); loading renders as before.
+
+Every surface that lists warehouses renders `failed` through `WarehousesFailure({ state })` (`components/shared/warehouses-failure.tsx`) — "Warehouses not loaded" + reason + Retry; `compact` for the switcher. On a report page it takes the picker's slot and the report still reads for all warehouses. A label-only lookup (the variance and adjustment queues) degrades to the warehouse id, with no banner. The portal's `usePortalWarehouses` failure renders through the same component. Never render a failed warehouses read as an empty list or as "No warehouse yet".
 
 ### 1.2 Reading the whole chain
 
@@ -250,6 +258,8 @@ Three rules inside it:
 | `rejectionReason` (seven **file-local** copies) | `auth-forms.tsx:257`, `warehouse-create-form.tsx:133`, `zone-bin-setup.tsx:845`, `import-catalog.tsx:266`, `sku-table.tsx:316`, `users-card.tsx:288`, `devices-card.tsx:283` | `duplicate-email`/`invite-pending`/`invite-invalid` · `duplicate-warehouse-code` · `duplicate-zone-code`/`duplicate-bin-code`/`grid-too-large`/`bin-not-empty`/`bin-retired`/`bin-merge-hold-open`/`bin-full`/`bin-blocked` · `import-too-large`/`unsupported-file-type`/`file-unreadable` · `duplicate-barcode` · `email-exists`/`last-owner` · — |
 
 *(Amended 2026-10-10, epic-21 retro F4: the epic-21 rows were added; codes listed are those beyond the house set. Each re-words the session codes on its own — consolidating them is deferred cleanup, retro A9.)*
+
+**Charge labels — one source (21-11b, retro F2).** Not a refusal mapper, but the same "one copy" rule: a charge's basis text comes only from `basisLabel` (`lib/rate-cards.ts`, the rate-card vocabulary — storage is "per 1,000 units per day"); a priced line renders `basisLabel(line.basis)` from its **own stored basis** (usage `usageRateLabel`, client invoice `lineRateLabel`), never a per-surface table. A charge quantity comes only from `chargeQuantityLabel(code, quantity, uom)` (`lib/usage.ts`, the one `COUNT_NOUNS`); `usageQuantityLabel` and the client-invoice `lineQuantityLabel` delegate to it. The unpriced renderings stay distinct on purpose: usage `'—'` (a preview), invoice `'Unpriced'` (a draft). `components/settings/charge-labels.test.tsx` pins the rendered rate text of a rate-card row, a usage row and an invoice line as identical per charge code. (The unrelated `lineQuantityLabel`s in `outbound-orders.ts` and `invoices.ts` are not charge labels.)
 
 The house set every mapper handles: `not-found`, `role-denied`, `permission-denied`, `idempotency-key-reuse`, `unauthenticated`, `validation-failed`.
 
