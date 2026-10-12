@@ -688,3 +688,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-11b-epic-21-fe-hardening.md`
   summary: Add 503 warehouses-read failure tests for the surfaces 21-11b changed but did not pin — cold-chain trace, excursion queue, zones/bins setup, the settings WarehouseList, and the four relabelled pages (outbound, overview, replenishment, channels) — plus reload transition and tenant-switch-while-failed cases.
   evidence: Code review C11-C13 — the spec pinned one representative operator surface (inbound-cards); the others share the same component and shape.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-1b-dashboard-click-through.md`
+  summary: A cross-repo contract check between the backend's tile drill queries (kpis.ts) and the frontend's parseDrill SPECS — today the FE round-trip test uses a hand copy, so a new backend drill key silently turns that tile's link into "Link not applied".
+  evidence: Code review C19 — ReportingDrillDto.query is Record<string,string>, so generated types can't catch it; a backend-emitted fixture of the Overview's drills consumed by the FE test, or a BE test pinning drill keys to a shared list, would close it.

@@ -154,6 +154,49 @@ const orderId = loadedOrder !== null && loadedOrder.warehouseId === warehouseId 
 
 A switch invalidates the state in the same render, with no effect ordering to get wrong. 12-7 uses it three times (`cold-chain-trace.tsx` loaded order + draft, `excursion-queue.tsx` outcome banner keyed by `{tab, warehouseId}`). Reach for it before reaching for a reset effect.
 
+### 1.6 Reading a filter from the URL — the drill pattern (9-1b)
+
+This is the house rule for any screen that takes a filter from its URL. The only case today is an Overview tile's drill.
+
+**Parse on the server, mount keyed.** The route's server `page.tsx` awaits `searchParams` (a Promise in Next 16; each value is `string | string[]`), which makes the route render dynamically on each request (`ƒ` in the build output) rather than being prerendered. It calls the pure `parseDrill(screen, params)` from `lib/drill.ts` and renders the screen keyed on the result:
+
+```tsx
+export default async function OutboundPage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
+  const drill = parseDrill('outbound', await searchParams);
+  return (
+    <>
+      {drill === 'unsupported' && <UnsupportedDrillNotice />}
+      <Outbound key={drillKey(drill)} drill={drill} />
+    </>
+  );
+}
+```
+
+- **The parse is all or nothing, once there is a `list`.** It returns a typed drill, `null`, or `'unsupported'`. Params with **no `list`** are a plain visit, so the result is `null` and every other key is ignored (an unrelated `utm_source` must not trigger the notice). With a `list`, any of these makes the whole drill unsupported, and the screen shows its normal view plus the notice: an unknown key, a repeated key, a malformed uuid, enum or boolean, an instant that is not ISO-8601 with a zone or is not a real calendar time (30 Feb and hour 24 are both refused), a `list` the screen does not serve, or a path-scoped list without its warehouse. A partly applied filter would list rows that are not the figure's. `to` without `from` is lawful (live drills), `type` parses to a one-element list, and booleans parse only from `'true'`/`'false'`. `SPECS` in `drill.ts` is the runtime twin of the `Drill` union.
+- **The remount key does the reset.** `drillKey` is canonical (`'none'` without a drill). Clear is a soft navigation to the bare route, so the key changes and the screen remounts. No drilled cursor, cached page or `DataTable` Prev/Next stack survives into the normal view. A reset effect would run one render late (§1.5) and page the unfiltered list with a cursor minted by the filtered query.
+- **The router lives in one component.** `useRouter`/`usePathname` are called only in `DrillBanner` (`components/shared/drill-banner.tsx`, which also holds `DrillUnavailable` and `UnsupportedDrillNotice`), and `DrillBanner` renders only in drilled mode. A screen rendered without a drill never needs an App Router context, so tests that import screens statically keep working. A test that drives Clear mocks `next/navigation` first and then imports the screen dynamically (`components/drill/drill-screens.test.tsx`, after `portal.test.tsx`). That suite also renders each real `page.tsx` with `await Page({ searchParams: Promise.resolve(…) })`.
+- **Effects depend on the drill's key, not the object.** A server-component refresh passes the screen a new but equal drill object. Every list hook therefore holds its drill through `useKeyedDrill` (`lib/use-drill.ts`), which changes only when `drillKey` does. Depending on the object directly would refetch on every refresh.
+
+**Drilled mode:**
+
+1. **Filter on the server only.** The list hook takes the drill and calls its `lib/drill-fetch.ts` fetcher. That fetcher sends exactly the drill's keys minus `list`, values verbatim. A path-scoped list (ledger, orders) puts the drill's warehouse in the path. That warehouse comes from the apiPath, and `drillHref` gives no link if the query names a different one. The screen's own tab, status and kind state is ignored and its controls are hidden. Never narrow the rows on the client: the backend proves that the drill, paged to exhaustion, equals the figure, and client-side narrowing would break that.
+2. **Paging.** The cursor goes back verbatim, on the screen's existing paging (`DataTable` Prev/Next, or a queue's Next). Never decode or rebuild a cursor.
+3. **The warehouse is the drill's, for that view only.** `lib/warehouses` is never written. Any control that would write the active warehouse is hidden: the outbound and replenishment pickers. A drilled view renders for the drill's warehouse even when the active warehouse is unset or the warehouses read failed (the Ledger is the example). It labels that warehouse with the shared `warehouseDisplayLabel` from `lib/drill.ts`: `CODE Name`, or `Warehouse <short id>`.
+4. **One section is drilled, and the drill stays on screen.** `drillFor(drill, list)` gives each section its drill or `null`. The other sections on the page render normally for the active warehouse. Hide anything that would move the drilled section off screen, such as the `/conflicts` queue tab strip. Otherwise the drill would stay applied out of sight, with no banner to clear it.
+5. **The banner.** `DrillBanner({ drill })` reads the warehouse names itself and shows `describeDrill(drill, warehouses)`. That text is the list, each filter as a label, "All statuses" for a status-bearing list (over-receipts, batch alerts, e-way) whose drill names no status, the window in IST ("as of …" for `to` only), and the warehouse label. There are no editable filter controls; Clear is the only action.
+6. **A gated section.** If the drilled section is behind a capability the role lacks, show "This list isn't available to you" (`DrillUnavailable`). The tile already withholds such links with `drillLinkHref(drill, can)` in `lib/drill-routes.ts`.
+7. **Actions (9-1b decision 7).** A per-row action that applies to its own row stays: approve/reject an over-receipt, cancel an order, dismiss an alert, and the e-way row actions on a **pending** bill only. Bulk selection and downloads are hidden while drilled (the e-way selection and NIC download). Page-level create forms are hidden too (create order, generate invoice).
+
+**Adding a drill target:**
+- **Lists:** add the list to `DRILL_LISTS`/`SCREEN_LISTS`, with a `SPECS` entry and a `Drill` arm.
+- **Banner labels:** extend `describeDrill`'s tables for any new filter value: `STATUS_LABEL`, `KIND_LABEL`, the source tables, and `STATUS_BEARING` if the list's rows carry a status.
+- **Fetch and route:** add a fetcher to `drill-fetch.ts` and the route to `drill-routes.ts`. If the target section is capability-gated, set `capability` on its `RouteEntry`.
+- **The page:** have it parse and mount keyed, as above. Hold the drill in the hook through `useKeyedDrill`. Apply rule 7 to the screen's actions.
+- **Tests:**
+  - add the shape to the round trip in `drill.test.ts`;
+  - add a `CASES` entry to `drill-screens.test.tsx`, and add any new filter key to `DRILL_ONLY_KEYS`;
+  - add the page to `PAGE_CASES`.
+
 ---
 
 ## 2. Writing a mutation
