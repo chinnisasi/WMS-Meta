@@ -1,13 +1,13 @@
 # API surface
 
-Every route the backend exposes, grouped by the module that owns it. **202 operations across 28 controller files** (counted from `wms-be/openapi/openapi.json` and `src/**/*.controller.ts` at story 9-2 — recount from the exported document, do not hand-increment).
+Every route the backend exposes, grouped by the module that owns it. **204 operations across 28 controller files** (counted from `wms-be/openapi/openapi.json` and `src/**/*.controller.ts` at story 9-2b — recount from the exported document, do not hand-increment).
 
 Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-be/README.md`](../repos/wms-be/README.md); this is the inventory — what exists, who owns it, what gates it.
 
 **Conventions that hold everywhere:**
 - `{t}` = `:tenantId`, `{w}` = `:warehouseId`. The path `tenantId` must match the session's, or `403 permission-denied`.
 - **The fence (21-7):** every operator route (`TenantSessionGuard`, and `AnySessionGuard`'s web arm) refuses a client-portal token — one carrying `client_id` — with `403 role-denied`, detail exactly `This is an operator surface.`; every `portal/` route refuses any other token with `403 role-denied`, `This is a client-portal surface.` A token whose `client_id` is malformed or `null`, or that carries both `client_id` and `device_id`, is `401`; a badge-in token no longer opens a web route (`401`).
-- Every **mutating** route requires an `Idempotency-Key` header (26-char ULID). Missing/malformed → `400`; same key + different payload → `422 idempotency-key-reuse`; concurrent same key → `409 conflict`. **Documented exceptions:** the channel webhooks (the marketplace is the caller; dedup rides the order path's partial unique) and **`POST …/notifications/opened` (9-2)** — it sets the caller's last-opened time to now, which is naturally idempotent (a retry only moves it forward), so it takes no key and stores none.
+- Every **mutating** route requires an `Idempotency-Key` header (26-char ULID). Missing/malformed → `400`; same key + different payload → `422 idempotency-key-reuse`; concurrent same key → `409 conflict`. **Documented exceptions:** the channel webhooks (the marketplace is the caller; dedup rides the order path's partial unique), and the **natural upserts** — routes whose retry writes the same state, so they take no key and store none: **`POST …/notifications/opened` (9-2)** (it sets the caller's last-opened time to now; a retry only moves it forward) and **`PUT` / `DELETE …/devices/push-registration` (9-2b)** (a retry writes the same token and warehouse, or clears what is already clear).
 - **Reads are never capability-gated** — any tenant *staff* member may read. (The notification list is not an exception: every member may call it, and it **filters** its rows to the sources the caller can act on — 9-2.) Only mutations carry a capability (`permissions.ts:4-7`). **Exception (21-7):** a client-portal user is a member too, but every operator route refuses its session at the guard (the fence below); it uses only the `portal/` routes — reads, plus (21-7b) its one write, `POST portal/inbound/asns` (`asn.announce`).
 - Lists are cursor-paginated, `limit` 1–200 (some operator lists narrower, e.g. ASNs 1–100; **every `portal/` list is 1–100**). Offset pagination is banned.
 - Errors are RFC 9457 problem details; **clients branch on `code`, never on prose**.
@@ -42,6 +42,8 @@ Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-b
 | GET | `/tenants/{t}/devices` | — | Keyset |
 | POST | `/tenants/{t}/devices/{deviceId}/revoke` | `device.manage` | Status flip + wipe flag; idempotent |
 | POST | `/tenants/{t}/devices/self-test/echo` | **device credential** | Connectivity probe |
+| PUT | `/tenants/{t}/devices/push-registration` | **badge-in credential** | **9-2b:** registers the handheld's Expo push token and the warehouse it works in. Body `PushRegistrationDto {token: ^Expo(nent)?PushToken\[[^\]]{1,200}\]$, warehouseId: uuid}` → **204**. **No `Idempotency-Key`** (natural upsert). Clears the same token from the tenant's other devices; stamps `push_registered_at`. `400 validation-failed` (not an Expo token / warehouseId not a uuid); `401 unauthenticated` (missing token, or the bare enrollment credential — badge-in required); `403 permission-denied` (another tenant's path) / `device-revoked` (unknown, revoked, or bound to another operator); `404 not-found` (the warehouse is not the tenant's). No audit, no event. Design: `modules/tenancy.md` |
+| DELETE | `/tenants/{t}/devices/push-registration` | **badge-in credential** | **9-2b:** clears the handheld's push registration → **204**, idempotent, **no `Idempotency-Key`**. `401`; `403 permission-denied` / `device-revoked`. The handheld sends it when notification permission was withdrawn |
 | POST | `/tenants/{t}/devices/sync-reports` | **badge-in credential** | **5-6** (AD-14): the device's retained-report upload — rows are the dropped terminal ops (`rejected`/`quarantined` fates), each row carrying its op ULID, its sealed payload, the refusal verbatim and its own badge-in attribution. Per-row dedupe on (tenant, op_id) makes a re-post a no-op ack (at-least-once upload). `self-test.echo` is refused (not reviewable — a device diagnostic); a malformed row → 400 naming the row; bare enrollment token → 401; revoked device → 403 `device-revoked`. The 200-row cap is the report ceiling, but the **effective bound is the body limit** (~100 kB Express default; the per-row payload cap is 32 kB) — an oversized body → 413 before any row can be named, which is why the uploader slices at 50 rows and halves on 413. Audit-only (`device.sync_report.recorded`) |
 | GET | `/tenants/{t}/rejected-ops` | — | **5-6:** the Conflicts & Reviews queue's keyset read, `?status=open\|applied\|recounted\|discarded` |
 | POST | `/tenants/{t}/rejected-ops/{rejectedOpId}/resolve` | `review.decide` | **5-6:** the three arms. **apply** re-executes the stored payload through the op's own command path under the op's attributed operator with `binStateEpoch` stripped (the human judgment replaces that observation) — every guard live; any guard refusal surfaces verbatim and the row stays open. **recount** mints through the movement recount core on the payload-named bin — a pick's `binId` or a placement's `toBinId` (both served; no other field) — `409 count-task-open` on a bin with an open task; a bin-less payload → 400 backstop (the arm is hidden client-side for binId-less op types); unknown bin → 404. **discard** is audit-only (no stock write). Unknown id → 404; already resolved → 409 `rejected-op-resolved`. `Idempotency-Key`; replay re-serves the stored outcome. Apply rides the owning command facades (their own transactions — a post-commit failure self-heals on the op ULID's idempotency key) |
@@ -382,7 +384,7 @@ Thirty-nine, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` 
 
 ## Device-authenticated routes
 
-**Seven** routes sit outside the ordinary user session — and they are not one uniform class. Read the guard on the route, never this table alone:
+These routes sit outside the ordinary user session — and they are not one uniform class. Read the guard on the route, never this table alone (the list is not exhaustive: the sync-report, transfer and count routes are device-session too):
 
 | Route | Actual guard |
 |---|---|
@@ -394,6 +396,7 @@ Thirty-nine, in `tenancy/permissions.ts`, mirrored in `wms-fe/src/lib/users.ts` 
 | `POST .../putaway/placements` | device session |
 | `POST .../outbound/picks` | device session |
 | `POST .../outbound/packs` | device session (10.7) |
+| `PUT` / `DELETE .../devices/push-registration` | `DeviceSessionGuard` **plus** a non-null `userId` (badge-in; a bare enrollment credential → `401`), then the device locked and required `active` and bound to this operator (`403 device-revoked`) — 9-2b |
 
 The four device-session routes re-authorise on replay against **the badge-in session that created the op** — shared devices never launder authority across badge-ins.
 

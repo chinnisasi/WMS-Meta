@@ -694,7 +694,7 @@
   evidence: Code review C19 — ReportingDrillDto.query is Record<string,string>, so generated types can't catch it; a backend-emitted fixture of the Overview's drills consumed by the FE test, or a BE test pinning drill keys to a shared list, would close it.
 
 - source_spec: none
-  summary: 9-2b — mobile pushes for task assignment, approval-needed and at-risk cutoff (expo-notifications, a device push token at enrollment, an Expo push sender as an outbox consumer, a server-side at-risk cutoff sweep).
+  summary: ~~9-2b — mobile pushes for task assignment, approval-needed and at-risk cutoff (expo-notifications, a device push token at enrollment, an Expo push sender as an outbox consumer, a server-side at-risk cutoff sweep).~~ **DONE 2026-10-12 by story 9-2b** (`spec-9-2b-mobile-pushes.md`) — the token is registered by a badge-in PUT rather than at enrollment, the sender is a worker draining a queue the outbox handler fills (no network in the relay), and "task assignment" was decided to mean new work in the handheld's warehouse.
   evidence: Split from 9-2 by the human (2026-10-12). Open product questions first: the handheld has no "task assigned to a person" concept (warehouse-wide inbox), and approvers (owner/ops_manager) have no mobile login today.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
@@ -724,3 +724,51 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-2-notification-panel-and-pushes.md`
   summary: A late-surfaced entry can sort outside the panel's newest 10 — the dot follows `surfaced_at` but the panel orders by `raised_at`, so opening it clears the dot without showing the entry (it is on `/notifications`).
   evidence: Code review FE7 — a relay backlog projects an old raise late. A "new since last open" marker or ordering the panel by `surfaced_at` would close it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: Expo receipt polling — a ticket `ok` is recorded as `sent`; FCM/APNs delivery is never confirmed, and a `DeviceNotRegistered` that appears only in a receipt is never seen, so a dead token keeps being sent to until a ticket reports it.
+  evidence: Design (Never list: "No Expo receipt polling"). The fix is a poll over recent `sent` rows (Expo keeps receipts ~24 h) that fails the row and compare-and-clears the token via `clearPushTokenIn`.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: A real assignment model — new-work pushes go to every eligible floor handheld registered to the work's warehouse; nothing is pushed to a person.
+  evidence: Human decision 1 (2026-10-12): "task assignment" means new work in a warehouse; there is no task-owned-by-an-operator concept. `listPushTargets` is the one place to narrow when one exists.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: Mobile approvals — the approval push is a heads-up ("Decide it on the web"); the handheld has no approval screens.
+  evidence: Human decision 2 (2026-10-12); the spec's Never list. Approvers (owner, ops manager) decide on the web panel 9-2 links to.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: Putaway and scheduled-count pushes — neither is pushed; only on-demand and recount `count.created` are.
+  evidence: Design (Never list). A scheduled count tick can create dozens of tasks at once (`count.command.ts` scheduled arm); putaway has no event naming a task. Either needs its own debounce or digest.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: EAS / FCM / APNs setup — no EAS `projectId`, no `google-services.json`, no APNs key; the handheld never registers and the backend runs `PUSH_GATEWAY=unconfigured`.
+  evidence: Design (Code Map: README). Going live: `eas init`, the FCM V1 key and APNs key uploaded via `eas credentials`, a dev or store build, then `PUSH_GATEWAY=expo` + `EXPO_ACCESS_TOKEN` + `PUSH_SENDER_POLL_MS` on wms-be (wms-mobile README §Push notifications).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: `push_deliveries` retention — every queued push leaves a row forever, `sent` and `failed` alike.
+  evidence: Design review #21. Reads are index-bounded (`(tenant_id, status, next_attempt_at)`); the table is not. A job deleting terminal rows older than N days.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: Cross-tenant push-token ownership can regress — after the newer owner (tenant B) clears its token, tenant A's older row holding the same token becomes the latest registration again and is sent to.
+  evidence: Code review BE3 (low-medium). `pushTokenOwners` picks the latest `push_registered_at` among the rows holding the token; A's row is cleared only when one of its own rows is claimed and failed `superseded`. No write may cross tenants, so the fix is a tombstone of superseded tokens consulted by the ownership read.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: The wave cutoff at-risk window does not wrap IST midnight — a cutoff between 00:00 and 00:59 IST is never at risk the evening before.
+  evidence: Code review BE6 (low). `sweepCutoffRisk` computes minutes-of-day differences on one IST date (`wave.command.ts:875`), so `r` reads negative. Fix with the cutoff instant on the next IST date when `r < 0`.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: Expo `PUSH_TOO_MANY_EXPERIENCE_IDS` fails a mixed-project batch — a send whose tokens span two Expo projects is refused whole and every row of it fails permanently.
+  evidence: Code review BE7 (low). The gateway reads the whole-request 400 as `http-400` → permanent (`PUSH_ERROR_CLASS`). Harmless with one app build per deployment; two builds (dev + store) need batching by project.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: A pending launch tap is never expired or cleared on an unenrolled or revoked phase — a much later badge-in in the same process opens the old tab.
+  evidence: Code review M5 (low). `PendingTap` (`wms-mobile src/push.ts`) holds one tap in memory until `take()`; nothing clears it when the phase resolves to `unenrolled`/`revoked` or the device never badges in. Clear on those phases and add an age limit.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: The cutoff sweep tests depend on the date — they freeze `WAVE_CLOCK` and `pushClock` at 2026-10-12 while the sweep's outbox append mints a real-time uuidv7 event id.
+  evidence: Code review. The enqueue's staleness check then compares a frozen "now" with a real append time — negative after that date (passes vacuously), stale if run more than 30 minutes before it. Mint the append id from the frozen clock (`test/push.spec.ts` §the wave cutoff sweep).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-2b-mobile-pushes.md`
+  summary: The 9-2b Expo wiring was never run on a device — `push-expo.ts`, the gate's pending tap, badge-in's take and the inbox's `?tab`/`?tap` handling are verified by code review only.
+  evidence: Code review. wms-mobile has no screen harness (no component tests, no Detox/Maestro) and no EAS project or FCM/APNs credentials to send a real push. Every decision is pinned in `push-routing.test.ts` / `push.test.ts`; the wiring between them is not.

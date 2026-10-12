@@ -77,6 +77,8 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 
 `status` text NOT NULL default `'planned'`, CHECK `planned \| released \| cancelled`. `released_at` / `cancelled_at` timestamptz nullable — and the stamping is a **database rule, not a convention**: `waves_released_at_pairing` and `waves_cancelled_at_pairing` (`0018:145,147`).
 
+`cutoff_risk_alerted_on` date nullable (**9-2b**, `0068_mobile_pushes.sql`) — the IST date the cutoff sweep last raised `wave.cutoff_at_risk` for this wave. Written only by the sweep; never part of a wave snapshot.
+
 ### `picklists`
 
 `order_id` is **nullable** — null on a batch picklist spanning orders. `status` default `'planned'`, CHECK `planned \| ready \| cancelled`.
@@ -144,6 +146,7 @@ Seven tables. `tenantTimestamps` = `created_at` / `updated_at`, `timestamptz NOT
 | `listManifests` `:541` | `(tenantId, warehouseId, query) → Page<manifest>` | Keyset page, newest first | `outbound.controller.ts:517` |
 | `listPicklistLines` / `listPackFailures` / `listBackorderRefusals` (9-1) | `(tenantId, warehouseId, {status?, from, to, cursor, limit}) → Page` | The dashboard's drill lists (`fact-lists.ts`), windowed on the column their keyset walks, full-precision cursors | `GET …/warehouses/{w}/outbound/{picklist-lines,pack-failures,backorder-refusals}` |
 | `getPickTasksInTx` `:402` | `(tx, tenantId, warehouseId) → PickTask[]` | The device's walk, **in the caller's transaction** | in-module composition |
+| `sweepCutoffRisk` `:846` (9-2b) | `(tenantId) → {raised: waveId[]}` | The cutoff sweep for one tenant (below). System work — no actor, no key | the jobs shell's `WaveCutoffSweepWorker` |
 | `getPickTasks` `:417` | `(tenantId, warehouseId) → PickTask[]` | The same read in its own transaction | `src/api/receiving.controller.ts:160`, which joins it onto the device catalog snapshot |
 
 `getPickTasksInTx` exists in both shapes deliberately (`outbound.facade.ts:388-421`): the api shell composes the two facades **sequentially**, so the snapshot's connection is released before this one is taken. A pool-opening sibling called while the outer transaction is held reserves a second connection, and postgres.js queues connection requests with no timeout — enough concurrent snapshots deadlock the pool permanently. A convenience wrapper here caused exactly that once.
@@ -309,6 +312,18 @@ The cutoff gate runs **before** the flip and writes nothing past it: `localTimeO
 
 With the flip, in the same commit: pick lines of orders **cancelled** since planning are flipped to `cancelled` (`:756`), a picklist with no non-cancelled bin-bearing line left is cancelled rather than shipped empty (`:770`), and the rest go `ready` (`:786`). Already-`released` under a new key is a 200 no-op with no second event; `cancelled` is a 409. Emits `wave.released`.
 
+### `sweepCutoffRisk` — `wave.command.ts:875` (story 9-2b)
+
+The source of the handheld's **at-risk** push. It reuses the web's 60-minute rule (wms-fe `AT_RISK_THRESHOLD_MINUTES`, `lib/outbound-waves.ts:141`) so the amber chip and the push agree: **a wave still `planned`, whose policy has a cutoff, with `0 < r ≤ 60`** minutes to that cutoff (`CUTOFF_AT_RISK_MINUTES`, `:104`).
+
+- `now` is `WAVE_CLOCK`; `r = minutesOfDay(cutoff) − minutesOfDay(localTimeOfDay(now))` — the release gate's own clock and wall-clock helper, so the two agree on the minute (`localTimeOfDay` is `HH:MM`, so 17:59:59 is one minute out). The IST date is `istDateOf(now)`.
+- One tenant transaction. Candidates: planned waves joined to their policy, `cutoff_local_time IS NOT NULL`, `cutoff_risk_alerted_on IS DISTINCT FROM <IST date>`. Per candidate in the window, a **conditional marker write** — `SET cutoff_risk_alerted_on = <IST date> WHERE status = 'planned' AND cutoff_risk_alerted_on IS DISTINCT FROM <IST date> RETURNING` — and `wave.cutoff_at_risk {waveId, warehouseId, cutoffLocalTime, istDate}` is appended **only if the write returned the row**. A second tick or a concurrent sweep raises nothing; the next IST day may raise again.
+- `r = 0` (the cutoff minute — release is still allowed, but the warning is moot) and `r < 0` raise nothing. A released or cancelled wave is never a candidate. There is **no resolve event**: a push cannot be withdrawn, and the web's chip shows the live state.
+- No audit row, no idempotency key (the replenishment sweep's posture).
+- **IST same-day only.** `r` is a difference of minutes-of-day, so the window never wraps midnight: a 00:30 cutoff is never at risk at 23:45 the evening before (`r` reads −1395). Every cutoff in the first hour after IST midnight is silently outside the rule (PENDING).
+
+`WaveCutoffSweepWorker` (`jobs/jobs.module.ts:1090`) drives it, env-gated by `WAVE_CUTOFF_SWEEP_POLL_MS` (unset or `0` = off; `.env.example` 60000 — a slower poll can skip the first at-risk minute, never the window). Each tick finds tenants with a planned wave under a cutoff policy on `AUTH_DATABASE`, and logs and skips a tenant that fails.
+
 ### `cancelWave` — `wave.command.ts:839`
 
 Flips the wave, then flips every line that did **not** draw units (`not picklistLineDrewUnits()`) whose order is `accepted` or `cancelled`, then flips every picklist (`:920-934`). That line flip **is** what frees the orders — the partial unique index's predicate is `status <> 'cancelled'`. Drawn lines keep their claim forever, because their units have physically left the bin. No reservation moves. Emits `wave.cancelled`.
@@ -471,7 +486,7 @@ Reference docs are **annotated, not inferred** (`const referenceDoc: LedgerRefer
 
 **Ledger events consumed:** none. The module reads *projections* (`stockByBinsInTx`, `batchOnHandByBinsInTx`, `batchOnHandForBinInTx`) and reservation state through the facade.
 
-**Outbox types emitted** (AD-7, always in-transaction and before the idempotency key): `order.created`, `order.cancelled`, `wave.policy-created`, `wave.generated`, `wave.released`, `wave.cancelled`, `pick.recorded`, `order.packed`, `order.dispatched`. Payloads are the command's own snapshot — the same object the HTTP body and the stored replay carry, in base units.
+**Outbox types emitted** (AD-7, always in-transaction and before the idempotency key): `order.created`, `order.cancelled`, `wave.policy-created`, `wave.generated`, `wave.released`, `wave.cancelled`, `pick.recorded`, `order.packed`, `order.dispatched` — and, from the sweep (no key), **`wave.cutoff_at_risk`** (9-2b, `WAVE_CUTOFF_AT_RISK_EVENT`, re-exported from the facade). The notifications module consumes it and `wave.released` for the handheld pushes (`notifications.md` §Mobile pushes). Payloads are the command's own snapshot — the same object the HTTP body and the stored replay carry, in base units.
 
 **Audit actions**: the same names, except picking, which splits `pick.picked` from `pick.short-picked` (`pick.command.ts:1337`) — *"why did this order go out under-filled"* is a different question from *"who picked this line"*, and one action name for both makes it unanswerable. A zero-unit short pick has no `picks` row, so its audit row targets `picklist_line`.
 

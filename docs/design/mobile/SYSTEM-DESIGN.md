@@ -14,7 +14,7 @@ Expo 57 / React Native 0.87 / Expo Router, TypeScript strict (`tsconfig.json:5-6
 
 | | |
 |---|---|
-| **Who uses it** | Warehouse floor operators. One shared handheld, many operators across a shift, badging in and out |
+| **Who uses it** | Warehouse floor operators. **One operator per handheld:** the first badge-in after enrollment binds the device to that operator, and every later badge-in must be the same operator (another one is refused `401 badge-invalid`) until the device is re-enrolled (`wms-be enrollment.command.ts`, `badgeIn`). The operator badges in and out across a shift; the session expires, the binding does not |
 | **What it does** | Receive against a PO or an ASN (21-6b), put stock away into bins, pick released waves — each by scanning, each producing exactly one queued op |
 | **What decides** | The **server**. The device mirrors the server's rules to stop mistakes at the operator's hands; it never overrides them (AD-4) |
 
@@ -47,10 +47,10 @@ revoked       → /revoked     (full-screen, terminal)
 
 | Route | File | Does |
 |---|---|---|
-| `/` | `app/index.tsx` | The phase gate. Replaces itself with the phase's route |
+| `/` | `app/index.tsx` | The phase gate. Replaces itself with the phase's route — **9-2b:** for `/inbox`, a held launch tap's `/inbox?tab=…&tap=…` instead (`pendingTap.take()`, once) |
 | `/enroll` | `app/enroll.tsx` | One-time code + tenant id + device label + a 4–6 digit badge-in PIN (`:17`, `:28-31`). Redeems the code for the device credential and the **sealed offline-store key**. Unknown / expired / already-redeemed codes give one indistinguishable message (`:45-46`) |
-| `/badge-in` | `app/badge-in.tsx` | Operator email + PIN → an operator-bound device session. Wrong operator and wrong PIN are indistinguishable (`:44-49`). A `device-revoked` answer jumps straight to `/revoked` (`:37-41`) |
-| `/inbox` | `app/inbox.tsx` | The task-type switcher: `All · Receive · Pick · Putaway · Count · Transfer` (`:26`). The Receive (and All) tab lists PO cards, then **ASN cards** (21-6b — code, line counts, expected date; each deep-links `/receive?asnId=…`), then Blind. Three are live; Count and Transfer render the honest "arrives with later epics" empty state (`:112-121`). Also: the amber queue-depth chip, the simulated airplane-mode switch, the **Sync queued scans** button, and the sync summary |
+| `/badge-in` | `app/badge-in.tsx` | Operator email + PIN → an operator-bound device session. Wrong operator and wrong PIN are indistinguishable (`:44-49`). A `device-revoked` answer jumps straight to `/revoked` (`:37-41`). **9-2b:** on success it routes to a held launch tap's inbox route if one is pending (badge-in, not the gate, is what resolves the phase to `badged` here) |
+| `/inbox` | `app/inbox.tsx` | The task-type switcher: `All · Receive · Pick · Putaway · Pack · Count · Transfer` (`TASK_TABS`, moved to `src/push-routing.ts` in 9-2b so a push's tab parses against the same list). **9-2b:** reads `?tab=` and a `?tap=` nonce — a push tap refreshes the snapshot once per nonce, then re-reads it; the only screen that may show the notification-permission prompt. The Receive (and All) tab lists PO cards, then **ASN cards** (21-6b — code, line counts, expected date; each deep-links `/receive?asnId=…`), then Blind. Three are live; Count and Transfer render the honest "arrives with later epics" empty state (`:112-121`). Also: the amber queue-depth chip, the simulated airplane-mode switch, the **Sync queued scans** button, and the sync summary |
 | `/receive` | `app/receive.tsx` | Pick a PO **or an ASN** (21-6b), or blind receive with a reason → scan SKU barcodes → batch/mfg-date/quantity per line → confirm. One `grn.submit` op carries the **whole GRN**. Routed in with `?asnId=` / `?poId=` / `?blind=1` — precedence ASN, then PO, then blind, and only a **cached** document id preselects (`initialDraftFromRoute`). The draft holds at most one context (`draftContextSet`); every `choose*` re-resolves the lines' document references, and `confirmPayload` builds them from the context, so a stale reference can never reach the server. A SKU not on the active PO/ASN is booked unmatched — advisory on the line (`Not on {code} — will be booked; no {PO\|ASN} line credited`), never refused |
 | `/putaway` | `app/putaway.tsx` | Task pick → SKU scan verifies the pallet → quantity → bin scan → mismatch reason if the bin differs from the suggestion → confirm. One `putaway.place` op per placement |
 | `/pick` | `app/pick.tsx` | Walk pick → bin scan → item scan → serials (if tracked) → confirm, plus the short-pick arm. One `pick.record` op per line |
@@ -270,13 +270,13 @@ Three credentials, three lifetimes:
 
 `BadgeSession` (`device-store.ts:33-38`) carries the operator, the device and an `expiresAt` derived from `expiresInSeconds` at mint (`:169`). There is **no refresh machinery** — an expired session means badge in again.
 
-**Why every queued op re-authorises against the badge-in session that created it.** These are shared devices. Operator A scans twenty pallets in a dead zone, walks out, badges out; operator B badges in; the queue drains. Three things follow:
+**Why every queued op re-authorises against the badge-in session that created it.** The server binds a device to one operator at first badge-in (see *Who uses it*), so today a second operator cannot badge in on the same enrollment — but the client is written as if devices were shared, and that is deliberate defence: re-enrollment changes the operator, and the binding is a server rule the client must not assume. The shape it guards against: operator A scans twenty pallets in a dead zone, walks out, badges out; operator B badges in; the queue drains. Three things follow:
 
 1. **Attribution is stamped at enqueue, never read at replay** (`types.ts:30-41`, `device-store.ts:216-230`). Reading the current session at replay time would name B for A's scans. The op's own session is used for every outcome line, with the replaying session only as the fallback for ops sealed before the field existed (`device-store.ts:328-335`).
 2. **The server re-authorises on every replayed call** — device status and operator role are re-read from the database per request; the token is transport, never authority. A device revoked mid-queue answers `403 device-revoked`, and the client's response is proportionate: the op **and its whole tail** quarantine, and the phase flips to `revoked` (`engine.ts:204-220`, `device-store.ts:341-343`).
 3. **A role denial is not a revocation.** `role-denied` falls through to an ordinary rejection (`replay-classification.ts:41`); only `device-revoked` strands the tail. And a 401 `unauthenticated` is neither — it is treated as unreachable so the ops stay queued for a re-badge (`:25-29`).
 
-Shared devices never launder authority: an op queued under A's session replays as A's work, or not at all.
+Even if devices are shared, they never launder authority: an op queued under A's session replays as A's work, or not at all.
 
 ---
 
@@ -313,9 +313,60 @@ Sync summary
 
 ---
 
+## Push notifications — story 9-2b
+
+The server pushes three kinds: **new work** in the handheld's registered warehouse, **approval waiting** (decide it on the web — there are no mobile approval screens) and **wave cutoff at risk**. A push carries only `data: {kind, tab}`, and **a push is never a source of truth**: a tap only ever opens the inbox, which refreshes and re-reads the server's snapshot. Server side: `../modules/notifications.md` §Mobile pushes.
+
+### Three files, split by what they may import
+
+| File | Holds | Imports |
+|---|---|---|
+| `src/push-routing.ts` | Every **decision**, pure: `parseTab`, `tapTab`, `shouldNavigate`, `tapDecision`, `inboxHref`, `shouldRefreshForTap`, `registrationDecision`; `TASK_TABS`/`TaskTab` | nothing |
+| `src/push.ts` | The **sequences**, against injected ports: `createPushController` (registration), `PendingTap`, `createTapHandler` | `push-routing` only |
+| `src/push-expo.ts` | The **real ports** (`expo-notifications`, `expo-constants`, `isRunningInExpoGo`, the router, the device store, the API), `installPush()`, `usePushTaps()` | Expo — **the only module that imports `expo-notifications`**, and imported only from `app/` |
+
+`push.test.ts` pins that boundary statically: only `push-expo.ts` imports `expo-notifications`; `push-expo` is imported only from `app/`; no test reaches either transitively; and `device-store.ts` imports nothing push-related. **The device store reaches the push code through an installed hook** (`setPushRefresh`, set by `installPush`), not an import — so the store's composition test needs no `expo-notifications` stub (the spec planned stubs; the hook made them unnecessary). See IMPLEMENTATION-GUIDE §8.
+
+### Registration
+
+`registrationDecision({projectId, executionEnvironment, permission, canAskAgain, warehouseId, onInbox, registered})` → `skip | ask | register | unregister`:
+
+- no EAS `projectId` (`Constants.easConfig?.projectId ?? expoConfig.extra.eas.projectId`), or Expo Go (`isRunningInExpoGo()` → `EXPO_GO`) → **skip** — no prompt, no PUT;
+- `granted` → **register** once `lastWarehouseId` is known (skip until a snapshot has been fetched — the server scopes new work to it);
+- not granted while a registration stands (`registered`, the sealed `push-token` secret) → **unregister**;
+- `undetermined` → **ask** only on the inbox, only when `canAskAgain`, only once a warehouse is known.
+
+`createPushController(ports).sync(mode)` runs it, **serialised** (one sync at a time, so a PUT and a DELETE never interleave) and **never throwing** (a failure leaves the stored registration as it was; the next trigger retries). Three triggers:
+
+| Mode | Fired by | May |
+|---|---|---|
+| `inbox` | the inbox gaining focus (`useFocusEffect`), and again once a snapshot has loaded | ask, register, unregister. **Before the prompt it re-reads the live pathname** (`ports.onInbox()`) — a sync queued on the inbox may run after the operator walked into a task screen (code review M3) — then creates the Android `work` channel (HIGH importance), then asks |
+| `refresh` | after an online badge-in **without** a `lastWarehouseId`, and after every successful `refreshCatalogSnapshot` (so a badge-in with a warehouse syncs once, through its refresh — M6) | register when already granted; never prompts |
+| `foreground` | `AppState` → `active` | **only** unregister (permission withdrawn in settings → `DELETE`) |
+
+`getToken` is bounded by a 15 s timeout (`PUSH_TOKEN_TIMEOUT_MS`, M2) — the chain is serialised, so a token fetch that never answered would block every later sync. The prompt itself has no timeout (a human is answering). A `DELETE` answered `403 device-revoked` counts as unregistered (M7): revoke already cleared the server's columns.
+
+Foreground presentation (`setNotificationHandler`): banner and list shown, `shouldPlaySound: true` (Android shows no heads-up banner without it — not in the spec), `shouldSetBadge: false`.
+
+### Taps
+
+`usePushTaps()` (root layout) reads `useLastNotificationResponse()` — which also reports the tap that **launched** the app — and hands each default-action response to `createTapHandler`: dedupe by the request identifier (the hook re-reports on re-render and relaunch), clear Expo's last response, parse the tab, then `tapDecision(phase, pathname)`:
+
+| Decision | When | Does |
+|---|---|---|
+| `navigate` | phase `badged` **and** the path is `/inbox` or `/health` — an **allowlist** | on `/inbox`, `router.setParams({tab, tap})`; on `/health`, `dismissTo` the inbox route |
+| `pend` | the path is the gate `/` and the phase is `uninitialized`, `enrolled` or `badged` (a launch tap) | holds `/inbox?tab=…&tap=…` in `PendingTap` (one slot, in memory — a restart never re-applies it); the gate's `/inbox` route, or badge-in's success, `take()`s it once |
+| `drop` | anywhere else — every task screen, `self-test`, `badge-in`, `enroll`, `revoked`; an unenrolled or revoked gate | nothing |
+
+The allowlist exists because a navigation off a task screen would pull the operator out of a scan step and take the wedge scanner's focus. A new screen is a no-op until it is added.
+
+**The `?tap` nonce** is the request identifier. It makes a tap on the tab already showing still refresh, and the inbox keeps the last nonce it handled in a ref (`shouldRefreshForTap`), so a later tab switch — the param is still in the URL — or the effect running twice on a tap to another tab refreshes **once** (code review M1). A tap refreshes `refreshCatalogSnapshot(lastWarehouseId)` best-effort, then re-reads the sealed snapshot; offline, the old one stands.
+
+---
+
 ## Testing
 
-`bun test` — **271 tests across 15 files, all pure**; `bun run typecheck` is strict `tsc --noEmit`. CI runs exactly those two (`.github/workflows/ci.yml:21-25`).
+`bun test` — **469 tests across 23 files, all pure** (as of 9-2b; the per-suite table below predates several stories and lists the core suites only); `bun run typecheck` is strict `tsc --noEmit`. CI runs exactly those two (`.github/workflows/ci.yml:21-25`).
 
 | Suite | Tests | Covers |
 |---|---|---|
@@ -333,9 +384,11 @@ Sync summary
 | `src/state/op-dispatch.test.ts` | 7 | Op type → sender, `Idempotency-Key` = the op's ULID for every type, and the exhaustiveness throw |
 | `src/state/device-store.test.ts` | 8 | Only `parseCatalogSnapshot` — a legacy seal per growth story (3.5, 10.6, 10.7, 11.7, 12-8, 5-1, 5-3, 21-6b), the current round-trip, a corrupt seal |
 | `src/lib/ulid.test.ts` | 2 | Shape, time-sortability, uniqueness |
-| `src/api.test.ts` | 1 | `fetchApiPackOrder`'s wire shape executed against a stubbed `fetch` (10.7 review) — URL, method, idempotency key, badge token |
+| `src/api.test.ts` | 5 | `fetchApiPackOrder`'s wire shape executed against a stubbed `fetch` (10.7 review) — URL, method, idempotency key, badge token; and (9-2b) the push-registration PUT/DELETE — badge token, no idempotency key, a 204 resolved without a body |
+| `src/push-routing.test.ts` | 14 | 9-2b's decisions: `parseTab` (case-sensitive, unknown → `All`), `tapTab`, the tap allowlist and `tapDecision`, `inboxHref`, every `registrationDecision` arm, `shouldRefreshForTap` |
+| `src/push.test.ts` | 19 | 9-2b's sequences against fake ports: channel before prompt, silent refresh, foreground DELETE, the token timeout, the live-pathname check, `device-revoked` on DELETE, serialised syncs, tap dedupe and the pending launch tap — and the `expo-notifications` import boundary |
 
-**What is not covered, plainly:** there are **no component or screen tests at all** — nothing under `app/` is exercised, and there is no Detox/Maestro/e2e layer. Every rule that matters was deliberately pushed *out* of the screens into pure modules for exactly this reason (`op-dispatch.ts`, `replay-classification.ts`, `catalog-snapshot.ts`, the three draft models were each extracted after a defect that the Expo-runtime coupling had hidden), but the screens' own wiring — step transitions, focus management, banner selection — is verified by hand only.
+**What is not covered, plainly:** there are **no component or screen tests at all** — nothing under `app/` is exercised, and there is no Detox/Maestro/e2e layer. **The 9-2b Expo wiring (`push-expo.ts`, the gate, badge-in and inbox changes) has never run on a device** — no EAS project, no FCM/APNs credentials, no screen harness (PENDING). Every rule that matters was deliberately pushed *out* of the screens into pure modules for exactly this reason (`op-dispatch.ts`, `replay-classification.ts`, `catalog-snapshot.ts`, the three draft models were each extracted after a defect that the Expo-runtime coupling had hidden), but the screens' own wiring — step transitions, focus management, banner selection — is verified by hand only.
 
 ---
 
@@ -343,7 +396,7 @@ Sync summary
 
 These have caused, or can cause, a real defect. Each is verified against the code as it stands.
 
-1. **A concurrent enqueue during a replay is deleted without ever being sent.** `replayOutbox` snapshots the queue once (`engine.ts:89`) and finishes with `store.replaceOps(remaining)` (`:227`), which is `DELETE FROM outbox` then re-insert (`outbox-store.ts:150-158`). `deviceStore.replay()` has **no in-flight guard** (`device-store.ts:305`), and every task screen fires an un-awaited `replay()` right after `enqueueOp` (`app/pick.tsx:406-408`, `app/receive.tsx:263-265`, `app/putaway.tsx:215-217`) while the inbox offers a manual **Sync** button (`app/inbox.tsx:135`). An op appended while a replay is awaiting the network — a confirm during a 10-second request, or two overlapping replays — is inside neither `queue` nor `remaining`, so the write-back erases it. Exactly-once on the server still holds (the ULID key protects that); what is lost is a scan that was never sent. This is the one place the zero-scan-loss property is not structural.
+1. ~~**A concurrent enqueue during a replay is deleted without ever being sent.**~~ **Closed by story 10-6** (`src/state/replay-gate.ts`, pinned by `replay-gate.test.ts`). `replayOutbox` still snapshots the queue once and writes the survivors back with `replaceOps` (`DELETE` then re-insert), which is why the gate exists: `replay()` runs through `SingleFlightGate.run` (a second caller shares the pass in flight) and `enqueueOp` appends through `registerAppend`, which registers **synchronously, before any await**. A pass drains every append registered before it started; an append registered mid-pass waits for that pass's write-back, then commits. Single-flight alone was not enough — the append's commit is a later await, and a new pass could start in that gap. Do not route an append around `registerAppend`.
 
 2. **The offline switch is a simulation, and there is no connectivity detection at all.** `snapshot.offline` is set only by the inbox's Switch (`device-store.ts:204`, `app/inbox.tsx:126-130`), and no NetInfo-style listener exists anywhere in the repo. There is no background sync, no retry timer, no drain-on-reconnect: the queue drains only when an operator taps **Sync queued scans** or confirms another task. A handheld left in a dead zone and pocketed stays queued indefinitely.
 
