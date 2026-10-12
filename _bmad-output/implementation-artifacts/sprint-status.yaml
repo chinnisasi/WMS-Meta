@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-12-2026 12:46
+last_updated: 10-12-2026 12:52
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -382,7 +382,7 @@ development_status:
   # Split by the human (2026-10-12): 9-2 ships the web notification panel;
   # mobile pushes (task assignment, approval-needed, at-risk cutoff) are 9-2b.
   9-2-notification-panel-and-pushes: done
-  9-2b-mobile-pushes: backlog
+  9-2b-mobile-pushes: in-progress
   9-3-global-audit-trail-and-async-export: backlog
   epic-9-retrospective: optional
 action_items:
