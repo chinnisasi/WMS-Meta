@@ -20,6 +20,8 @@ This module is the spine every other module calls into. `assertPermission` + `ge
 | `devices` (`schema.ts:1099`) | Floor handhelds: enrollment code hash, label, badge PIN hash, operator binding, revocation, and (9-2b) the push registration — Expo token + warehouse | `devices_enrollment_code_hash_unique` is a **partial** index (`where enrollment_code_hash is not null`) — it is what makes redemption single-shot. `devices_status_check` ∈ {`active`,`revoked`} (`drizzle/0012_lonely_the_renegades.sql:40`) |
 | `rejected_ops` (`schema.ts:3134`) — **5-6** | One row per dropped terminal op a device's replay pass reported: the op ULID, its type, the `rejected`/quarantined classification and refusal verbatim, the payload as uploaded (the apply arm's re-execution input), the badge-in attribution jsonb, and the resolution columns | `rejected_ops_tenant_id_op_id_unique` — the per-row dedupe that makes at-least-once uploads safe (a re-posted row updates nothing). CHECKs (`classification`/`status`) live **only in migration `0047`** |
 | `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with every module that has a keyed command** — it is the one table this module owns that siblings write; since 9-3a every keyed command writes a row (`IMPLEMENTATION-GUIDE.md` §1 step 10), and reporting reads it (the audit trail, its third read-only exception) |
+| `audit_exports` (9-3b) | One row per requested export of the audit trail: `requested_by`, `filters` jsonb (the validated body, absent keys omitted, instants canonical UTC), `snapshot_at` (= `created_at`), `status`, `attempts`, `started_at`/`heartbeat_at`/`finished_at`/`expires_at`, `row_count`/`byte_size`/`sha256`, `failure_reason` | Written only by this module (`test/architecture.spec.ts` "the audit exports are tenancy-owned"). CHECKs only in migration `0070`: status/reason vocabularies, `attempts >= 0`, a hex `sha256`, and the **per-status shape** (§The async audit export). Partial unique `audit_exports_active_unique (tenant_id, requested_by) WHERE status IN ('queued','running')` — one active export per member. No FK |
+| `audit_export_files` (9-3b) | An export's gzipped CSV bytes (`bytea`), keyed by `export_id` | A table of its own so a list never reads bytes; written and removed only through the `AuditExportStore` port's Postgres implementation. No FK — expiry removes the file explicitly |
 | `idempotency_keys` (`schema.ts:238`) | AD-5 storage: `(tenant_id, key)` unique + payload hash + response snapshot | Also written by every other module. Extra `idempotency_keys_key_idx` exists solely for registration's key-only replay lookup |
 
 Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy declared **only** in migration SQL (`drizzle/0001_greedy_scarecrow.sql:55-70`).
@@ -114,6 +116,11 @@ Second index: `rejected_ops_tenant_status_created_at_id_idx` — the review queu
 - `portalWarehouses(tenantId, clientId)` (21-7b) — the client portal's warehouse list (the announce form's picker; decision 1: every warehouse of the tenant): `{warehouseId, warehouseName, city}` (city = `origin_city`, null on a pre-11.1 row — it tells apart two warehouses of one name), ordered `(name, id)`, unpaginated and capped at `MAX_WAREHOUSE_PAGE_SIZE` (200). Never a code, address line, contact or GSTIN. Stamped `{ clientId }` like every portal read (the architecture scan lists it), though `warehouses` is tenant-scoped.
 - `listWarehouses` `:200` / `listZones` `:241` / `listBins` `:282` — keyset-paginated reads. `listBins` converts `capacity` out of milli-units (`:330`) and, since 11-5, echoes the four physical-capacity attributes **raw** (integer facts, no `fromMilli`).
 - `computeSetupChecklist(tenantId)` `:344` — the four onboarding steps, computed on read from counts. No stored step rows.
+- **The async audit export (9-3b)** — called by the api shell's `ReportingController` and the jobs shell's `AuditExportWorker` (§The async audit export):
+  - `requestAuditExport(command, key)` → `AuditExportSnapshot` — `AuditExportCommand.request`;
+  - `listAuditExports(tenantId, userId)` — the caller's own last 20, newest first (`audit.view`);
+  - `openAuditExportFile(tenantId, userId, exportId)` → `{export, gzipped}` — a ready export's stored bytes, for its requester only;
+  - `runDueAuditExports(tenantId)` → `AuditExportRunSummary` — one worker pass (`AuditExportRunner.runDue`).
 
 **File-level functions** other modules import directly (they are the shared command-entry pattern, not a facade breach):
 
@@ -437,6 +444,73 @@ The QC-hold re-select additionally requires `systemOwned = true` (`:169`): adopt
 
 ---
 
+## The async audit export (story 9-3b, FR-28)
+
+**What it is.** The owner exports the audit trail — the 9-3a read's filters — to a gzipped CSV of up to 1,000,000 events, written asynchronously; completion or failure notifies **the requester only**, and the file is kept 7 days. **Tenancy owns it** because it owns `audit_events` and `users`: the export reads only its own tables, so no new read exception exists. Reporting stays read-only and holds no export code; the three routes sit in the api shell's `ReportingController`, which calls `TenancyService`. Files: `audit-export.command.ts` (the request, the vocabularies, the events), `audit-export.runner.ts` (the worker's pass, `auditExportLimits`), `audit-export.store.ts` (the port), `audit-export.csv.ts` (the writer).
+
+```mermaid
+sequenceDiagram
+  participant W as web /reports (owner)
+  participant C as ReportingController
+  participant T as TenancyService
+  participant PG as Postgres
+  participant J as AuditExportWorker (jobs)
+  participant N as notifications (outbox subscriber)
+
+  W->>C: POST reporting/audit/exports {filters} + Idempotency-Key
+  C->>T: requestAuditExport
+  T->>PG: tx: advisory lock (tenant, requester) → replay → audit.view → one active? → INSERT queued (snapshot_at = now()) → audit row → key
+  C-->>W: 202 AuditExportDto (queued)
+  J->>PG: AUTH_DATABASE: tenants with queued / stale running / expired-due rows
+  J->>T: runDueAuditExports(t)
+  T->>PG: reclaim stale runs; expire finished ones (file removed, audit_export.expired)
+  T->>PG: oldest queued: now() ≥ snapshot_at + 5 s AND no open xact older than snapshot_at (§7d) → claim running
+  loop each page (its own tx, 30 s statement budget)
+    T->>PG: audit rows created_at < snapshot_at, keyset on created_at::text, LEFT JOIN users; heartbeat
+  end
+  T->>PG: tx: ready (if still ours) + store.put + audit_export.ready — or failed + audit_export.failed
+  N->>PG: panel entry for the requester only (recipient_user_id)
+  W->>C: GET reporting/audit/exports/{id}/file (bearer)
+  C-->>W: 200 gzip bytes (Content-Encoding: gzip)
+```
+
+**The request** (`AuditExportCommand.request`). In one transaction, in this order: `pg_advisory_xact_lock(hashtext('audit-export:' ‖ tenant ‖ ':' ‖ requester))` → the replay lookup **under the lock** (a same-key duplicate parked on the lock re-serves the winner's 202, `queued` included, whatever the export has become) → `assertPermission(…, 'audit.view')` (403 `role-denied`) → an active (`queued`/`running`) export of the requester's is 409 `export-in-progress` → insert `queued` with `snapshot_at = now()`, the audit row `audit_export.requested` (target `audit_export`), the key last. The partial unique index's 23505 maps to the same 409. The hash is `{arm: 'audit-export', tenantId, requestedBy, ...filters}` with the filters in a fixed key order, absent keys omitted and `from`/`to` canonical UTC (`canonicalAuditFilters`), so key order and zone spelling never change a fingerprint. Always 202.
+
+**The filter is shared, never copied.** `src/shared/db/audit-filter.ts` (`auditFilterSql`, `escapeLikePrefix`, `AUDIT_ACTION_PREFIX_RE`, `AuditFilters`) is the one definition both readers use; reporting's `audit.ts` calls it and re-exports the moved names. It is held to the audit read's guard rules (only `auditEvents`, no other table, no join, no role read).
+
+**The row shape** (`audit_exports_shape_check`, one implication per status so an unknown status is refused by its own vocabulary CHECK):
+
+| Status | `started_at` | `heartbeat_at` | `finished_at` / `expires_at` | `row_count`, `byte_size`, `sha256` | `failure_reason` |
+|---|---|---|---|---|---|
+| `queued` | null | null | null | null | null |
+| `running` | set | set | null | null | null |
+| `ready` | — | — | set | set | null |
+| `failed` | — | — | set | — | set |
+| `expired` | — | — | set | kept | kept |
+
+**The runner** (`AuditExportRunner.runDue`, per tenant, in order):
+
+1. **Reclaim** — a `running` row whose `heartbeat_at` is older than 15 minutes goes back to `queued` while `attempts < 3`; otherwise it fails `interrupted` (`finished_at`, `expires_at = now() + 7 days`, `audit_export.failed` in the same transaction).
+2. **Expire** — each `ready`/`failed` row past `expires_at`, one transaction each (≤ 100 a tick): `store.remove`, `expired`, `audit_export.expired`. The row stays as history.
+3. **Prove the snapshot** — `audit_events.created_at` is the writing transaction's start, so a transaction that began before the request but commits after it carries an earlier stamp. The oldest `queued` row is claimable only when `now() ≥ snapshot_at + auditExportLimits.snapshotGraceMs` (5 s) **and** the §7d probe (`shared/db/open-transactions.ts`, moved from billing) finds no other client backend with `xact_start ≤ snapshot_at`. A hidden session refuses (logged `AUDIT EXPORT WAITING … hidden`). `runDue` reports `waiting: 'grace' | 'open-transaction' | 'session-visibility'`.
+4. **Claim** — `FOR UPDATE SKIP LOCKED`, `running`, `attempts + 1`, `started_at = heartbeat_at = now()`; committed before any work. The claimed `attempts` is remembered.
+5. **Write** — pages of `auditExportLimits.pageSize` (5,000) rows matching `auditFilterSql(filters)` with `created_at < snapshot_at`, ordered `created_at DESC, id DESC`, keyset on the **full-precision** `created_at::text` (`fullPrecisionInstant` — a millisecond cursor skips a tie group's tail). Each page is its own tenant transaction under a 30 s `statement_timeout`, left-joins `users` for the email, and ends with a heartbeat conditional on `(running, claimed attempts)` — zero rows means the run was reclaimed: discard, write nothing. Rows stream through `zlib.createGzip` into memory with a SHA-256 over the uncompressed bytes. Reading row `maxRows + 1` (1,000,000) fails `too-many-events`.
+6. **Finish** — one transaction, conditional on `(running, claimed attempts)`: ready → the row, then `store.put`, then `audit_export.ready` `{exportId, requestedBy, rowCount}`; any failure → `failed` with its reason and `audit_export.failed` `{exportId, requestedBy, reason}`. An unexpected throw (a page's 57014 included) is `export-error`, logged. A reclaimed run's finish updates zero rows and writes nothing — not even the file. **Nothing throws out of a tick.**
+
+`auditExportLimits = {pageSize, maxRows, snapshotGraceMs}` is an exported mutable object (the `pushClock` precedent) so suites can cross a page boundary and the cap with a handful of rows. `snapshotGraceMs` is not in the spec's list — added so a suite need not sleep 5 s per export (Implementation Notes).
+
+**The CSV** (`audit-export.csv.ts`): RFC 4180, `\r\n`, UTF-8 with a BOM. Header `recorded_at,occurred_at,actor_kind,actor_user_id,actor_email,action,target_type,target_id`. Instants IST, ISO-8601 with milliseconds and `+05:30`. `actor_kind` `system` for `SYSTEM_ACTOR_ID` (email empty); an unknown user's email is empty. A cell starting `=` `+` `-` `@` TAB or CR gets a leading `'` (21-5b's rule); a cell holding `,` `"` CR or LF is quoted. `reference` is never exported.
+
+**The store port** (`AuditExportStore {put, open, remove}`, token `AUDIT_EXPORT_STORE`) — every method takes the caller's transaction. `PostgresAuditExportStore` keeps the bytes in `audit_export_files`. 9-3c's object storage replaces the binding.
+
+**The reads.** `listAuditExports` — the caller's own last 20, newest first, unpaged (a named exception to cursor paging). `openAuditExportFile` — `audit.view` **and** `requested_by = caller`: another member's export and an unknown id are the same 404 `export-not-found`; `queued`/`running`/`failed` → 409 `export-not-ready`; `expired` → 409 `export-expired`. A download writes nothing (no download audit — PENDING).
+
+**The worker** — `AuditExportWorker` (`jobs/jobs.module.ts`), env-gated by `AUDIT_EXPORT_POLL_MS` (unset/`0` = off: rows stay `queued`, the web reads "Preparing…"). Discovery on `AUTH_DATABASE`: `status = 'queued'`, or `running` with a stale heartbeat, or `ready`/`failed` past `expires_at`. Single-flight, per-tenant `try/catch`. **Its role must see every app session** (§7d) — one role for all app connections, or `pg_read_all_stats`; otherwise every export waits `session-visibility`.
+
+**Load** (`bun scripts/loadtest-audit-export.ts`, reported, not gated). Measured 2026-10-14 on local compose Postgres 18: **100,000 events, no filters → `ready` in ~1.2 s** (20 pages of 5,000), **`byte_size` 3,412,846 bytes (3.3 MB gzipped; 18.3 MB uncompressed)**, sha256 verified over the download, the requester's panel showing `Audit export ready — 1,00,000 events`. The seed uses ~20 action stems and random target ids (two random uuids per row dominate the size); at the 1M cap expect ~33 MB gzipped held in memory per running export.
+
+---
+
 ## Invariants
 
 | Invariant | Enforced by |
@@ -461,6 +535,10 @@ The QC-hold re-select additionally requires `systemOwned = true` (`:169`): adopt
 | A sync-report row is recorded at most once per (tenant, op_id) — at-least-once uploads are safe | `rejected_ops_tenant_id_op_id_unique` + `onConflictDoNothing` (`sync-report.command.ts:609`) |
 | A rejected op resolves exactly once, in one terminal state | Row lock `.for('update')` + the conditional UPDATE `.where(status = 'open')` (`:967`) — a concurrent resolution races to the same 409 `rejected-op-resolved` |
 | A rejected op's apply can never launder a stale epoch | `binStateEpoch` is stripped at APPLY time — the re-executed command's own binStateEpoch guard is live and current |
+| One active (queued/running) audit export per member (9-3b) | the active check under the per-requester advisory lock; `audit_exports_active_unique` as the backstop (23505 → the same 409) |
+| An audit export's file is "the trail as of the request" (9-3b) | `created_at < snapshot_at` + the §7d proof before the claim; the full-precision keyset |
+| A reclaimed export run writes nothing (9-3b) | every heartbeat and finish is conditional on `(status = 'running', attempts = claimed)` |
+| Only the requester can read an export, or be told about it (9-3b) | `requested_by = caller` on the list and the download (an unknown and another's id are the same 404); the notification's `recipient_user_id` |
 
 ---
 
@@ -507,8 +585,9 @@ All appended in-transaction through `OUTBOX_SINK` (AD-7); a replayed command app
 | `device.rejected_op.raised` (9-2) | `recordSyncReport` — **only for a row that entered the queue** (`inserted.length > 0`; a re-posted row the `(tenant, op_id)` unique absorbed raises nothing), in the same transaction as the insert | `{rejectedOpId, opId, opType, problemCode, deviceId, operatorUserId}` — the notification panel's `rejected-op` raise (`REJECTED_OP_RAISED_EVENT`, `sync-report.command.ts:257`) |
 | `device.rejected_op.resolved` (5-6) | `resolveRejectedOp` | `{rejectedOpId, opId, opType, classification, problemCode, decision, status, deviceId, deviceLabel, operatorId, operatorEmail, resolvedAt}` |
 | `device.sync_report.recorded` (5-6) | `recordSyncReport` | **audit-only** (per report; the per-row `device.rejected_op.raised` above is the outbox event) — an `audit_events` row (action = the event name, `target_type` = `device`), no outbox row: the per-row dedupe + `rejected_ops` rows carry the durable facts |
+| `audit_export.ready` / `audit_export.failed` / `audit_export.expired` (9-3b) | `AuditExportRunner` — **outbox only, never an audit row** (the worker is unkeyed) | `{exportId, requestedBy, rowCount}` / `{exportId, requestedBy, reason}` / `{exportId, requestedBy}` — the panel's per-user `audit-export` source (raise on ready or failed, resolve `expired`) |
 
-`createBin` emits nothing (see Commands).
+`createBin` emits nothing (see Commands). The export request writes the audit row `audit_export.requested` (target `audit_export`) and appends no outbox event.
 
 **Read by notifications (9-2b):** the mobile pushes reach `devices` only through the four push-target functions above, and the cross-tenant ownership read runs on the `AUTH_DATABASE` handle the sender passes in (`pushTokenOwners(authDb, …)`) — a read, never a write. See `notifications.md` §Mobile pushes.
 

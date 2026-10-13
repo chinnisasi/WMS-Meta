@@ -2,9 +2,10 @@
 title: 'Async audit export — the Owner exports a filtered audit trail of up to 1M events to CSV, and is notified when it is ready'
 type: 'feature'
 created: '2026-10-13'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'wms-be d1e62ad9bd695b506f72b8eafed6cfffa3fc601c; wms-fe 45ed1392e33dace46259cfac6cdd2330bec2ec1c'
 context:
   - '_bmad-output/implementation-artifacts/epic-9-context.md'
   - '_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md'
@@ -283,12 +284,12 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] **BE shared code:**
+- [x] **BE shared code:**
   - `shared/db/audit-filter.ts`, with `audit.ts` calling it and re-exporting the moved names, and the extended guard block;
   - `shared/db/open-transactions.ts`, called by billing;
   - the base DTO.
-- [ ] **BE migration 0070** (§3): tables, RLS, CHECKs, indexes, `recipient_user_id` and its CHECK, the widened source CHECK; journal, snapshot, probe.
-- [ ] **BE tenancy:**
+- [x] **BE migration 0070** (§3): tables, RLS, CHECKs, indexes, `recipient_user_id` and its CHECK, the widened source CHECK; journal, snapshot, probe.
+- [x] **BE tenancy:**
   - the store port and the Postgres implementation;
   - the CSV writer;
   - the request command (lock, replay, guard, active check, audit row, vocabulary);
@@ -296,26 +297,26 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
   - the list and file reads;
   - the three outbox events;
   - `auditExportLimits`.
-- [ ] **BE api:** the three routes on `ReportingController`, the DTOs, `openapi.json`.
-- [ ] **BE jobs:** `AuditExportWorker`; `AUDIT_EXPORT_POLL_MS` in `.env.example` and the README.
-- [ ] **BE notifications:**
+- [x] **BE api:** the three routes on `ReportingController`, the DTOs, `openapi.json`.
+- [x] **BE jobs:** `AuditExportWorker`; `AUDIT_EXPORT_POLL_MS` in `.env.example` and the README.
+- [x] **BE notifications:**
   - the recipient column through raise, the tombstone, `list` and `status`;
   - the `audit-export` source and its DTO;
   - the no-push pin.
-- [ ] **BE tests:**
+- [x] **BE tests:**
   - every matrix row;
   - the tenancy ownership block;
   - the 9-2 sources unchanged.
   - Rows are backdated in SQL against `now()` (`push.spec.ts`), and the runner is driven through `runDueAuditExports`, not timers.
-- [ ] **BE load:** `scripts/loadtest-audit-export.ts` seeds 100k `audit_events`, runs one export, and reports its time and `byte_size`. Reported, not gated.
-- [ ] **FE:**
+- [x] **BE load:** `scripts/loadtest-audit-export.ts` seeds 100k `audit_events`, runs one export, and reports its time and `byte_size`. Reported, not gated.
+- [x] **FE:**
   - `api:generate`;
   - `downloadBlob`;
   - `useAuditExports`, the export button, the list with its anchor and hash handling, Download, `exportReason`;
   - `AUDIT_TARGET_LABEL`;
   - the notification source;
   - tests for every web row. Download tests serve plain CSV bytes.
-- [ ] **Meta docs:**
+- [x] **Meta docs:**
   - `tenancy.md` (the export), `notifications.md` (the per-user audience), `reporting.md` (the routes; no reporting code), `billing.md` (the probe moved);
   - IMPLEMENTATION-GUIDE: §8 (the new worker); §6 (a binary success response, `@Res()`); §7d (its second user);
   - API-SURFACE: the routes; the list's paging exception; the two new gated reads;
@@ -330,6 +331,20 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 - Given the full BE and FE suites, lint, typecheck, build and the capability-mirror check, when run, then they pass.
 
 ## Implementation Notes
+
+Built on wms-be `feat/9-3b-async-audit-export` (`d1e62ad..0839383`) and wms-fe on the same branch (`45ed139..89be835`), each one commit carrying the story and its code-review patch. Re-verified 2026-10-14: BE 81 suites / 1905 tests, lint, typecheck; FE 1482 tests, lint, typecheck, capability mirror (42), `next build`; the load script at 100k and at the 1M cap.
+
+Implemented 2026-10-14 against the reviewed design. Where the code goes beyond, or reads, the frozen text:
+
+- **`auditExportLimits` has a third field, `snapshotGraceMs`** (default 5,000 — the spec's 5 s). The §7d margin is read from it so a suite need not sleep 5 s per export; production never changes it. The spec names `{pageSize, maxRows}` only — this is additive, and `test/audit-export.spec.ts` pins the margin itself ("not claimed inside its clock-skew margin").
+- **`AuditExportRunner.openSessions` is a plain field** set to the shared `openSessionsInTx` (the `ReportingFacade.auditRead` precedent), so the suite can stand in a hidden session; billing keeps its own `openSessionsInTx` method as a one-line delegate for the same reason (the metering suite patches it).
+- **Two raises for one source.** `SourceSpec` gained an optional `moreRaises` list: `audit_export.ready` is the source's `raise`, `audit_export.failed` its second raise. `EVENT_ROUTES` routes both.
+- **The §7d comparison** is `oldestXactStart ≤ snapshot_at`, both millisecond-truncated: truncation only moves either instant earlier-or-equal, and `≤` keeps every transaction that began before the snapshot on the "not proven" side.
+- **The per-status CHECK is written as one implication per status**, so an unknown status passes it and is refused by `audit_exports_status_check` (the first draft's OR-of-arms form was refused by the shape CHECK first — the probe caught it). A fourth CHECK, `audit_exports_sha256_check` (`^[0-9a-f]{64}$` or null), is probed too.
+- **The stored filters lower-case `actorUserId`/`targetId`** (uuids compare case-insensitively in SQL; the stored and hashed form is one spelling).
+- **The web's `to` summary** shows the IST day of `to − 1 ms` — identical to "the IST day before the stored instant" for every export the web makes (its `to` is always an IST midnight), and still correct for an API caller's non-midnight `to`.
+- **Load:** `bun scripts/loadtest-audit-export.ts` (2026-10-14, local compose Postgres 18): 100,000 events, no filters → `ready` in ~1.2 s (20 pages), `byte_size` 3,412,846 (18.3 MB uncompressed), sha256 verified over the HTTP download, the requester's panel shows "ready — 1,00,000 events". **At the cap** (re-verification, 2026-10-14, `--events 1000000`): `ready` in ~50 s (200 pages), `byte_size` 32,638,049 (182.6 MB uncompressed), the downloaded bytes and `Content-Length` equal it, sha256 matches; peak RSS 1.58 GB for the script's one process (seeding, the server, the runner and the download together — not the runner alone).
+- **Existing tests adjusted for the change, not retargeted:** `test/notifications.spec.ts` (its eight `CASES` are the capability-routed sources; the vocabulary pin adds `audit-export`; the owner's routed list is the eight raised there), `test/client-isolation.spec.ts` (102 → 104 policies, the two new ones pinned to the plain tenant policy), `test/architecture.spec.ts` (the 9-3a guard block runs over `audit.ts` and `shared/db/audit-filter.ts`; a new tenancy-ownership block), and the web's `audit-trail.test.tsx` (it scopes to the trail's own request path and table, since the section now also reads `…/audit/exports`).
 
 ## Spec Change Log
 
@@ -364,6 +379,35 @@ Design review (2026-10-13), two lenses: backend (K) and web/API/tests (W). 29 fi
 | 23 | K | PENDING's "9-3 export-completion hook" should close | low | Fixed: docs task |
 | 24 | W | Reason copy missing for two reasons; nested union; open-until-expiry implicit | low | Fixed: one summary DTO; a `Record` over reasons; the decision stated |
 | 25 | W | UX states unspecified (503, role-denied, applied vs draft, empty state, refusals on Download) | low | Fixed |
+
+Code review (2026-10-14), three layers: blind hunter (B), edge-case hunter (E), verification gap (V). 31 findings; the same claim from several layers shares one row.
+
+| # | Layer | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| 1 | V, B, E | Clicking an `audit-export` bell entry while already on `/reports` never reloads "Your exports": Next's `<Link>` navigates with `history.pushState`, which fires no `hashchange`; the test dispatches a synthetic one | medium (verified: `notification-entry.tsx:38` is a `next/link`; Next's app router changes the URL with `pushState`) | Patch: the entry's click requests a reload and scroll explicitly; the test clicks the real link |
+| 2 | V | The export's `to`, `actorUserId` and `targetType` never reach a 202 in a test, so dropping one from the controller's mapping or `toAuditExportDto` fails nothing | medium (verified: every successful `postExport` body in `audit-export.spec.ts`) | Patch: an e2e case posting all filters, asserting the file's rows and the echoed `filters` |
+| 3 | V | The worker's discovery query is tested only on its `queued` arm; deleting the expiry or stale-running arm fails nothing | medium (verified: the only `worker.tick()` test seeds a `queued` row) | Patch: two `tick()` cases (an expired `ready`, a stale `running`) |
+| 4 | B, E | A gzip `error` while `write` waits on `drain` never settles, so the single-flight tick hangs for every tenant; an error before `finish()` is an unhandled rejection | low (verified: `audit-export.csv.ts:101-115`; only reachable on a zlib failure) | Patch: race `drain` with `error`/`close`; attach a no-op catch to `done` |
+| 5 | V | The 30 s per-page `statement_timeout` is never observed | low (verified: no test reads it) | Patch: assert `current_setting('statement_timeout')` inside a page (the `audit-trail.spec.ts:284` technique) |
+| 6 | V | The server's `Content-Disposition` name is pinned by shape only; dropping the IST offset passes | low (verified: the regex at the download test) | Patch: an exact expected name |
+| 7 | B | A `failed` export's download (409) and its expiry (no file) are untested | low | Patch: two assertions |
+| 8 | E | `fullPrecisionInstant` drops the `::text` offset, so a non-UTC session `TimeZone` would shift the snapshot and the cursor | maybe-false — would be medium; the shared primitive predates this story and every cursor in the repo depends on a UTC session; settle by checking the deploy's `TimeZone` | Defer (`deferred-work.md`) |
+| 9 | B | One large export holds the tick for every other tenant | low (measured: 100k in ~1.2 s; 1M in seconds, not the 100 min feared) | Rejected: low, and the fix adds a scheduler |
+| 10 | B | `too-many-events` is found only after reading `maxRows` rows | low (same measurement) | Rejected: low; a pre-count adds a second query per export |
+| 11 | B | An export waits `queued` for as long as any older transaction stays open (a backup, a leaked idle-in-transaction session) | low (verified: `claim` returns `open-transaction` with no deadline; it ends when that transaction ends) | Rejected: the §7d wait is the spec's choice; a deadline adds a failure reason. Noted in PENDING |
+| 12 | B | The discovery query has no partial index; expired rows have no retention | low (exports are rare per tenant) | Rejected: low |
+| 13 | B | No per-tenant cap on stored export bytes | low (one active export per requester, owner-only, audited, 7 days) | Rejected: low |
+| 14 | B | The 1M cap was never measured | low | Rejected as a code defect. The re-verification runs the load script at 1M and records it |
+| 15 | B, E | The load script's `toSeed` can go negative on a tenant with more rows | low | Rejected: low; a guard in a dev script |
+| 16 | B | The 0070 probe does not cover every column of every status arm | low (verified: every status arm has at least one refused probe) | Rejected: low |
+| 17 | B | The runner does not re-check the requester's authority before building | low (the download re-checks `audit.view`; nothing leaks) | Rejected: low |
+| 18 | B | The download is always `Content-Encoding: gzip`, whatever `Accept-Encoding` says | low (the spec's decision; browsers and supertest inflate it) | Rejected: low; the contract says so |
+| 19 | B | The owner-visibility assertion in `notifications.spec.ts` was weakened | false: the vocabulary test pins `[...CASES, 'audit-export']` to the tuple, so `CASES` still covers every capability source | Rejected |
+| 20 | B | Two exports in one IST minute download under the same name | low (the browser de-duplicates) | Rejected |
+| 21 | B | The filename logic exists in both repos | low (by design: CORS hides the header from the web) | Rejected |
+| 22 | B | The review diff's web hunks have mismatched paths | false: an artefact of how the review diff was assembled, not of the change | Rejected |
+| 23 | E | Sub-millisecond `from`/`to` are truncated by `canonicalInstant`, so the export can differ from the read | low (the web sends IST midnights; only a hand-built API call reaches it) | Rejected: low |
+| 24 | E | If `finishFailed` throws, the summary reports the failure while the row stays `running` | low (logged; the reclaim recovers it) | Rejected: low |
 
 ## Design Notes
 

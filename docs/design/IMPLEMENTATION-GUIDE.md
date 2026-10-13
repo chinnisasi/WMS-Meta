@@ -67,7 +67,7 @@ async doThing(command: DoThingCommand, idempotencyKey: string): Promise<Snapshot
 - **Existing action strings are never renamed** — the trail is history. New ones follow `<subject>.<verb>`; the old vocabulary is inconsistent (`channels.disconnected`, `sku.client-corrected`) and stays so (PENDING).
 - **No-op arms write no row, by design.** An arm that commits and stores its key but changes nothing (a re-cancel of a cancelled order, a re-revoke, a client status already in place, a wave re-release or re-cancel, a channel redelivery or dedup loser) is not a state change, so it audits nothing. Each is **named** in the test guard's `AUDIT_NO_OP_ARMS` (below); a new no-op arm must be added there, or the guard fails the suite that drives it.
 - **Scope: keyed commands only.** Unkeyed system writers — sweeps, schedulers, sign-in, badge-in, push registration — are outside the rule (PENDING).
-- **`targetType` is a vocabulary.** `AUDIT_TARGET_TYPES` lists every literal `targetType` written anywhere under `src` (45 at 9-3a) and is published as the audit read's `targetType` query enum; `test/architecture.spec.ts` ("AUDIT_TARGET_TYPES is the audit vocabulary") fails on a writer whose literal is missing and on an entry no writer uses. A writer that picks the type at runtime (`pick.command.ts`, the e-way `audit()` helper) lists its possible values in that test's `DYNAMIC_WRITERS`. Adding a target type is a backend + `openapi.json` + web label change (`wms-fe/src/lib/audit.ts` `AUDIT_TARGET_LABEL` is a `Record` over the generated union, so the web fails to compile until it is named).
+- **`targetType` is a vocabulary.** `AUDIT_TARGET_TYPES` lists every literal `targetType` written anywhere under `src` (45 at 9-3a; 46 since 9-3b's `audit_export`) and is published as the audit read's `targetType` query enum; `test/architecture.spec.ts` ("AUDIT_TARGET_TYPES is the audit vocabulary") fails on a writer whose literal is missing and on an entry no writer uses. A writer that picks the type at runtime (`pick.command.ts`, the e-way `audit()` helper) lists its possible values in that test's `DYNAMIC_WRITERS`. Adding a target type is a backend + `openapi.json` + web label change (`wms-fe/src/lib/audit.ts` `AUDIT_TARGET_LABEL` is a `Record` over the generated union, so the web fails to compile until it is named).
 - **The trail is ordered on `created_at`, never `occurred_at`.** `created_at` is the server's commit stamp; a few writers stamp `occurred_at` from device or command time (putaway, a sync-resolved op, an excursion). Order, page and window on `created_at` (`reporting.md` §The audit trail).
 
 **The guard has two layers.** Neither alone is enough: the dynamic one sees only what the suites drive, the static one sees only file-level references.
@@ -243,6 +243,14 @@ A refusal names the rule and the offender:
 
 **Never interpolate a raw domain value into operator-facing text without converting it at the edge.** Quantities are milli-units internally; printing one directly shows 2000 where the user asked for 2. Caught in review on story 10.2 across six sites.
 
+### A binary success response (9-3b)
+
+A route that answers a FILE (the audit export's `GET …/exports/{id}/file`) is the one place a controller writes the response itself: `@Res() res: Response`, headers set explicitly, then `res.end(buffer)` — the `openapi.controller.ts` precedent. `res.end` (not `res.send`) sets no ETag. Every refusal still **throws** before the first header is written, so it reaches `ProblemDetailsFilter` and stays problem+json. Document it with `@ApiProduces('text/csv')` and a 200 whose content is `{type: string, format: binary}` (the generated client then types it `Blob | File`; the web reads it with `parseAs: 'blob'`). Two traps the export met:
+
+- **Pre-compressed bytes.** Stored gzip bytes go out as-is with `Content-Encoding: gzip` and `Content-Length` = the gzipped size; the browser's fetch inflates them. There is no compression middleware to double-encode.
+- **supertest/superagent always inflate gzip**, even with a custom `.parse()` — a test that must check the bytes on the wire (`Content-Length`, the stored sha256) reads the response with `node:http` directly (`test/audit-export.spec.ts` `download`).
+- **CORS exposes no `Content-Disposition`** (`app.factory.ts` sets no `exposedHeaders`): a cross-origin client cannot read the server's filename, so it builds the name itself (PENDING).
+
 ---
 
 ### Route declaration order
@@ -320,6 +328,8 @@ Every stamp is taken inside a transaction that began no later than the stamp, so
 
 **The price is visibility.** A role sees other users' transactions only with `pg_read_all_stats` (or as the same role); a hidden row reads `<insufficient privilege>`. Detect it and **refuse** — never treat an invisible session as idle. A deploy keeps all app connections on one role or grants `pg_read_all_stats`.
 
+**The probe is shared: `src/shared/db/open-transactions.ts` (`openSessionsInTx`).** Its second user is the async audit export (story 9-3b, `tenancy/audit-export.runner.ts`): `audit_events.created_at` is the writing transaction's start, so an export reading `created_at < snapshot_at` claims its row only once `now() ≥ snapshot_at + 5 s` and no other backend has `xact_start ≤ snapshot_at` (a hidden session → `waiting: 'session-visibility'`, logged). The probe's instant is millisecond-truncated by `Date` — only ever earlier — so compare with `≤` against T and you stay on the safe side. A third user imports it; it never copies the query.
+
 ## 7e. The client portal — AD-4 amended for the fence only (story 21-7)
 
 **The token used to be transport, never authority.** A client-portal user's session token now carries a `client_id` claim (`signTenantSession(…, clientId?)` adds it only when given — an operator token's payload keys stay exactly `sub, tenant_id, iat, exp`, pinned byte for byte in `test/portal.spec.ts`). The claim has **one** use: the fence.
@@ -346,6 +356,8 @@ git status --short                           # must show NO untracked files
 ```
 
 Run the **full** suite, not a scoped subset. `architecture.spec.ts` is what guards module boundaries, and a scoped run skips it.
+
+**A new background worker** follows `PushSenderWorker` (`jobs/jobs.module.ts`): env-gated by its own `*_POLL_MS` through `parsePollMs` (unset/`0` = off; documented in `.env.example` and the README), single-flight `running`, an `unref`'d timer and a shutdown hook, discovery of the tenants with work on the read-only BYPASSRLS `AUTH_DATABASE`, and one owning-module facade call per tenant inside its own `try/catch` — every write stays in the module's tenant transactions. The suites drive the facade method (and `tick()` once, for the plumbing), never timers. 9-3b's `AuditExportWorker` (`AUDIT_EXPORT_POLL_MS` → `TenancyService.runDueAuditExports`) is the latest; a long job also needs a **heartbeat** and a finish **conditional on the claimed attempt**, so a reclaimed runner that wakes up later changes nothing (`tenancy.md` §The async audit export).
 
 ## 9. Design-review checklists (epic-21 retro, action P1)
 

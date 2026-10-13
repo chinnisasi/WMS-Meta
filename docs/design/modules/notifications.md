@@ -1,6 +1,6 @@
 # Notifications module
 
-> The web notification panel (story 9-2, UX-DR12/UX-DR25, FR-22): one bell for what is actionable, routed to who can act, resolving itself when the source clears. The module owns a **projection**: six modules' outbox events raise and resolve entries, a member sees only the sources it holds the capability to act on, and the bell shows a dot (never a count) when an open entry surfaced since the member last opened the panel. Story **9-2b** adds the **mobile pushes**: a second subscriber queues `push_deliveries` rows for the handhelds that can act, and a worker sends them through the `PushGateway` port (§Mobile pushes).
+> The web notification panel (story 9-2, UX-DR12/UX-DR25, FR-22): one bell for what is actionable, routed to who can act, resolving itself when the source clears. The module owns a **projection**: six modules' outbox events raise and resolve entries, a member sees only the sources it holds the capability to act on, and the bell shows a dot (never a count) when an open entry surfaced since the member last opened the panel. Story **9-2b** adds the **mobile pushes**: a second subscriber queues `push_deliveries` rows for the handhelds that can act, and a worker sends them through the `PushGateway` port (§Mobile pushes). Story **9-3b** adds the first **per-user audience**: a finished audit export is addressed to its requester alone (§The per-user audience).
 
 Source: `workspace/core/backend/wms-be/src/modules/notifications/`. Every `file:line` below is relative to `wms-be/`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first; the subscriber follows `invoicing/eway.delivery.ts`.
 
@@ -12,18 +12,20 @@ Source: `workspace/core/backend/wms-be/src/modules/notifications/`. Every `file:
 
 | Table | Holds | Key invariants |
 |---|---|---|
-| `notifications` (`schema.ts:4652`) | One row per source occurrence: `source_type`, `source_id` (the occurrence's id: the pending adjustment, the over-receipt, the episode…), nullable `warehouse_id`, `summary` jsonb (a per-source allowlist; null only on a tombstone), `raised_at` (the raise event's `occurredAt` — orders the list), `surfaced_at` (when the projection wrote the raise — drives the dot), `resolved_at` + `resolution` | **Unique `(tenant_id, source_type, source_id)`** — the idempotency of every subscriber |
+| `notifications` (`schema.ts:4652`) | One row per source occurrence: `source_type`, `source_id` (the occurrence's id: the pending adjustment, the over-receipt, the episode…), nullable `warehouse_id`, `summary` jsonb (a per-source allowlist; null only on a tombstone), `raised_at` (the raise event's `occurredAt` — orders the list), `surfaced_at` (when the projection wrote the raise — drives the dot), `resolved_at` + `resolution`, and (9-3b) nullable `recipient_user_id` — set exactly for a per-user source | **Unique `(tenant_id, source_type, source_id)`** — the idempotency of every subscriber |
 | `notification_reads` (`schema.ts:4682`) | Per member: `last_opened_at` | PK `(tenant_id, user_id)`; no foreign key (house convention — the user is the session user) |
 | `push_deliveries` (`schema.ts:4704`, 9-2b) | The mobile push queue: one row per (relayed outbox event, eligible handheld) — `kind`, `tab`, `warehouse_id` (new-work only), `approval_source` (approval only), `status`, `gateway`, `error_code`, `attempts`, `next_attempt_at` | **PK `(tenant_id, event_id, device_id)`** — the enqueue's idempotency; index `(tenant_id, status, next_attempt_at)` — the claim's read |
 
 Migration `drizzle/0067_notifications.sql` (additive; no data statement, so no pre-flight). drizzle-kit generated the tables, the column and the indexes; everything below the marker is hand-amended:
 
-- **`notifications_source_type_check`** — the eight source types. Pinned against `NOTIFICATION_SOURCE_TYPES` (`notification-sources.ts:23`) by `test/notifications.spec.ts` (IMPLEMENTATION-GUIDE §4's three layers: the TS tuple, the CHECK, the API's discriminated union).
+- **`notifications_source_type_check`** — the eight source types (nine since 0070 — 9-3b's `audit-export`). Pinned against `NOTIFICATION_SOURCE_TYPES` (`notification-sources.ts:23`) by `test/notifications.spec.ts` (IMPLEMENTATION-GUIDE §4's three layers: the TS tuple, the CHECK, the API's discriminated union).
 - **`notifications_shape_check`** (not in the spec — added in the build): (1) a raised row (`summary` set) carries both `raised_at` and `surfaced_at`; (2) a tombstone (`summary` null) is always resolved; (3) `resolved_at` and `resolution` are set together or not at all. This is why `raised_at` and `surfaced_at` are **nullable** columns: a tombstone has neither.
 - **Indexes:** `notifications_tenant_source_unique`; `notifications_tenant_raised_at_id_idx` on `(tenant_id, raised_at DESC NULLS LAST, id DESC NULLS LAST)` — the list's exact order.
 - **RLS:** `notifications_tenant_isolation`, `notification_reads_tenant_isolation` (the plain tenant policy, the 0056 shape — operator-only surfaces, never read by the portal). The `client-isolation` pin moved 99 → 101.
 - **The probe** (the 0064/0066 model): the accepted shapes are inserted and rolled back by a sentinel, so a CHECK that refuses everything cannot pass; each refused shape (unknown source type, raised without either instant, unresolved tombstone, resolved without a resolution, a resolution without `resolved_at`) must be refused **by its named constraint**.
 - Also in 0067: **`integrations.sync_episode_id`** (uuid, nullable) — owned and written by **channels**, not here (see `channels.md` §Sync-health episodes).
+
+Migration `drizzle/0070_async_audit_export.sql` (9-3b, additive) adds `notifications.recipient_user_id` (uuid, nullable), widens **`notifications_source_type_check`** to nine types (drop and re-add, with `audit-export`), and adds **`notifications_recipient_check`**: `(source_type = 'audit-export') = (recipient_user_id IS NOT NULL)` — both directions, so a per-user entry can never lose its recipient and a capability-routed one can never gain one. The probe refuses both directions by name. (0070 also creates tenancy's two export tables.)
 
 Migration `drizzle/0068_mobile_pushes.sql` (9-2b, additive, no data statement). drizzle-kit generated the table, the three `devices` push columns (tenancy's — see `tenancy.md`), `waves.cutoff_risk_alerted_on` (outbound's — see `outbound.md`) and the indexes; hand-amended below the marker:
 
@@ -69,11 +71,27 @@ Each source is one raise event and its resolve event(s). The event type strings 
 | `batch-alert` | `replenishment.batch_alert_raised` | **`replenishment.batch_alert_cleared`** (new) → its `reason`: `resolved` \| `dismissed` | `alertId` | `replenishment.manage` | `{kind, skuId, batchCode, expiryDate \| ageDays}` (the detected field only) | `/replenishment?list=batch-alerts&warehouseId=…&kind=…` (both) |
 | `qc-hold` | `qc_hold.placed` (inbound) | `qc_hold.released` → `released` | `holdId` | `qc.manage` | `{skuId, reason}` | `/inbound` |
 | `channel-sync` | **`channel.sync.degraded`** (channels, new) | **`channel.sync.recovered`** (new) → its `reason`: `recovered` \| `disconnected` | `episodeId` | `channel.manage` | `{connectionId}` | `/channels` |
+| `audit-export` (9-3b) | `audit_export.ready` **or** `audit_export.failed` (tenancy's runner — one raise per export, the finish is conditional) | `audit_export.expired` → `expired` | `exportId` | `audit.view` **and only the requester** (`recipient_user_id = requestedBy`) | `{status: 'ready', rowCount}` \| `{status: 'failed', reason}` | `/reports#audit-exports` (both) |
 
-- **Routing is `SOURCE_AUDIENCE`** (`notification-sources.ts:461`): the capability the source's **resolving command** enforces. The payloads' `notifyRole` hints are ignored — they disagree with who can act (the stock adjustment's hint is `owner`, which is right; the breach's is `ops_manager`, but the owner holds `replenishment.manage` too). With today's matrix: the owner sees all eight; the ops manager six (not `stock-adjustment`, not `count-variance`); operator, accountant and client none.
+- **Routing is `SOURCE_AUDIENCE`** (`notification-sources.ts:461`): the capability the source's **resolving command** enforces. Since 9-3b its value type also admits `{capability, recipient: true}` — §The per-user audience. The payloads' `notifyRole` hints are ignored — they disagree with who can act (the stock adjustment's hint is `owner`, which is right; the breach's is `ops_manager`, but the owner holds `replenishment.manage` too). With today's matrix: the owner sees all eight capability-routed sources (plus, 9-3b, its OWN audit exports); the ops manager six (not `stock-adjustment`, not `count-variance`); operator, accountant and client none.
 - **`SOURCE_RESOLUTIONS`** (`:53`) is each source's closed resolution list. The count-variance and rejected-op lists are **derived** from the shared status tuples minus `open`; the breach, batch-alert and channel lists are pinned to the emitters' runtime tuples (`BREACH_CLEARED_REASONS`, `BATCH_ALERT_CLEARED_REASONS`, `CHANNEL_SYNC_RECOVERED_REASONS`) by a compile-time type equality and a runtime test. A resolve whose resolution is outside its list is **malformed**: logged and acked, nothing written.
 - **Warehouse:** read from the payload where it carries one (`warehouseId` absent or null → null; anything else must be a uuid or the payload is malformed). The rejected-op and channel-sync sources store none.
 - **The summary is built key by key, never spread** from the payload. Raw payloads carry `notifyRole`, tenant ids and actor ids. Text fields are bounded (1–500 chars); numbers must be finite.
+
+---
+
+## The per-user audience (story 9-3b)
+
+Every 9-2 source routes by capability: every member whose role can act sees the entry. A finished **audit export** is different — it is one member's file, and no other owner may see it (nor download it). So `audit-export` is the first source addressed to **one user**:
+
+- **The column.** `notifications.recipient_user_id` (nullable). The 0070 CHECK pairs it with the source type in both directions.
+- **The audience type.** `SOURCE_AUDIENCE['audit-export'] = {capability: 'audit.view', recipient: true}`. `visibleSourceTypes(role)` still answers by capability (the owner holds `audit.view`); the recipient narrowing is in SQL.
+- **The reads.** `list` and `status` add `AND (recipient_user_id IS NULL OR recipient_user_id = $me)` beside the source-type filter (`addressedTo`, `notifications.facade.ts`). Every capability-routed row has a null recipient, so every 9-2 source is unchanged — pinned by `test/notifications.spec.ts` (its eight `CASES` and the owner/ops routing) and by `test/audit-export.spec.ts` (a `qc-hold` entry seen by both owners of a tenant whose export entry only one sees).
+- **Recipient on every path.** `DecodedRaise` and `DecodedResolve` both carry `recipientUserId` (null for every 9-2 source). The resolve's **tombstone insert** writes it, and the raise's insert **and** its `ON CONFLICT … SET` write it, so an `expired` delivered before its `ready` never leaves a recipient-less row another owner could see (pinned: expired → ready, the recipient set throughout, the second owner sees nothing). A decoder that cannot name the recipient (`requestedBy` missing or not a uuid) is malformed — logged and acked, nothing written.
+- **Two raises, one entry.** `SourceSpec.moreRaises` lets a source raise the same entry from more than one event type: `audit_export.ready` (the `raise`) and `audit_export.failed` (`moreRaises`). The runner's conditional finish guarantees at most one of them per export.
+- **Open until expiry** (the spec's decision). Downloading does not resolve the entry; `audit_export.expired` (7 days after the finish) resolves it `expired`. The dot clears on panel open, as for every source.
+- **Never pushed.** The source is not in `push.enqueue.ts`'s subscription list nor `APPROVAL_PUSH_SOURCES`; the happy-path test pins that a ready export queued no `push_deliveries` row.
+- **The reason vocabulary** (`AUDIT_EXPORT_FAILURE_REASONS`) is tenancy's, repeated here as a literal (AD-6) and pinned equal by `test/audit-export.spec.ts`; the three event types are pinned to the runner's constants the same way.
 
 ---
 
@@ -313,7 +331,8 @@ On the three approval raises, two subscribers run: the 9-2 projection and the pu
 | One entry per source occurrence | the unique `(tenant_id, source_type, source_id)`; the upserts' `WHERE` arms |
 | A late raise never reopens a settled entry | the tombstone + `ON CONFLICT … WHERE summary IS NULL` (fill keeps `resolved_at`) |
 | A tombstone is always resolved; a raised row carries both instants; `resolved_at` ⇔ `resolution` | `notifications_shape_check` (probed in 0067) |
-| `source_type` is the eight, in TS and SQL alike | `notifications_source_type_check` + the vocabulary pin in `test/notifications.spec.ts` |
+| `source_type` is the nine (eight 9-2 sources + 9-3b's `audit-export`), in TS and SQL alike | `notifications_source_type_check` + the vocabulary pin in `test/notifications.spec.ts` |
+| A per-user entry is served only to its recipient, and only a per-user source has one (9-3b) | `notifications_recipient_check` (both directions, probed in 0070); `addressedTo` in `list` and `status`; the tombstone and both raise paths write the recipient |
 | A resolution is one its emitter can send, and the panel stores no other | `SOURCE_RESOLUTIONS` derived or pinned; an off-list resolve is malformed and acked |
 | A member sees only what it can act on | `visibleSourceTypes` over `ROLE_CAPABILITIES`, re-read per request in the transaction |
 | The summary never carries a raw payload field outside the allowlist | the per-source decoders build it key by key |
@@ -338,6 +357,7 @@ Produced: none. Consumed (all through the relay and the routed `EVENT_BUS`):
 | `replenishment.batch_alert_raised` / `replenishment.batch_alert_cleared` (9-2) | replenishment | `alertId`, `warehouseId`; raise: `kind`, `skuId`, `batchCode`, `expiryDate` \| `ageDays`; resolve: `reason` |
 | `qc_hold.placed` / `qc_hold.released` | inbound | `holdId`, `warehouseId?`; raise: `skuId`, `reason` |
 | `channel.sync.degraded` (9-2) / `channel.sync.recovered` (9-2) | channels | `episodeId`, `connectionId`; resolve: `reason` |
+| `audit_export.ready` / `audit_export.failed` / `audit_export.expired` (9-3b) | tenancy (the export runner) | `exportId`, `requestedBy` (the recipient); ready: `rowCount`; failed: `reason` |
 
 Every other payload field is ignored. Events committed **before 9-2 deployed** are never re-read (see the gotchas).
 
