@@ -231,6 +231,8 @@ Create and edit run the `createOrder` replay convention exactly: shape checks �
 
 `edit` loads the product `for('update')` and refuses an axes change while any SKU is attached (409 `product-has-variants`, element-wise comparison — a reordered array is a different declaration, not the same one). `name` is always editable.
 
+**9-3a:** create and edit each write one audit row — `product.created` / `product.edited`, target `product`, `reference` = the key (`IMPLEMENTATION-GUIDE.md` §1 step 10).
+
 `list` is a read (open to any tenant member — reads are never gated), keyset-paged on `(created_at, id)`; each item's `skuCount` is stitched from ONE grouped count query over the page's product ids, never an N+1.
 
 ### `KitCommand.create / put / list` (`kit.command.ts`, 11.4)
@@ -249,6 +251,8 @@ Guards, in the order they actually run:
 
 **Replace is DELETE + re-INSERT in one transaction** (`replaceComposition`), inserting in the caller's component order — the snapshot and the event carry the BOM the operator named, and the `(kit, component)` uniqueness backstops the set property. There is no delete command: a composition cannot be removed once created (append-only philosophy).
 
+**9-3a:** `kit.created` (create) and `kit.components_replaced` (put), target `kit` → the kit SKU, `reference` = the key.
+
 `list` is a read, keyset-paged on the kit SKU's `(created_at, id)` — the `sku.list` shape; each kit's components are stitched from ONE joined query over the page's kit ids, never an N+1.
 
 ### `ImportCommand.execute` (`import.command.ts:151`)
@@ -266,7 +270,7 @@ Guards, in the order they actually run:
 7. Per-row validation, then duplicate detection.
 8. Bulk insert of valid rows, chunked at 2,000.
 
-Writes: `skus`, `uom_conversions`, `kit_compositions` (11.6 — the kit resolution pass), `catalog_imports`, `catalog_import_errors`, `idempotency_keys`. Emits `catalog.imported` with the counts, plus one `catalog.kit_created` per composition the kit pass created (11.6 — the same `kitEventPayload` builder KitCommand uses).
+Writes: `skus`, `uom_conversions`, `kit_compositions` (11.6 — the kit resolution pass), `catalog_imports`, `catalog_import_errors`, `audit_events` (**9-3a:** one `catalog_import.executed` row, target `catalog_import` → the import row), `idempotency_keys`. Emits `catalog.imported` with the counts, plus one `catalog.kit_created` per composition the kit pass created (11.6 — the same `kitEventPayload` builder KitCommand uses).
 
 Response = idempotency snapshot = `{importId, mode, committedRows, failedRows, skippedRows, errors[]}`.
 
@@ -284,7 +288,7 @@ The five physical attributes (`weightGrams`/`lengthMm`/`widthMm`/`heightMm`/`cou
 
 The 11.3 block, behind the replay lookup with the SKU row in hand: `productId: null` detaches and clears the values (a `variantValues` key riding a detach is refused — a mistake, not a silent drop) → attach resolves the product (404 `not-found`) and requires the values → `assertVariantValues` (the ONE shared validator, also called by the import parser: exact axis coverage, non-empty ≤ 64-char string values — a missing key, unknown key, blank or non-string value is 400 naming `variantValues` and the axis) → the duplicate-variant check in-transaction (409 `duplicate-variant-values`). A values-only patch re-values against the SKU's **current** attachment.
 
-Emits `catalog.sku_edited` `{skuId, code}`.
+Emits `catalog.sku_edited` `{skuId, code}` and (**9-3a**) the audit row `sku.edited` (target `sku`, `reference` = the key). The owner's client correction keeps its pre-9-3a composite reference (`sku.client-corrected`, below) — one of the named composite references the audit guard matches by containment.
 
 ### `SkuCommand.list` (`sku.command.ts:116`)
 

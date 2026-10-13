@@ -192,6 +192,8 @@ The audit events (tenancy's `audit_events`, the actor = the command's user; **no
 
 `channels.connected` · `channels.credentials_rotated` · `channels.backorder_policy_set` · `channels.buffers_set` (the buffers PUT's Phase-3 key tx — one row per request, no outbox event; the next publish cycle carries the availability delta) · **`channels.mappings_set` (7-2 — full-replacement mappings PUT, one audit row per request)** · `channels.disconnected` · `channels.sync_retried`
 
+**9-3a:** `channels.disconnected` was written with no `reference`; it now carries the idempotency key like the rest, so the audit rule's guard can tie the key to its row (`IMPLEMENTATION-GUIDE.md` §1 step 10).
+
 The webhook ingest's own refusals are **not** audit events — they meter into `integration_calls` (kind `order-ingest`, the refused outcome as the metered status with coarse fingerprinting), and the ingest itself audits nothing: the order it creates carries the standard outbound audit trail as `connected_by`.
 
 ## Gotchas (the real-defect list)

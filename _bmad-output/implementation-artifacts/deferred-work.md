@@ -784,3 +784,59 @@
 - source_spec: none
   summary: 9-3d — the NFR-5 7-year audit retention lifecycle (partitioning of ledger_events/audit_events, archive tiering, restore-verified backups); an infrastructure story after Epic 9.
   evidence: Split from 9-3 and deferred by the human (2026-10-12) — mostly IaC the architecture defers (ARCHITECTURE-SPINE.md:312); no table is partitioned today.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: No transfer web surface — `GET …/inventory/events?transferId=` lists a transfer's legs, but nothing on the web links to it; the web drill has no `transferId` key.
+  evidence: Design (Never list: "no transfer web surface. The `transferId` filter is API-only"). Lands with the `/moves` transfer surface (PENDING movements).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: No deep links from an audit row's target — the Audit section's Target column is the type and an id tail, as plain text.
+  evidence: Design review #5: the list pages a target would land on read the active warehouse, not the target's (`outbound/page.tsx`), so a link would open the wrong list. Each target type needs a route taking its id and warehouse.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: No portal audit read and no `client_id` on `audit_events` — a client cannot see who acted on its goods; the table cannot be client-scoped.
+  evidence: Design (Never list). A portal read needs a `client_id` stamp per row (derived from the target, the 21-2b rule) and both portal layers (IMPLEMENTATION-GUIDE §7e).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: Audit action names are inconsistent — `channels.disconnected`, `sku.client-corrected`, `count.variance.resolved`, the audit `purchase_order.created` beside the outbox `po.created`; a prefix filter must know each spelling.
+  evidence: Design ("existing action strings are not renamed" — the trail is history). An alias table in the read or a documented vocabulary would close it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: No ledger link for a QC hold, a bin merge, an excursion or an auto-applied (immediate) adjustment.
+  evidence: Design review #22. Their events carry `holdId` / `mergeId` / `excursionId` (an immediate adjustment names no document), but no filter key, partial index or web link exists for them.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: Unkeyed system writers are outside the audit rule — sweeps, schedulers, sign-in, badge-in and push registration write no idempotency key, and only some audit.
+  evidence: Design (Boundaries: "the rule covers keyed commands only"). Which system actions an owner must see is undecided; `assertEveryKeyAudited` cannot see them.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: Documents decided before 9-3a have no ledger link — their `ledger_event_id` is null and their events carry no `adjustmentPendingId`/`countVarianceId`.
+  evidence: Design (no backfill; the ledger is append-only). They read `ledgerLinked: false`; their events are found by SKU, bin and time.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: The audit actor filter truncates silently at 1,000 members — `useAuditMembers` uses `fetchAllPages`, which stops after 20 hops and returns what it has.
+  evidence: Code review FE7 (low). Surface a `truncated` flag from the walker, or move the actor filter to a server-side search.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: The putaway EXPLAIN test checks a hand-written query — it proves the 0069 `grnId` index can serve that shape, not that `listEvents` emits the `?` predicate.
+  evidence: Code review BE9 (low). `test/putaway.spec.ts` ("the grnId filter is served by its 0069 partial index"); deleting the `?` from `inventory.facade.ts` would not fail it. Explain the facade's real query (drizzle `toSQL()` or `pg_stat_statements`).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: A closed PO whose receipts were retargeted to its successor shows nothing under "Receipts in the ledger".
+  evidence: Code review FE6 (low). Since 21-9 a receipt against a closed PO with an open successor is booked against the successor's `poId`. 9-3a fixed the empty-state wording only; link the successor, or filter on the PO chain.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: 9-3d retention must keep enrollment mint audit rows — enroll reads its actor from the device's `device.enrollment_code_minted` row and refuses `400 enrollment-code-invalid` without it.
+  evidence: Design (device enroll actor) + code review BE7. Keep the mint row of every not-yet-enrolled device, and of every enrolled device whose `device.enrolled` row is kept.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: The house-wide `Warehouse <short id>` (and the drill banner's `SKU …`/`Order …`) take the UUIDv7 timestamp head, alike across a minute's rows.
+  evidence: Code review FE2 (medium). Fixed on 9-3a's surfaces (`shortIdTail`, the random tail); `warehouseDisplayLabel` and `describeDrill` still use `id.slice(0, 8)` — a house-wide change with fixtures to update.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: The 9-1 ledger `orderId` filter lacks the `reference_doc ? 'orderId'` predicate, so 0039's partial `ledger_events_order_ref_idx` is never used for it.
+  evidence: Found writing 9-3a's filters (which carry the `?`). The order "View ledger" link rides this filter. Add the predicate; consider the 0069 tenant/warehouse-prefixed shape.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
+  summary: 0069's index builds lock `ledger_events` writes for their duration (five partial ledger indexes, plain builds in the migrator's one transaction).
+  evidence: Design review #7; the migration's deploy note (147 rows / 384 kB in dev when written). For a live deploy pre-build them CONCURRENTLY by hand under the same names — the reporting runbook in PENDING.md.

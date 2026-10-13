@@ -144,13 +144,14 @@ One row per (tenant, warehouse) partition, unique.
 | `quantity_milli` | bigint `mode:'number'` | NO | — | `stock_adjustment_pendings_quantity_check` (≠ 0) | **Signed** milli-units — the converted delta at request time; the approval rebuilds base units with `fromMilli` (exact round-trip, AD-9) |
 | `reason_code` | text | NO | — | `stock_adjustment_pendings_reason_code_check` | The closed 8-value vocabulary; a spec test pins the TS list against this CHECK |
 | `note` | text | NO | — | — | The DTO requires a non-empty note on every adjustment |
-| `batch_override_reason` | text | **YES** | — | — | The override draw's mandatory FEFO-override reason — restored into the approved event's referenceDoc so the approved referenceDoc is byte-identical to what the same request would have produced immediately |
+| `batch_override_reason` | text | **YES** | — | — | The override draw's mandatory FEFO-override reason — restored into the approved event's referenceDoc, so the approval records the same reason the immediate path would have (since 9-3a the approved referenceDoc also carries `adjustmentPendingId`, so it is no longer byte-identical — see §Document links) |
 | `batch_id` · `serial_ids` (jsonb) · `handling_unit_ids` (jsonb) | — | **YES** | — | — | The RESOLVED arms frozen at request (batch id resolved then; serial identities ensured then). A rejected pend leaves ensured-but-inert serials — the same currency as any refused adjustment |
 | `occurred_at` | timestamptz | NO | — | — | The requested business time, preserved; the approved events' `occurred_at` is the DECISION time |
 | `requested_by` · `requested_at` | uuid · timestamptz | NO | — | — | |
 | `status` | text | NO | `'pending'` | `stock_adjustment_pendings_status_check` | `pending \| approved \| rejected` — terminal UPDATE is conditional on `status = 'pending'` |
 | `decided_by` · `decided_at` | uuid · timestamptz | **YES** | — | — | Stamped by the winning decision |
 | `threshold_quantity_at_request` | integer | NO | — | `stock_adjustment_pendings_threshold_check` (≥ 0) | The threshold as it stood when the row was raised — the context the queue card shows |
+| `ledger_event_id` (9-3a, 0069) | uuid | **YES** | — | — | The **first** ledger event an approval posted (`applyAdjustmentInTx`'s `firstEventId`), set in the same conditional terminal UPDATE. Null while pending, on a reject, and on every row decided before 9-3a. Exposed only as `ledgerLinked` on the queue's rows |
 
 **Indexes:** `(tenant_id, status, created_at, id)` — the queue read's keyset cursor.
 
@@ -202,7 +203,7 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 
 ### Reads
 
-`listEvents` :292 (keyset, newest first; **9-1** adds the dashboard drill filters — `types` (registry-validated at the DTO via `registeredLedgerEventTypes()`), `from`/`to` on the server-stamped `recorded_at`, `orderId` (`reference_doc ->> 'orderId'`), `shortPick` — served by 0058's `ledger_events (tenant_id, warehouse_id, type, recorded_at)` index, a plain build; see PENDING's reporting runbook), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :430, `exportDigest` :453.
+`listEvents` :292 (keyset, newest first; **9-1** adds the dashboard drill filters — `types` (registry-validated at the DTO via `registeredLedgerEventTypes()`), `from`/`to` on the server-stamped `recorded_at`, `orderId` (`reference_doc ->> 'orderId'`), `shortPick` — served by 0058's `ledger_events (tenant_id, warehouse_id, type, recorded_at)` index, a plain build; see PENDING's reporting runbook; **9-3a** adds the five document filters `grnId`, `poId`, `transferId`, `adjustmentPendingId`, `countVarianceId` — §Document links), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :430, `exportDigest` :453.
 
 In-transaction reads for composing callers: `stockByBinsInTx` :706, `batchOnHandByBinsInTx` :791, `batchOnHandForBinInTx` :827, `binStateEpochInTx` :744, `binStateEpochsInTx` :760, `qcScopeOnHandInTx` :1047, `qcHeldArmsInTx` :1092, `serialsLocatedInBinInTx` :1132, `onHandInBinInTx` :1882 (every (sku, quantity>0) arm in one bin, ordered by SKU — 12-5's excursion sweep), plus the 12-6 by-ref ledger feeds the cold-chain read composes: `ledgerEventsByOrderRefInTx` (pick + dispatch events by `reference_doc->>'orderId'` — carries the `? 'orderId'` qual 0039's partial index needs; see the compliance gotcha), `ledgerEventsByScopeRefsInTx` (complete batch/serial histories by ref lists; empty lists short-circuit), `ledgerExcursionEventsBySkuInTx` (separate because the excursion arm carries no batch/serial).
 
@@ -295,9 +296,10 @@ sequenceDiagram
   else approve
     Cmd->>Cmd: rebuild command from the STORED arms<br/>(override reason restored from the row)
     Cmd->>Cmd: assertAdjustableInTx — the FULL guard set, re-run at decision time
-    Cmd->>PG: applyAdjustmentInTx → ledger events + projections
+    Cmd->>PG: applyAdjustmentInTx → ledger events + projections<br/>(9-3a: referenceDoc.adjustmentPendingId = the pend)
     Note over Cmd,PG: a guard failing NOW (bin retired, on-hand<br/>starved, HU moved) rolls back the whole tx —<br/>the row stays pending; the 4xx names the world
   end
+  Cmd->>PG: conditional UPDATE status + ledger_event_id (9-3a; null on reject)
   Cmd->>PG: audit + idempotency_keys ← LAST
   PG-->>O: 200 decision snapshot
 ```
@@ -379,7 +381,7 @@ The approval-threshold surface: `setAdjustmentPolicy`, `getAdjustmentPolicy`, `l
 - **`setAdjustmentPolicy`** — owner-only (`adjustments.approve`, the same capability the decisions carry). Idempotent under the key; create races the per-tenant unique index (concurrent first-time PUTs: one 200, loser 409 `conflict`); update is `.for('update')` on the current row. DTO caps the threshold at `@Max(2147483647)` so it dies as a 400, not a Postgres range 500. Audits `stock_adjustment.policy_updated`.
 - **`getAdjustmentPolicy`** — a read; `null` (→ controller 404) when no row exists, which is the flow-disabled state.
 - **`listAdjustmentPendings`** — keyset cursor pagination over `(status, created_at, id)`; the cursor encodes the **full-precision** raw instant (see Gotchas). Status filter consumes `ADJUSTMENT_PENDING_STATUSES` from the schema (single-sourced with the DB CHECK).
-- **`decideAdjustment`** — copies `decideOverReceipt`'s order: authority (`adjustments.approve`, **owner-only** — 28/28 capability pin) BEFORE replay; idempotency lookup replays the stored decision; then the pend row `.for('update')` (404 unknown, 409 already-decided); approve rebuilds the command from the stored arms — `approvedOverrideReason` restored from `batch_override_reason` so the approved referenceDoc is byte-identical to the immediate path's — re-runs `assertAdjustableInTx` (arm-required parity checks included, so a SKU flagged tracked after the raise refuses here), applies through `applyAdjustmentInTx`, and stamps audit + outbox with the decision time; the terminal UPDATE is conditional on `status = 'pending'`, so a concurrent double-decide is one 409; the idempotency key is written LAST. Reject flips status with no stock write. Both arms answer 200 with an `AdjustmentDecisionSnapshot` (reject: `events: []`).
+- **`decideAdjustment`** — copies `decideOverReceipt`'s order: authority (`adjustments.approve`, **owner-only** — 28/28 capability pin) BEFORE replay; idempotency lookup replays the stored decision; then the pend row `.for('update')` (404 unknown, 409 already-decided); approve rebuilds the command from the stored arms — `approvedOverrideReason` restored from `batch_override_reason`, and (9-3a) `adjustmentPendingId` = the row's id, so the approved events name their pend and the referenceDoc is **no longer byte-identical** to the immediate path's (deliberately; `fingerprint` is unaffected) — re-runs `assertAdjustableInTx` (arm-required parity checks included, so a SKU flagged tracked after the raise refuses here), applies through `applyAdjustmentInTx`, and stamps audit + outbox with the decision time; the terminal UPDATE is conditional on `status = 'pending'` and (9-3a) records `ledger_event_id` = the first posted event (null on reject), so a concurrent double-decide is one 409; the idempotency key is written LAST. Reject flips status with no stock write. Both arms answer 200 with an `AdjustmentDecisionSnapshot` (reject: `events: []`).
 
 ---
 
@@ -462,7 +464,7 @@ Anchoring has **no HTTP route and no background job**. Today it is driven only b
 | On-hand never goes negative | Command guard `ledger.service.ts:653` / `:725` (422 naming the bin or batch) + DB CHECK (`drizzle/0006_curvy_nehzno.sql:112`, `drizzle/0010_sharp_hardball.sql:78`) |
 | A serial lives in exactly one bin | `assertSerialArmLegal` (`ledger.service.ts:381`) under the tenant-wide serial lock — **not** a catalog index; AD-6 puts the rule here |
 | Event types exist only by registration | `ledger-registry.ts:189` (duplicate registration throws) + the gate at `ledger.service.ts:452-466` |
-| Grammar evolution is additive only | Union arms are added, never reshaped (`ledger-registry.ts:18-167`); `allowsBatchArm`/`allowsSerialArm` gate NEW writes only, so old events with null arms verify identically |
+| Grammar evolution is additive only | Union arms are added, never reshaped (`ledger-registry.ts:18-167`); `allowsBatchArm`/`allowsSerialArm` gate NEW writes only, so old events with null arms verify identically. A new optional referenceDoc key is **omitted when absent, never `null`** (9-3a's `adjustmentPendingId`/`countVarianceId`), so every older event keeps its canonical bytes — pinned in `test/adjustment-approval.spec.ts` |
 | Exactly one terminal transition per reservation wins (AD-12) | Conditional `UPDATE … WHERE state = <one state>`; rowcount is the proof (`reservation.service.ts:677`, `:1692`) |
 | The journal is truth; the mirror repairs toward Postgres, never the reverse | `rebuildCounters` (`reservation.service.ts:901`), `parityPass` (`:1145`), the grant/ATP heal arms (`:1263`, `:857`) |
 | Never oversell | Ceiling + Lua script (grant-vs-grant) + A2 locked re-validation (grant-vs-stock, `revalidatedCeiling`, `reservation.service.ts:1535`); every failure mode fails closed |
@@ -584,6 +586,30 @@ These have all caused, or were caught one review short of causing, a real defect
 18. **The write-side refusals sit BELOW the threshold branch.** `assertAdjustableInTx` checks identity, arms and shape — but the ledger fold's `insufficient-on-hand`, serial-elsewhere and the HU write-off 409 all run in `applyAdjustmentInTx`, below the branch. So an over-threshold draw beyond on-hand **pends (202)** where the same at-threshold request gets the fold's 422 — pinned by a boundary test. The decision re-runs the write-side refusals; their rollback leaves the row pending (rollback-leaves-pending). Comments or specs claiming "only an adjustment that would have applied can pend" are wrong about this half — only the command-tier guards answer before the pend. `inventory.command.ts` threshold-branch comment.
 
 19. **Keyset cursors encode the FULL-precision instant, not `canonicalInstant`'s.** Postgres holds timestamptz to microseconds while `canonicalInstant` truncates to ms via JS `Date` — and rows appended in ONE transaction share one `now()` to the microsecond (a multi-serial adjustment appends its per-serial events in a single transaction), so a ms-truncated cursor's strict `<` predicate skipped the whole tail of the tie group on the next page. The ledger-timeline and pending-queue reads select the raw `::text` instant in a second pass and encode cursors from `fullPrecisionInstant` (`src/shared/primitives/time.ts`); responses still surface the ms-canonical instant. A regression back to canonical cursors is silent until a tie group spans a page boundary.
+
+---
+
+## Document links — the ledger filtered by its document (story 9-3a, FR-28)
+
+FR-28's second half: **every ledger event is reachable from its reference document in two navigations or fewer.** The document's screen links to `GET …/warehouses/{w}/inventory/events` filtered to that document; the ledger list is the second navigation.
+
+**The five document filters** (`LedgerEventsQuery`, `inventory.dto.ts`; `LEDGER_DOCUMENT_KEYS`, `inventory.facade.ts:188`). Each is a uuid (`@IsUUID`, else `400 validation-failed`), matched as text against the lowercased id, AND-ed with every other filter, on the path's warehouse:
+
+| Key | Matches | Note |
+|---|---|---|
+| `grnId` | a GRN's `grn.received` **and** its `putaway.placed` events | putaway's referenceDoc is keyed `grnId` |
+| `poId` | `grn.received` events naming the PO — **receipts only** | a putaway names its GRN, not the PO, so the web's PO link says "Receipts in the ledger". A PO whose receipts were retargeted to a successor PO (21-9) shows nothing here (PENDING) |
+| `transferId` | both legs' events of the transfer on this warehouse's chain | **API-only** — no web transfer surface exists (PENDING) |
+| `adjustmentPendingId` | the events an approval posted for that pend | approvals from 9-3a on |
+| `countVarianceId` | the one `stock.adjusted` correction an approve-adjust resolution posted | resolutions from 9-3a on |
+
+**Each query carries the `?` predicate.** The SQL is `(reference_doc ? '<key>' AND reference_doc ->> '<key>' = lower($id))`. Each key has its own **partial** btree from migration 0069 — `ledger_events_{grn,po,transfer,adjustment_pending,count_variance}_ref_idx ON ledger_events (tenant_id, warehouse_id, (reference_doc ->> '<key>')) WHERE reference_doc ? '<key>'` — and the planner uses a partial index only when the query states its predicate; an `->>` equality does not imply `?` to it. The keys are a closed list of literals inlined with `sql.raw`, so nothing else may ever enter `LEDGER_DOCUMENT_KEYS`. The five indexes are hand-amended into 0069 below drizzle's output (the 0039 precedent — drizzle-kit cannot model them, so they are not in `schema.ts` or the snapshot and `db:generate` reports no change); they are plain builds (`CREATE INDEX IF NOT EXISTS`), so 0069 locks `ledger_events` writes while they build — the deploy note and PENDING's runbook apply. **The 9-1 `orderId` filter carries no `?` predicate**, so 0039's partial `ledger_events_order_ref_idx` does not serve it (PENDING); the order's "View ledger" link rides that filter.
+
+**Two new referenceDoc keys, on the `manual-adjustment` arm only** (`ledger-registry.ts`): `adjustmentPendingId?` — set only by `AdjustmentApprovalCommand.decideAdjustment`'s approve arm — and `countVarianceId?` — set only by `CountService.resolveCountVariance`'s approve-adjust arm (both ride `AdjustStockCommand`; undefined on the HTTP path). **Omitted when absent, never `null`**, so an immediate adjustment and every pre-9-3a event hash exactly as before. Only the TypeScript union and the `LedgerReferenceDocDto` change; there are no per-key validators. **The byte-identical invariant is retired:** 5-2 kept the approved referenceDoc byte-identical to the immediate path's; since 9-3a an approval adds `adjustmentPendingId` (and a count resolution `countVarianceId`) on purpose, so the document can link to its events. The override reason is still restored; `fingerprint` is unaffected. The comments at `adjustment-approval.command.ts` (approve arm) and `inventory.command.ts` (the referenceDoc build) say so.
+
+**How a document knows it has events.** Probing the ledger from the queue would guess; instead the decision records the event it posted. `stock_adjustment_pendings.ledger_event_id` (the first event an approval posted) and `count_variances.ledger_event_id` (the correction an `adjusted` resolution posted) are set in the same transaction as the event; the list rows expose **`ledgerLinked: boolean`** — true only when the column is set. Rejected adjustments, recounted variances and anything decided before 9-3a read `false` and show no link, never a wrong list. The adjustment queue's row type is a subclass, `AdjustmentPendingEntryDto extends AdjustmentPendingDto` — not a new field on `AdjustmentPendingDto`, which is also the 202's stored idempotency snapshot, so a pre-9-3a key replays unchanged. GRNs, POs and orders need no column: their events always carry the key.
+
+**No link** for a QC hold, a bin merge, an excursion or an auto-applied (immediate) adjustment — no document surface filters on their keys yet (PENDING).
 
 ---
 

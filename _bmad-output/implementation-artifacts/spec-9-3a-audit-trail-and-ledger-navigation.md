@@ -2,7 +2,7 @@
 title: 'Audit trail — every state change attributable and filterable by the Owner, and every ledger event two navigations from its document'
 type: 'feature'
 created: '2026-10-12'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -224,34 +224,34 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] **BE audit writes:**
+- [x] **BE audit writes:**
   - `SYSTEM_ACTOR_ID` moves to `shared/`;
   - every `AUDIT_NEW_ACTIONS` row is written;
   - `AUDIT_TARGET_TYPES` and its pin;
   - both guard layers;
   - per-method assertions.
-- [ ] **BE read:**
+- [x] **BE read:**
   - `audit.view`;
   - the facade guard;
   - the audit read model;
   - `GET …/reporting/audit` with DTOs and the enum;
   - the third-exception guard;
   - `openapi.json`.
-- [ ] **BE ledger:**
+- [x] **BE ledger:**
   - reference-doc keys, and the omit-not-null pin;
   - the `ledger_event_id` columns, set on approve and adjust, plus `ledgerLinked` in both DTOs;
   - the five filters;
   - migration 0069, with journal, snapshot and the deploy note;
   - updated comments.
-- [ ] **BE tests:** every backend matrix row.
-- [ ] **FE:**
+- [x] **BE tests:** every backend matrix row.
+- [x] **FE:**
   - `api:generate`;
   - the mirror;
   - the Audit section with hook, filters, `auditReason` and cursor scoping;
   - the document drill (`doc`/`label`), the strip, and the wording;
   - the five links;
   - tests for every FE matrix row.
-- [ ] **Meta docs:**
+- [x] **Meta docs:**
   - IMPLEMENTATION-GUIDE §7a (the third exception) and step 10 (the audit rule and its guard);
   - `reporting.md`, `inventory.md`, `movements.md`, `API-SURFACE.md`, `frontend/SYSTEM-DESIGN.md`, both repo contracts;
   - PENDING:
@@ -270,6 +270,32 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 - Given the full BE and FE suites, lint, typecheck, build and the capability-mirror check, when run, then they pass.
 
 ## Implementation Notes
+
+Built on wms-be `feat/9-3a-audit-trail-and-ledger-navigation` (`bcca8ac..ec05698`: `22c8c30` the story, `ec05698` the code-review patch) and wms-fe on the same branch (`1273ed0..7b59270`: `c1c0911`, `7b59270`). Design as built: `docs/design/modules/reporting.md` §The audit trail, `inventory.md` §Document links, `IMPLEMENTATION-GUIDE.md` §1 (step 10 — the audit rule and its guard) and §7a (the third exception), `frontend/IMPLEMENTATION-GUIDE.md` §1.9–§1.11.
+
+**As-built deviations from the spec** (the code is the reference):
+- **The shared constant is `SYSTEM_ACTOR_ID`; the old name is the re-export.** The spec said "`SYSTEM_ACTOR_ID` moves to `shared/`", but the constant was `REPLENISHMENT_SCHEDULER_ACTOR_ID` in `replenishment.command.ts`. It now lives in `src/shared/primitives/audit.ts` as `SYSTEM_ACTOR_ID` (value unchanged) and `REPLENISHMENT_SCHEDULER_ACTOR_ID = SYSTEM_ACTOR_ID` is kept, so the sweep, the expiry scan and their tests are unchanged.
+- **`systemActorId` in the response.** `AuditTrailResponse` carries `systemActorId`, published as a one-value enum, beside `items`/`nextCursor`. The web's "System" filter sends `SYSTEM_ACTOR_ID` typed as that generated literal (`lib/audit.ts`) — a constant, so the filter works before any read succeeds (code review FE1), and a backend change fails the web's compile. The spec's "the web never hard-codes it" holds in that form: the value is checked against the contract at build time.
+- **Composite references, matched by containment only for named actions.** The spec's guard matched `(tenant_id, reference)` by equality, which three pre-9-3a writers could not meet: `sku.client-corrected` (`from <a> → to <b> (key K)`), the client-invoice transitions with a note (`note: … (key K)`), and an ingested order's `order.created`, whose reference was `{"channel": {…}}` with no key at all. The ingested reference **gains a `key` sibling** (`{"channel": {…}, "key": K}`, additive), and `COMPOSITE_REFERENCE_ACTIONS` (`sku.client-corrected`, `order.created`, `client_invoice.disputed|settled|voided`) are the only rows matched by `strpos`; every other row must equal the key (code review BE5). **`channels.disconnected` was written with no `reference`**; it now carries the key. No action string was renamed.
+- **`AUDIT_NO_OP_ARMS`.** The spec's only exemption was named endpoints (`selfTestEcho`, kept as `AUDIT_EXEMPT_ENDPOINTS`, recognised by snapshot shape). Arms that store a key and change nothing write no audit row by design, so the guard names them (the story shipped the first two; code review BE2 added the other five): `clients.updateStatus:same-status`, `orders.createOrder:channel-redelivery`, `orders.createOrder:dedup-loser`, `orders.cancelOrder:already-cancelled`, **`waves.release:already-released`, `waves.cancel:already-cancelled`** (the wave re-release / re-cancel arms and their racing losers, found by code review BE2), `devices.revoke:already-revoked`. A declared arm is checked against the stored snapshot's shape, so a declaration over another command's key fails (BE3, BE4).
+- **Test helpers the spec did not name** (`test/support/audit-guard.ts`): `noOpIdempotencyKey(tenantId, key, arm)`, `seededIdempotencyKey(tenantId, key)` (keys a suite inserts by hand — a legacy fingerprint, a foreign tenant's row, a held race probe), `declareChannelNoOps(tenantId, orderId, arm)` (a channel ingest mints its key inside the command, so a webhook test declares the order's unaudited keys after a known redelivery and asserts the count), and `expectAuditRow({…})` (the per-action pin: one row, the action, target and actor, `occurred_at` within a minute of `created_at`; called again after a replay). Every exemption is keyed `(tenant, key)` (BE4). `assertEveryKeyAudited` takes a database URL, not a handle.
+- **Pin placement.** The dynamic guard runs inside `SuiteDatabase.drop()` (`test/support/suite-db.ts`) — every e2e suite's teardown — so no suite opts in. `test/architecture.spec.ts` holds four 9-3a blocks (the third exception; the static scan; `AUDIT_TARGET_TYPES`, plus a check that every `AUDIT_NEW_ACTIONS` entry has an `expectAuditRow` call; the cleanup-delete pin) and one portal-block test. The omit-not-null pin is in `test/adjustment-approval.spec.ts` (the immediate path's hash recomputes from the three pre-9-3a keys), not `test/ledger.spec.ts` as an early comment said (BE8).
+- **The cleanup deletes are gone.** Spec files from the shared-database era deleted `idempotency_keys` and `audit_events` wholesale in their `afterAll` cleanup, which runs before `drop()` — the guard saw empty tables and was blind in ~25 suites (code review BE1, high). The deletes are removed from all 46 spec files that had them (the suite database is dropped whole) and `test/architecture.spec.ts` refuses any spec that deletes from either table, or lists either in a cleanup table list, except one named row (`… and key = …` / `… where id = …`).
+- **Capability pins 41 → 42.** `audit.view` is the 42nd capability (`test/users.spec.ts`); the web mirror adds it to `CAPABILITIES` and `OWNER_ONLY_CAPABILITIES` only — `OPS_EXCLUDED_CAPABILITIES` spreads `OWNER_ONLY_CAPABILITIES`, so it is excluded there without a second entry.
+- **The `?` predicate.** Each document filter is `(reference_doc ? '<key>' AND reference_doc ->> '<key>' = lower($id))`, not the equality alone: the 0069 indexes are partial, and the planner uses a partial index only when the query states its predicate. The 9-1 `orderId` filter (the spec's model) lacks it, so 0039's index is not used for it — PENDING.
+- **`AdjustmentPendingEntryDto`.** `ledgerLinked` is not a field on `AdjustmentPendingDto`, which is also the 202's stored idempotency snapshot — a pre-9-3a key would replay without it. The queue's items are `AdjustmentPendingEntryDto extends AdjustmentPendingDto`; the 202 and the decision snapshot are unchanged. The count resolve's answer does carry `ledgerLinked`; a resolve snapshot stored before 9-3a is re-served with `ledgerLinked ?? false` (`movements.controller.ts`).
+- **A missing mint row answers 400, not 500.** `device.enrolled` reads its actor from the device's `device.enrollment_code_minted` row. The story's first cut threw an untyped `Error` when none existed; enroll now refuses `400 enrollment-code-invalid` — the one indistinguishable 400 — and the rollback un-burns the code (code review BE7). Unreachable through the API; pinned by deleting the row by hand.
+- **Id tails.** The spec said "a short id" for an unknown actor and the target. A UUIDv7's first 8 characters are its timestamp, alike across a day's rows, so 9-3a's surfaces show the random **tail** (`shortIdTail` = the last 8 characters): the Who and Target columns and a document drill with no `label` (code review FE2). The older head-based `Warehouse <short id>` is unchanged — PENDING.
+- **Smaller gaps the spec left, filled:**
+  - the static scan's detector is `.insert(idempotencyKeys` (40 files matched; the test asserts ≥ 35 plus invoicing's `command.ts` and billing's `client-invoices.ts` by name);
+  - the third-exception guard also bans `getMemberRoleIn`, `assertPermission` and `users` from `audit.ts`, and pins the facade's guard line verbatim;
+  - `auditRead` is a plain facade field so the 503 test forces a timeout without a second code path; the test also pins the armed 5 s `statement_timeout` (BE6);
+  - the five ledger indexes are hand-amended into 0069 as `CREATE INDEX IF NOT EXISTS` (the 0039 precedent — not in `schema.ts` or the snapshot), so a hand-run `CONCURRENTLY` pre-build is skipped at deploy; the deploy note records 147 rows / 384 kB in dev;
+  - the PO and GRN links sit in a new "Ledger" column of their tables; the order link's label is the order's `externalEventId`, else its id; a display `label` is capped at 120 characters;
+  - the hook's `reload()` resets the cursor and bumps an `epoch` that keys the table, so Retry reads page 1 with an empty Prev/Next stack (FE3); the filter key includes `targetId` (FE4);
+  - the PO drill's empty state reads "No receipt events for PO … yet." (FE6).
+
+Deploy note: 0069's index builds lock `ledger_events` (and `audit_events`) writes for their duration — milliseconds at today's size; for a large live ledger, pre-build the five ledger indexes `CONCURRENTLY` (PENDING reporting runbook).
 
 ## Spec Change Log
 
@@ -302,6 +328,28 @@ Design review (2026-10-12), two lenses: backend (K) and web/API/tests (W).
 | 21 | K, W | "System" is hard-coded on the web; PO link scope | low | Fixed: `actorKind`; "Receipts" |
 | 22 | W | qc-hold, bin-merge, excursion and auto adjustments have no link | low | → PENDING |
 | 23 | K | Verified: registration under the new tenant scope; the import row exists; `reference_doc` is jsonb; putaway keyed `grnId`; lowercase ids; owner holds every capability; portal emails resolvable | — | No change |
+
+
+**Code review (2026-10-13)**, two lenses: backend (BE) and web (FE); 16 findings.
+
+| # | Lens | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| BE1 | BE | `assertEveryKeyAudited` was blind in ~25 suites: their `afterAll` cleanup deleted `idempotency_keys` and `audit_events` before `drop()` ran the check | high | Fixed: the cleanup deletes are removed (the suite DB is dropped whole); an architecture pin forbids deleting either table except one named row |
+| BE2 | BE | No-op arms that store a key and change nothing were missing from `AUDIT_NO_OP_ARMS` (it named two): the cancel of a cancelled order and its racing loser, the dedup loser, a device re-revoke, a wave re-release / re-cancel | medium | Fixed: five arms added and declared where the suites drive them |
+| BE3 | BE | Unregistered exemptions: keys some suites seed by hand (sku-attributes, catch-weight) and channel redelivery keys the ingest mints itself were never declared — invisible only because of BE1 | medium | Fixed: the seeded keys registered with `seededIdempotencyKey`; ingest-minted keys declared through the new `declareChannelNoOps` |
+| BE4 | BE | Exemptions were not tenant-scoped, and a declared arm was never checked against what the key stored | low | Fixed: keyed `(tenant, key)`; the teardown checks the stored snapshot has the declared arm's shape |
+| BE5 | BE | The guard matched a reference by containment, so any row quoting a key satisfied it | low | Fixed: equality; containment only for the named `COMPOSITE_REFERENCE_ACTIONS` |
+| BE6 | BE | The 503 test did not pin the deadline it relied on | low | Fixed: it asserts the armed 5 s `statement_timeout` |
+| BE7 | BE | A device with no mint audit row made enroll throw an untyped 500 | low | Fixed: `400 enrollment-code-invalid`, rolled back (the code stays redeemable); tested |
+| BE8 | BE | Stale comments (the omit-not-null pin's location, the teardown claim, "reads stay open" in `permissions.ts`) | low | Fixed |
+| BE9 | BE | The putaway EXPLAIN test explains a hand-written query, not the facade's | low | Deferred: PENDING inventory, deferred-work |
+| FE1 | FE | The "System" actor filter was unusable until a page had loaded (it read `systemActorId` from the response) | medium | Fixed: `SYSTEM_ACTOR_ID` typed as the generated `systemActorId` literal |
+| FE2 | FE | Short ids took the UUIDv7 head — its timestamp, alike across a day's rows; the order's "View ledger" had no real label | medium | Fixed on 9-3a's surfaces (`shortIdTail`), and the order link labelled by its channel ref, else its id; the house-wide `Warehouse <short id>` convention deferred: PENDING wms-fe, deferred-work |
+| FE3 | FE | Retry re-read the same cursor while the table kept its Prev/Next stack, so the two disagreed | low | Fixed: `reload()` resets the cursor and bumps an `epoch` that keys the table |
+| FE4 | FE | The filter key omitted `targetId`, so a change to it kept the old cursor | low | Fixed |
+| FE5 | FE | The PO drill test looped over its filtered reads, passing vacuously when they were empty | low | Fixed: it asserts the reads are non-empty |
+| FE6 | FE | The PO drill's empty state did not say it lists receipts only | low | Fixed: "No receipt events for PO … yet."; a PO whose receipts were retargeted to its successor deferred: PENDING inbound, deferred-work |
+| FE7 | FE | The members list behind the actor filter truncates silently at 1,000 | low | Deferred: PENDING wms-fe, deferred-work |
 
 ## Design Notes
 
