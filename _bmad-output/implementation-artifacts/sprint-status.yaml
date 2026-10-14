@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-14-2026 22:40
+last_updated: 10-14-2026 23:51
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -388,7 +388,7 @@ development_status:
   # 9-3d the 7-year retention lifecycle, deferred as an infrastructure story.
   9-3a-audit-trail-and-ledger-navigation: done
   9-3b-async-audit-export: done
-  9-3c-ledger-anchoring-and-chain-alerts: in-progress
+  9-3c-ledger-anchoring-and-chain-alerts: done
   9-3d-audit-retention-lifecycle: backlog
   epic-9-retrospective: optional
 action_items:
