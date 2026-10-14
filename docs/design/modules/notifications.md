@@ -1,6 +1,6 @@
 # Notifications module
 
-> The web notification panel (story 9-2, UX-DR12/UX-DR25, FR-22): one bell for what is actionable, routed to who can act, resolving itself when the source clears. The module owns a **projection**: six modules' outbox events raise and resolve entries, a member sees only the sources it holds the capability to act on, and the bell shows a dot (never a count) when an open entry surfaced since the member last opened the panel. Story **9-2b** adds the **mobile pushes**: a second subscriber queues `push_deliveries` rows for the handhelds that can act, and a worker sends them through the `PushGateway` port (§Mobile pushes). Story **9-3b** adds the first **per-user audience**: a finished audit export is addressed to its requester alone (§The per-user audience).
+> The web notification panel (story 9-2, UX-DR12/UX-DR25, FR-22): one bell for what is actionable, routed to who can act, resolving itself when the source clears. The module owns a **projection**: six modules' outbox events raise and resolve entries, a member sees only the sources it holds the capability to act on, and the bell shows a dot (never a count) when an open entry surfaced since the member last opened the panel. Story **9-2b** adds the **mobile pushes**: a second subscriber queues `push_deliveries` rows for the handhelds that can act, and a worker sends them through the `PushGateway` port (§Mobile pushes). Story **9-3b** adds the first **per-user audience**: a finished audit export is addressed to its requester alone (§The per-user audience). Story **9-3c** adds the tenth source, `ledger-chain-break` — the owner's severity-1 ledger alert (§The ledger chain break).
 
 Source: `workspace/core/backend/wms-be/src/modules/notifications/`. Every `file:line` below is relative to `wms-be/`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first; the subscriber follows `invoicing/eway.delivery.ts`.
 
@@ -18,7 +18,7 @@ Source: `workspace/core/backend/wms-be/src/modules/notifications/`. Every `file:
 
 Migration `drizzle/0067_notifications.sql` (additive; no data statement, so no pre-flight). drizzle-kit generated the tables, the column and the indexes; everything below the marker is hand-amended:
 
-- **`notifications_source_type_check`** — the eight source types (nine since 0070 — 9-3b's `audit-export`). Pinned against `NOTIFICATION_SOURCE_TYPES` (`notification-sources.ts:23`) by `test/notifications.spec.ts` (IMPLEMENTATION-GUIDE §4's three layers: the TS tuple, the CHECK, the API's discriminated union).
+- **`notifications_source_type_check`** — the eight source types (nine since 0070 — 9-3b's `audit-export`; ten since 0071 — 9-3c's `ledger-chain-break`, widened by drop and re-add in the inventory migration). Pinned against `NOTIFICATION_SOURCE_TYPES` (`notification-sources.ts:23`) by `test/notifications.spec.ts` (IMPLEMENTATION-GUIDE §4's three layers: the TS tuple, the CHECK, the API's discriminated union).
 - **`notifications_shape_check`** (not in the spec — added in the build): (1) a raised row (`summary` set) carries both `raised_at` and `surfaced_at`; (2) a tombstone (`summary` null) is always resolved; (3) `resolved_at` and `resolution` are set together or not at all. This is why `raised_at` and `surfaced_at` are **nullable** columns: a tombstone has neither.
 - **Indexes:** `notifications_tenant_source_unique`; `notifications_tenant_raised_at_id_idx` on `(tenant_id, raised_at DESC NULLS LAST, id DESC NULLS LAST)` — the list's exact order.
 - **RLS:** `notifications_tenant_isolation`, `notification_reads_tenant_isolation` (the plain tenant policy, the 0056 shape — operator-only surfaces, never read by the portal). The `client-isolation` pin moved 99 → 101.
@@ -72,8 +72,9 @@ Each source is one raise event and its resolve event(s). The event type strings 
 | `qc-hold` | `qc_hold.placed` (inbound) | `qc_hold.released` → `released` | `holdId` | `qc.manage` | `{skuId, reason}` | `/inbound` |
 | `channel-sync` | **`channel.sync.degraded`** (channels, new) | **`channel.sync.recovered`** (new) → its `reason`: `recovered` \| `disconnected` | `episodeId` | `channel.manage` | `{connectionId}` | `/channels` |
 | `audit-export` (9-3b) | `audit_export.ready` **or** `audit_export.failed` (tenancy's runner — one raise per export, the finish is conditional) | `audit_export.expired` → `expired` | `exportId` | `audit.view` **and only the requester** (`recipient_user_id = requestedBy`) | `{status: 'ready', rowCount}` \| `{status: 'failed', reason}` | `/reports#audit-exports` (both) |
+| `ledger-chain-break` (9-3c) | `ledger.chain_broken` (inventory's ONE break recorder — once per break, never per check run) | `ledger.chain_break_acknowledged` → `acknowledged` | `breakId` | `ledger.acknowledge` (owner-only) | `{kind, firstSeq, reason, detectedBy}` | `/reports#ledger-integrity` (both) |
 
-- **Routing is `SOURCE_AUDIENCE`** (`notification-sources.ts:461`): the capability the source's **resolving command** enforces. Since 9-3b its value type also admits `{capability, recipient: true}` — §The per-user audience. The payloads' `notifyRole` hints are ignored — they disagree with who can act (the stock adjustment's hint is `owner`, which is right; the breach's is `ops_manager`, but the owner holds `replenishment.manage` too). With today's matrix: the owner sees all eight capability-routed sources (plus, 9-3b, its OWN audit exports); the ops manager six (not `stock-adjustment`, not `count-variance`); operator, accountant and client none.
+- **Routing is `SOURCE_AUDIENCE`** (`notification-sources.ts:461`): the capability the source's **resolving command** enforces. Since 9-3b its value type also admits `{capability, recipient: true}` — §The per-user audience. The payloads' `notifyRole` hints are ignored — they disagree with who can act (the stock adjustment's hint is `owner`, which is right; the breach's is `ops_manager`, but the owner holds `replenishment.manage` too). With today's matrix: the owner sees all nine capability-routed sources (9-3c's `ledger-chain-break` included — plus, 9-3b, its OWN audit exports); the ops manager six (not `stock-adjustment`, not `count-variance`); operator, accountant and client none.
 - **`SOURCE_RESOLUTIONS`** (`:53`) is each source's closed resolution list. The count-variance and rejected-op lists are **derived** from the shared status tuples minus `open`; the breach, batch-alert and channel lists are pinned to the emitters' runtime tuples (`BREACH_CLEARED_REASONS`, `BATCH_ALERT_CLEARED_REASONS`, `CHANNEL_SYNC_RECOVERED_REASONS`) by a compile-time type equality and a runtime test. A resolve whose resolution is outside its list is **malformed**: logged and acked, nothing written.
 - **Warehouse:** read from the payload where it carries one (`warehouseId` absent or null → null; anything else must be a uuid or the payload is malformed). The rejected-op and channel-sync sources store none.
 - **The summary is built key by key, never spread** from the payload. Raw payloads carry `notifyRole`, tenant ids and actor ids. Text fields are bounded (1–500 chars); numbers must be finite.
@@ -92,6 +93,17 @@ Every 9-2 source routes by capability: every member whose role can act sees the 
 - **Open until expiry** (the spec's decision). Downloading does not resolve the entry; `audit_export.expired` (7 days after the finish) resolves it `expired`. The dot clears on panel open, as for every source.
 - **Never pushed.** The source is not in `push.enqueue.ts`'s subscription list nor `APPROVAL_PUSH_SOURCES`; the happy-path test pins that a ready export queued no `push_deliveries` row.
 - **The reason vocabulary** (`AUDIT_EXPORT_FAILURE_REASONS`) is tenancy's, repeated here as a literal (AD-6) and pinned equal by `test/audit-export.spec.ts`; the three event types are pinned to the runner's constants the same way.
+
+---
+
+## The ledger chain break (story 9-3c)
+
+The owner's severity-1 ledger alert (AD-16): one entry per break, raised by inventory's break recorder, which appends `ledger.chain_broken` **only when the break row is new** — a re-detection on a later tick raises nothing, so the panel never fills with one entry per check run. The entry stays open until an owner acknowledges the break (`POST …/inventory/ledger/breaks/{breakId}/acknowledge`, `ledger.acknowledge`); detection never auto-heals, so nothing else resolves it.
+
+- **Audience:** `SOURCE_AUDIENCE['ledger-chain-break'] = {capability: 'ledger.acknowledge'}` — the capability of the resolving command; with today's matrix the owner alone. A capability-routed source: no recipient.
+- **Never pushed:** not in `APPROVAL_PUSH_SOURCES` nor the enqueue's subscriptions; `test/ledger-integrity.spec.ts` pins that a raised entry queued no `push_deliveries` row. The error log stays loud (`SEVERITY-1`).
+- **The literals:** `LEDGER_CHAIN_BROKEN_EVENT_TYPE`, `LEDGER_CHAIN_BREAK_ACKNOWLEDGED_EVENT_TYPE`, `CHAIN_BREAK_KINDS`, `CHAIN_BREAK_DETECTORS` (`notification-sources.ts`) repeat inventory's constants (AD-6) and are pinned equal by `test/ledger-integrity.spec.ts`.
+- **The summary** is built key by key (`reason` bounded 1–500 chars like every summary text; `firstSeq` a positive integer). The web reads "Ledger chain broken at #N — <warehouse>" (a `worm` break: "WORM copy mismatch at #N — <warehouse>") under the category "Ledger integrity".
 
 ---
 
@@ -358,6 +370,7 @@ Produced: none. Consumed (all through the relay and the routed `EVENT_BUS`):
 | `qc_hold.placed` / `qc_hold.released` | inbound | `holdId`, `warehouseId?`; raise: `skuId`, `reason` |
 | `channel.sync.degraded` (9-2) / `channel.sync.recovered` (9-2) | channels | `episodeId`, `connectionId`; resolve: `reason` |
 | `audit_export.ready` / `audit_export.failed` / `audit_export.expired` (9-3b) | tenancy (the export runner) | `exportId`, `requestedBy` (the recipient); ready: `rowCount`; failed: `reason` |
+| `ledger.chain_broken` / `ledger.chain_break_acknowledged` (9-3c) | inventory (`recordChainBreak` / `LedgerBreakCommand`) | `breakId`, `warehouseId`; raise: `kind`, `firstSeq`, `reason`, `detectedBy` (a `ledger.chain_broken` committed before 9-3c carries no `breakId` — malformed, logged and acked) |
 
 Every other payload field is ignored. Events committed **before 9-2 deployed** are never re-read (see the gotchas).
 

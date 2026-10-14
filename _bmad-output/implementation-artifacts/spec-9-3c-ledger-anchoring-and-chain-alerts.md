@@ -2,9 +2,10 @@
 title: 'Ledger anchoring and chain alerts — the hash chain is verified and anchored on a schedule, copied to WORM storage, a break alerts the Owner, and an anchored range downloads as a verifiable proof'
 type: 'feature'
 created: '2026-10-14'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'wms-be 9355c35938ca31a3fff2b8e972a7555c5cb2cdbb; wms-fe 09ad123a9b26d0b491c5a2d5a39fab6e021396b9'
 context:
   - '_bmad-output/implementation-artifacts/epic-9-context.md'
   - '_bmad-output/implementation-artifacts/spec-9-3b-async-audit-export.md'
@@ -67,7 +68,7 @@ context:
 - **Inventory owns all of it.** The ledger is inventory's, so the new tables are written only by inventory, pinned by an ownership block in `architecture.spec.ts`. Routes go through `InventoryFacade`.
 - **Legacy form.**
   - `legacyEventHashOf(row)` is `eventHashOf({...row, quantityDelta: row.quantityDelta / 1000})`. It applies only when `quantityDelta % 1000 === 0`; otherwise it returns no match.
-  - `verifyChainInTx` gains an optional `legacyThroughSeq` (default 0). An event with `seq ≤ legacyThroughSeq` passes when **either** form reproduces its stored hash. A zero-delta event hashes identically in both forms.
+  - `verifyChainInTx` gains an optional `legacyThroughSeq` (default 0). An event with `seq ≤ legacyThroughSeq` passes **only** when the pre-0026 form reproduces its stored hash. A zero-delta event hashes identically in both forms. *(Amended by the human, 2026-10-14, after code review E1: "either form" let an edit that divides a legacy event's quantity by 1000 verify in the current form.)*
   - Linkage (`prev_hash`) is checked for every event as today.
   - `verifyChain`, `anchorChain` and the re-verify read `legacyThroughSeq` from `ledger_integrity_state` (0 when absent). So an un-baselined warehouse still reads its pre-0026 events as broken, and `fractional-quantity.spec.ts:390` keeps its pin.
 - **Fold PENDING a14.** `verifyChain` validates its range: `fromSeq ≥ 1`, integers, and `toSeq ≥ fromSeq` when given. Anything else is 400 `validation-failed`, and no break is recorded.
@@ -338,6 +339,26 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 
 ## Implementation Notes
 
+Built 2026-10-14 on wms-be `feat/9-3c-ledger-anchoring-and-chain-alerts` (`9355c35..0410724`) and wms-fe on the same branch (`09ad123..82e6100`), each one commit carrying the story and its code-review patch. Re-verified 2026-10-14: BE 83 suites / 1969 tests, lint, typecheck; FE 1507 tests, lint, typecheck, capability mirror (43), `next build`. Decisions the spec left open, and the places the build went past its letter:
+
+1. **`firstSeq` joins the `ledger.chain_broken` payload** (an addition — the four original keys are unchanged). A gap report from `verifyChainInTx` keeps `fromSeq` = the range start (its pinned contract, `test/ledger.spec.ts`) and names the first missing seq separately (`ChainBreakReport.firstSeq`); the break row's `first_seq` and the panel summary's `firstSeq` need the broken seq, so the payload carries it. The notifications decoder reads `firstSeq`. A `predecessor missing` report's broken seq is `fromSeq − 1`.
+2. **The baseline trims a trailing run of zero-delta events off B.** They hash identically in both forms, so counting them would only overstate "N events verified in the pre-0026 form"; they verify in the current form just the same. (Without the trim, a clean warehouse whose first events are `pack.packed`/`dispatch.dispatched` would report B > 0.)
+3. **`broken_at_seq` for a warehouse with no state row.** The recorder only updates an existing state row (inserting one would pre-empt the baseline with B = 0); the baseline seeds `broken_at_seq`/`broken_detected_at` from any break recorded before it (a manual `verifyChain`).
+4. **Extra CHECKs, all probed in 0071:** `ledger_chain_breaks_first_seq_check` (≥ 1), `ledger_integrity_state_seq_check` (seqs ≥ 0) and `ledger_integrity_state_broken_check` (break seq and instant together, seq ≥ 1). The probe also proves the copy table's append-only triggers refuse an UPDATE and a DELETE.
+5. **Malformed path ids** (`warehouseId`, `anchorId`, `breakId`) answer 400 `validation-failed` at the controller (a request-shape check, §1's first tier) rather than reaching a uuid column.
+6. ~~A WORM read-back transport error keeps the rotation cursor~~ — reversed in the code review: the cursor advances once the chain re-verify ran, and the read-back retries when the rotation comes back round.
+7. **An empty warehouse** reads `verified_through_seq = 0` after a run (the web: "Verified through #0"), distinguishing "checked, nothing to anchor" from "never checked".
+8. **`wormPending`** is the true uncopied count whatever the mode; the web shows "WORM storage not configured" when `wormStore` is `none`.
+9. **The worker's scope cap** is env-overridable (`MAX_LEDGER_INTEGRITY_SCOPES_PER_TICK`, default 50, boot-validated) and a plain field for the window test.
+10. **`LedgerAnchorStore.anchor`** now takes the `kind` and returns the row's id; `ChainAnchor` carries `id` and `kind`.
+11. **The legacy form is proved against the real 0026** as well as the matrix's replica fixture: `test/fractional-quantity.spec.ts` gains "every migrated event verifies in the pre-0026 form" (`verifyChainInTx` with B = every seq passes on the chain 0026 actually rewrote), next to its unchanged "reads as broken" pin.
+12. **`WarehouseIntegrity`** is exported from `ledger-integrity.tsx` so the web suite can render it without `ledger.acknowledge` (no real role holds `audit.view` without it today).
+13. **Existing tests updated by addition / new expectation:** `test/ledger.spec.ts` (nothing-new is now `{nothing: true}` — the 422 is gone by design), `test/reconciliation.spec.ts` (payload `toEqual` + the four new keys), `test/notifications.spec.ts` (the tenth source), `test/users.spec.ts` (42 → 43), `test/client-isolation.spec.ts` (104 → 107 policies), `test/architecture.spec.ts` (the integrity-table ownership block).
+
+**Code-review patch (2026-10-14):** legacy form ONLY at or below B (the human amendment); recorded reasons bounded to 200 chars; the re-verify cursor always advances; the WORM copy loop catches put + copy-row failures per anchor (`s3ErrorCode`); `openBreakCount` on the integrity row drives "· acknowledged"; 0071 adds `ledger_chain_breaks_guard` (no DELETE/TRUNCATE, UPDATE only the acknowledgement) and `ledger_integrity_state_broken_guard` (never clear or raise `broken_at_seq`), each probed, plus the copy table's TRUNCATE probe; the baseline seeds only breaks above B; `verifyChain` refuses `toSeq` beyond the head; a skipped seq in the walk is reported as the missing seq (one deletion → one break row); a cursor above int4 → 400; `s3:ListBucket` in the IAM list, `MAX_LEDGER_INTEGRITY_SCOPES_PER_TICK` in `.env.example`, retention ≤ 36,500; the read-back also compares id, kind and anchoredAt; the web flags a `matches: false` proof; one instant for the acknowledgement and its audit row; `baselineScanChunk` is a service field. Tests added for each.
+
+Verified (before the patch): BE `bun run test` (83 suites, 1,955 tests), `lint`, `typecheck`, `build`; migrations applied to a fresh database + `db:verify`; `db:generate` → "No schema changes". FE `bun test` (1,505), `lint`, `typecheck`, `check:capability-mirror` (43), `build`. Mutation checks: deleting the acknowledge's second replay fails the race test (`409 chain-break-acknowledged`); dropping the legacy-form acceptance fails the legacy-prefix row; removing the web's ref guard or the 409 branch fails their tests.
+
 ## Spec Change Log
 
 ## Review Triage Log
@@ -364,6 +385,40 @@ Design review (2026-10-14), two lenses: backend (K) and web/API/tests (W). 25 fi
 | 16 | W | The unpaged read and three more gated reads; a new route prefix | low (verified: API-SURFACE:11-12, `inventory.controller.ts:607`) | Fixed: routes moved under `…/inventory/ledger/…`; documented exceptions |
 | 17 | W | Driving the whole worker is fragile across tenants | low | Fixed: rows through `runLedgerIntegrity`; the window via a fake facade (`metering.spec.ts:1050`) |
 | 18 | K | Proof and verify size | medium | Fixed by row 3's bound |
+
+Code review (2026-10-14), three layers: blind hunter (B), edge-case hunter (E) and verification gap (V). 38 findings; where several layers made the same claim, it shares one row.
+
+| # | Layer | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| 1 | E | At or below B the verifier accepts **either** form, so dividing a legacy event's stored `quantity_delta` by 1000 reproduces its stored hash in the current form and verifies | high (verified: `ledger.service.ts` `walkChain`, `row.eventHash !== recomputed && row.eventHash !== legacy`) | **Human decision (2026-10-14): the frozen rule is amended to "pre-0026 form only"**. Patch, plus a test that the ÷1000 edit is a break |
+| 2 | E | A WORM break's reason quotes the object's digest. An oversized one exceeds the notification decoder's `MAX_TEXT` (500), so the raise is dropped and no owner entry appears | medium (verified: `notification-sources.ts:208,217`) | Patch: truncate the recorded reason to 200 characters |
+| 3 | E + agent | A WORM read-back that keeps failing pins `reverify_after_seq`, so no other anchor is ever re-verified again | medium (verified: the cursor advances only after the WORM step) | Patch: advance the cursor once the chain re-verify passes; the WORM read retries when the rotation returns |
+| 4 | B, E | A successful `put` followed by a failed copy-row insert escapes the loop and skips the remaining anchors | medium | Patch: a per-anchor `try/catch` around put plus insert |
+| 5 | B, E, V | Status reads "· acknowledged" from the newest 10 breaks only, so an older open break hides; the 10-limit and its order are untested | medium | Patch: `openBreakCount` on the row; the web keys "acknowledged" on it; a limit-and-order test |
+| 6 | B | `ledger_chain_breaks` and `ledger_integrity_state` have no guard, so a direct write can delete a break or clear `broken_at_seq` | medium (verified: 0071 triggers only on the copy table) | Patch: triggers in 0071. Breaks refuse DELETE and TRUNCATE, and allow UPDATE only to set the acknowledgement from null. State refuses raising or nulling a set `broken_at_seq`. Probed |
+| 7 | E, B, V | A break recorded before the baseline (a manual `verifyChain` with B = 0) is copied into `broken_at_seq` even when it lies inside the legacy prefix, leaving a permanent false "Broken" | low (verified: `ensureBaseline`'s `priorBreak`; only manual calls reach it) | Patch: seed only from breaks with `first_seq > B`; test the seeding path |
+| 8 | E | `verifyChain` with `toSeq` past the head records a permanent gap break | low | Patch: a `toSeq` beyond the head is a 400 |
+| 9 | E, B | One deletion found by a head-bounded `verifyChain` reports the next seq; `gapReport` reports the missing one, giving two rows | low | Patch: `walkChain` reports the missing seq when `row.seq` skips |
+| 10 | E | An anchors cursor above int4 is a 500 | low | Patch: 400 `invalid-cursor` |
+| 11 | E | Without `s3:ListBucket`, a missing object returns 403 AccessDenied, so a deleted WORM copy reads as transient forever | low (AWS semantics) | Patch: add `s3:ListBucket` to the IAM list in the README and `.env.example` |
+| 12 | B | The WORM read-back compares only digest and range | low | Patch: also compare `id`, `kind` and `anchoredAt` |
+| 13 | B | Env docs: `MAX_LEDGER_INTEGRITY_SCOPES_PER_TICK` has no entry; `LEDGER_ANCHOR_RETENTION_DAYS` has no upper bound despite "a bad retention fails the boot" | low | Patch: an entry; bound ≤ 36,500 days; boot tests for bad MAX_RANGE, CHUNKS and retention |
+| 14 | B | A proof whose `matches` is false downloads with no warning | low | Patch: the web shows "This range no longer matches its anchor" beside the download |
+| 15 | B | The acknowledgement stamps two different `nowIso()` instants | low | Patch: one instant |
+| 16 | V | No test that a second, lower break moves `broken_at_seq` down (and a higher one does not) | medium (test gap) | Patch: a test |
+| 17 | V | The baseline scan is tested only inside its first 1,000-row chunk | medium (test gap; a seam off-by-one would make B too small) | Patch: the chunk size becomes a service field; a test at 3 over 8 legacy events |
+| 18 | V | The trailing zero-delta trim is untested | medium (test gap) | Patch: zero-delta scenarios (a clean warehouse starting with zero-delta events reads B = 0; a legacy prefix followed by zero-delta events stops at the last non-zero) |
+| 19 | V | `copyToWorm` logs with a local `errorCodeOf` instead of the tested `s3ErrorCode` | low | Patch: reuse `s3ErrorCode` |
+| 20 | V | The 0071 probe skips the copy table's TRUNCATE arm | low | Patch: probe it |
+| 21 | B, E | The first baseline holds the warehouse lock over the whole legacy prefix, and its scan has no per-tick cap | low (a legacy prefix exists only in dev databases; no production database predates 0026) | Rejected: low. Noted in PENDING |
+| 22 | B | A broken tail stops anchoring for good | false as a defect: the spec's Never list (no re-baseline, no auto-heal) | Rejected |
+| 23 | B | Anchors made before this story inside [1..B] keep `kind = verified` | low (dev databases only) | Rejected: low |
+| 24 | B | The range bound is not enforced for facade-made or pre-story anchors | low (no production caller passes no `uptoSeq`) | Rejected: low |
+| 25 | B | Full re-verify coverage is slow on huge ledgers | low | Rejected: low; PENDING notes the rate |
+| 26 | B | The alert never leaves the panel | false as a defect: human decision 3 | Rejected |
+| 27 | B | No confirmation on Acknowledge | low (it is audited, and repairs nothing) | Rejected |
+| 28 | E | The rotating window's index offset can skip a warehouse when the list changes | low (the `StorageSnapshotWorker` precedent) | Rejected |
+| 29 | E | One re-hashed tamper could raise two entries through two detectors | maybe-false (low confidence; would be low) | Rejected |
 
 ## Design Notes
 
