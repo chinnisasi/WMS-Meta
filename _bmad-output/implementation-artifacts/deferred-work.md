@@ -840,3 +840,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-3a-audit-trail-and-ledger-navigation.md`
   summary: 0069's index builds lock `ledger_events` writes for their duration (five partial ledger indexes, plain builds in the migrator's one transaction).
   evidence: Design review #7; the migration's deploy note (147 rows / 384 kB in dev when written). For a live deploy pre-build them CONCURRENTLY by hand under the same names — the reporting runbook in PENDING.md.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-9-3b-async-audit-export.md`
+  summary: `fullPrecisionInstant` drops the offset of a `timestamptz::text`, so every full-precision cursor (and 9-3b's export snapshot bound) assumes the database session's `TimeZone` is UTC.
+  evidence: Unverified, medium if true — `shared/primitives/time.ts:84-93` matches an optional `[+-]HH[:MM]` suffix and discards it. Settle by checking the deploy's session `TimeZone`; the fix is `(col at time zone 'UTC')::text` at the call sites or honouring the offset in the primitive.

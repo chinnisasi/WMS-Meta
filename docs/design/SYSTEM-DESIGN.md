@@ -121,6 +121,7 @@ So a carrier API being down never rolls back a dispatch. Domain state lands firs
 | Storage snapshots (21-4) | writes each client brand's daily closing stock per warehouse and base UoM, once the day is provably complete; drift-checks the last 7 days (`STORAGE_SNAPSHOT_POLL_MS`) |
 | Push sender (9-2b) | `PushSenderWorker`: per due tenant, `NotificationsFacade.sendDuePushes` — claim ≤ 100 queued pushes, one `PushGateway` call, write the outcomes (`PUSH_SENDER_POLL_MS`; the gateway by `PUSH_GATEWAY`, `EXPO_ACCESS_TOKEN`, `PUSH_HTTP_TIMEOUT_MS`) |
 | Wave cutoff sweep (9-2b) | `WaveCutoffSweepWorker`: per tenant with a planned cut-off wave, `OutboundFacade.sweepCutoffRisk` — raises `wave.cutoff_at_risk`, the at-risk push's source (`WAVE_CUTOFF_SWEEP_POLL_MS`) |
+| Audit export (9-3b) | `AuditExportWorker`: per tenant with export work, `TenancyService.runDueAuditExports` — re-queue or fail stale runs, expire finished exports after 7 days, prove the snapshot (§7d), claim one queued export, write its gzipped CSV page by page, finish it `ready` or `failed` and notify the requester (`AUDIT_EXPORT_POLL_MS`) |
 
 All poll on configurable intervals and **take explicit tenant context** — AD-3's scoping covers background work too, not just the API.
 
@@ -132,7 +133,7 @@ All poll on configurable intervals and **take explicit tenant context** — AD-3
 
 | | |
 |---|---|
-| **Postgres** | everything durable. 87 tables (84 with RLS), 70 migrations (0000–0069, as of 9-3a) |
+| **Postgres** | everything durable. 89 tables (86 with RLS), 71 migrations (0000–0070, as of 9-3b) |
 | **Valkey** | ATP counters only — a rebuildable mirror, never a source of truth |
 | **Device cache** | encrypted catalog snapshot + the outbound op queue |
 

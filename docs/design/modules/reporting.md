@@ -1,6 +1,6 @@
 # Reporting module
 
-> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. Story 9-3a adds the **audit trail read** (FR-28) — the owner's filterable, cursor-paged view of `audit_events`, the module's third read-only exception. Async export (9-3b) joins it next.
+> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. Story 9-3a adds the **audit trail read** (FR-28) — the owner's filterable, cursor-paged view of `audit_events`, the module's third read-only exception. The async **export** of that trail (9-3b) is tenancy's, not this module's: its three routes sit beside the trail in the api shell's `ReportingController`, which calls `TenancyService` — reporting gains no code and no fourth exception (§The audit trail → *The export*).
 
 Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line` below is relative to `wms-be/`. Read `../IMPLEMENTATION-GUIDE.md` first — and its §7a, the read-only exception this module exists under.
 
@@ -229,7 +229,7 @@ sequenceDiagram
 |---|---|---|
 | `actorUserId` | uuid | `actor_user_id = $` — the system's actions by sending `systemActorId` |
 | `actionPrefix` | `^[a-z][a-z_.-]{0,63}$` (`AUDIT_ACTION_PREFIX_RE`; the read re-checks it) | `action LIKE escape($p) \|\| '%' ESCAPE '\'`, where `escapeLikePrefix` escapes `\` first, then `%` and `_` — so `stock_adjustment.` never matches `stockXadjustment.y`. A `%` in the input is a 400 at the DTO |
-| `targetType` | one of `AUDIT_TARGET_TYPES` (45 values at 9-3a), published as the query enum in `openapi.json` | `target_type = $` |
+| `targetType` | one of `AUDIT_TARGET_TYPES` (45 values at 9-3a, 46 since 9-3b), published as the query enum in `openapi.json` | `target_type = $` |
 | `targetId` | uuid | `target_id = $` |
 | `from` / `to` | ISO-8601 instants with a zone (`@IsInstant`); `from ≥ to` → 400 (`assertInstantRange`) | half-open `[from, to)` on **`created_at`** |
 
@@ -243,7 +243,9 @@ sequenceDiagram
 
 **Guards** (`test/architecture.spec.ts`, "the audit read is reporting's THIRD read-only exception"): `audit.ts` imports only `auditEvents` from the schema; no raw `sql` template names another table after `from`/`join`/`into`/`update`; the file contains no `join`; it never names `getMemberRoleIn`, `assertPermission` or `users`; the facade carries the guard line verbatim. The portal block pins that `auditTrail` is not on `PORTAL_READS`, not a delegation, and never called by `portal.controller.ts`. The directory-wide reporting guards (writes nothing, owns no table, only the api shell imports it) cover the file too.
 
-**Not here (PENDING):** export (9-3b), anchoring and chain alerts (9-3c), retention (9-3d); deep links from a target to its document; a portal audit read or a `client_id` on `audit_events`.
+**The export (9-3b) — tenancy's, routed here.** `POST /tenants/{t}/reporting/audit/exports` (queue an export of the applied filters; owner-only, keyed, audited, always 202), `GET …/reporting/audit/exports` (the caller's own last 20, unpaged) and `GET …/exports/{id}/file` (the gzipped CSV, requester-only) are declared on the api shell's `ReportingController` but call `TenancyService` — tenancy owns `audit_events`, `users` and the export tables, so the export needs no read exception, and **nothing under `src/modules/reporting` names the export** (pinned in `test/architecture.spec.ts`, "the audit exports are tenancy-owned"). The trail's FILTER moved to `src/shared/db/audit-filter.ts` so both readers use one definition (the `warehouse-filter.ts` precedent; tenancy may not import reporting): `audit.ts` calls `auditFilterSql` and re-exports `escapeLikePrefix`, `AUDIT_ACTION_PREFIX_RE` and `AuditFilters`, and this section's guard block now covers that file with the same rules. `AuditTrailQueryDto`'s filter fields moved to `AuditFilterBaseDto`, which the export body and its stored `filters` share — the trail's query parameters are unchanged. Details: `tenancy.md` §The async audit export.
+
+**Not here (PENDING):** anchoring and chain alerts in the export (9-3c), retention (9-3d); deep links from a target to its document; a portal audit read or a `client_id` on `audit_events`.
 
 ## Gotchas
 
