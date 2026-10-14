@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-14-2026 23:51
+last_updated: 10-15-2026 00:15
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -390,7 +390,7 @@ development_status:
   9-3b-async-audit-export: done
   9-3c-ledger-anchoring-and-chain-alerts: done
   9-3d-audit-retention-lifecycle: backlog
-  epic-9-retrospective: optional
+  epic-9-retrospective: done
 action_items:
   - id: "epic-1-retro-item-1-be-docs-add-role-denied-to-403-annotatio"
     epic: 1
@@ -508,7 +508,7 @@ action_items:
       failure injection, reconcile failure-stamp, parseLastDivergences malformed entry,
       pin OUTBOX_MAX_ATTEMPTS=5 literally in the quarantine test"
     owner: "Claude (verification pass, batched PR)"
-    status: open
+    status: in-progress
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
   - id: "epic-2-retro-a8-unavailable-code-double-meaning"
     epic: 2
@@ -561,7 +561,7 @@ action_items:
       400; validate verifyChain range input; turn the int4 ceiling overflow into a
       typed 422"
     owner: "Claude (next adjustment story)"
-    status: open
+    status: in-progress
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-09-09.md"
   - id: "epic-3-retro-a1-over-receipt-approve-closed-po-gate"
     epic: 3
@@ -1111,3 +1111,61 @@ action_items:
     owner: "next touch"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-21-retro-2026-10-10.md"
+  - id: "epic-9-retro-item-95-f1-fix-before-any-production-deploy-gran"
+    epic: 9
+    action: "F1 fix before any production deploy: grant pg_read_all_stats to the app
+      role in scripts/provision-roles.sql (or exclude the BYPASSRLS auth role from
+      the snapshot probe) and test the probe under a non-superuser two-role setup;
+      unblocks audit exports and 21-4 storage snapshots"
+    owner: "fix story (wms-be)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
+  - id: "epic-9-retro-item-96-ops-readiness-story-one-deploy-checklist"
+    epic: 9
+    action: "Ops-readiness story: one deploy checklist (every worker env var, S3 Object
+      Lock + IAM, EAS/FCM/APNs, app.json android.package/ios.bundleIdentifier), complete
+      README worker section, 0069 audit_events CONCURRENTLY runbook; F2 measure/shorten
+      the anchor-chunk lock hold; F6 wormPending under none; F3 a detected chain break
+      writes one System audit row"
+    owner: "ops-readiness story (wms-be, wms-mobile, meta)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
+  - id: "epic-9-retro-item-97-duplication-extraction-story-shared-idem"
+    epic: 9
+    action: "Duplication-extraction story: shared idempotency replay/key write, cursor
+      codec, problem builders, FE IST formatting module and refresh event, one env-switched
+      port factory, worker skeleton + jobs.module.ts split per worker; audit-export
+      event-string and recipient-sources-vs-CHECK pins; closes epic-21-retro-item-94,
+      epic-1-retro-item-6, epic-3-retro-a8"
+    owner: "refactor story (wms-be, wms-fe)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
+  - id: "epic-9-retro-item-98-process-a-story-that-touches-a-file-name"
+    epic: 9
+    action: "Process: a story that touches a file named by an open at-next-touch item
+      claims it in its spec Code Map or declines it explicitly at step-02"
+    owner: "bmad-build step-02 self-review"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
+  - id: "epic-9-retro-item-99-process-design-reviews-of-tamper-securit"
+    epic: 9
+    action: "Process: design reviews of tamper/security/authorisation rules include
+      an adversary pass (what edit or input would this rule accept?)"
+    owner: "IMPLEMENTATION-GUIDE §9 design-review checklist"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
+  - id: "epic-9-retro-item-100-process-at-least-one-test-suite-and-the"
+    epic: 9
+    action: "Process: at least one test suite and the step-05 real-HTTP smoke run
+      with the production two-role DB setup (non-superuser app role + separate BYPASSRLS
+      auth role)"
+    owner: "test infrastructure (wms-be)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
+  - id: "epic-9-retro-item-101-re-own-epic-7-retro-item-7-fe-channels-f"
+    epic: 9
+    action: "Re-own epic-7-retro-item-7 (FE channels follow-up), whose owner epic-9-prep
+      FE story was never created"
+    owner: "next channels/FE story (sprint planning)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
