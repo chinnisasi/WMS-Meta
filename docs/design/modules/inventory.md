@@ -4,13 +4,13 @@
 
 All paths below are relative to `workspace/core/backend/wms-be`.
 
-Files: `src/modules/inventory/{inventory.module,inventory.facade,inventory.command,adjustment-approval.command,adjustment-reason,inventory.dto,ledger.service,ledger-registry,reservation.service,reconcile,anchor-store}.ts`.
+Files: `src/modules/inventory/{inventory.module,inventory.facade,inventory.command,adjustment-approval.command,adjustment-reason,inventory.dto,ledger.service,ledger-registry,reservation.service,reconcile,anchor-store,ledger-integrity,ledger-break.command,ledger-anchor-worm}.ts` (the last three — story 9-3c, §Ledger integrity).
 
 ---
 
 ## Owns
 
-Ten tables. Every one of them is module-exclusive: `test/architecture.spec.ts:116` fails any stock-table write from outside `src/modules/inventory`, and `test/architecture.spec.ts:134` further pins `stock_on_hand` / `batch_on_hand` / `bin_state_epochs` mutation to the single file `ledger.service.ts` (`PROJECTION_OWNER`, `test/architecture.spec.ts:37`). RLS policies, CHECKs and triggers for all of them live **only in the migration SQL**, never in `schema.ts` — the repo's hand-append pattern.
+Thirteen tables (9-3c added the three ledger integrity tables). Every one of them is module-exclusive: `test/architecture.spec.ts:116` fails any stock-table write from outside `src/modules/inventory`, and `test/architecture.spec.ts:134` further pins `stock_on_hand` / `batch_on_hand` / `bin_state_epochs` mutation to the single file `ledger.service.ts` (`PROJECTION_OWNER`, `test/architecture.spec.ts:37`). RLS policies, CHECKs and triggers for all of them live **only in the migration SQL**, never in `schema.ts` — the repo's hand-append pattern.
 
 | Table | Holds | Invariants and where they live |
 | --- | --- | --- |
@@ -18,7 +18,10 @@ Ten tables. Every one of them is module-exclusive: `test/architecture.spec.ts:11
 | `stock_on_hand` (`schema.ts:579`) | Derived quantity per (tenant, warehouse, sku, bin), milli-units. | `stock_on_hand_quantity_nonnegative` CHECK (`drizzle/0006_curvy_nehzno.sql:112`, re-added post-milli-units at `drizzle/0026_fractional_quantity_milli_units.sql:137`). Written only in the same transaction as the event that moves it. |
 | `batch_on_hand` (`schema.ts:625`) | The batch arm of the same projection: (tenant, warehouse, sku, bin, **batch**). | `batch_on_hand_quantity_nonnegative` CHECK (`drizzle/0010_sharp_hardball.sql:78`). Re-derives exactly from the ledger; the fold rejects a batch over-draw first, naming the batch. |
 | `bin_state_epochs` (`schema.ts:678`) | One opaque monotonic counter per (tenant, warehouse, bin) — AD-14's staleness token for device-queued ops. | `bin_state_epochs_epoch_positive` CHECK (`drizzle/0021_lean_george_stacy.sql:25`). Starts at 1, never 0 (0 on the wire is indistinguishable from "no epoch"). Bumped inside the folds, in the same transaction and under the same advisory lock as the movement. Compare for **equality only** — never a quantity, timestamp or sequence. |
-| `ledger_anchors` (`schema.ts:707`) | Committed chain heads: `from_seq..to_seq` + `digest` + `anchored_at`. | Same append-only trigger pair as `ledger_events`. `ledger_anchors_tenant_warehouse_to_seq_unique` is the DB backstop against two overlapping anchor ranges. |
+| `ledger_anchors` (`schema.ts:1276`) | Committed chain heads: `from_seq..to_seq` + `digest` + `anchored_at` + (9-3c) `kind` (`verified` \| `legacy`). | Same append-only trigger pair as `ledger_events`. `ledger_anchors_tenant_warehouse_to_seq_unique` is the DB backstop against two overlapping anchor ranges. `ledger_anchors_kind_check` (0071). |
+| `ledger_integrity_state` (9-3c, `schema.ts:1326`) | One row per (tenant, warehouse): the baseline boundary `legacy_through_seq` (B, fixed once), `verified_through_seq`/`verified_at`, `broken_at_seq`/`broken_detected_at` (the lowest break ever detected — **never cleared**), the re-verify rotation cursor `reverify_after_seq`, `last_run_at`. | PK `(tenant_id, warehouse_id)`; `_seq_check` (seqs ≥ 0), `_broken_check` (break seq and instant together, seq ≥ 1) — 0071. Writers: `ledger.service.ts` (the break recorder) and `ledger-integrity.ts` |
+| `ledger_chain_breaks` (9-3c, `schema.ts:1363`) | One row per detected break: `kind` (`chain` \| `worm`), `first_seq`, `anchor_id` (a worm break only), `reason`, `detected_by` (`anchor` \| `reverify` \| `verify`), `detected_at`, the owner's acknowledgement. | Unique `(tenant, warehouse, kind, first_seq)` — a re-detection inserts nothing. `_kind_check`, `_detected_by_check`, `_ack_check` (both ack columns or neither), `_anchor_check` (`kind = 'worm'` ⇔ `anchor_id IS NOT NULL`), `_first_seq_check` — 0071. Writers: `ledger.service.ts` (insert), `ledger-break.command.ts` (acknowledge) |
+| `ledger_anchor_worm_copies` (9-3c, `schema.ts:1404`) | The WORM copy of one anchor: `bucket`, `object_key`, `version_id`, `retain_until`, `copied_at`. | PK `anchor_id` (the first committed copy wins a race). **Append-only** — the 0006 trigger pattern (UPDATE/DELETE row triggers + TRUNCATE statement trigger, reusing `ledger_append_only_guard`), 0071. Writer: `ledger-integrity.ts` only |
 | `reservations` (`schema.ts:911`) | The hold journal — the durable truth Valkey mirrors. `(tenant, warehouse, sku)` scope, never bin-level; `owner_type`/`owner_id`; `quantity` (milli-units); `state`; `expires_at`. | `reservations_state_check` restricts state to `held|committed|released|expired` (`drizzle/0009_overjoyed_sway.sql:38`) — a typo'd state would silently drop the row out of every `state = 'held'` consumer and corrupt the mirror. `reservations_quantity_positive` (`:42`). `reservations_open_owner_scope_unique` is **partial on `state = 'held'`**: one open hold per owner scope. |
 | `reconciliation_checkpoints` (`schema.ts:899`) | One row per (tenant, warehouse) partition: `last_seq` watermark, `invalid_attempts`, `last_divergences` (the repeat memory), `incremental_count` (story 10.4 — bounded passes since the last full pass; the scheduled full pass's trigger). | `reconciliation_checkpoints_last_seq_nonnegative` (`drizzle/0008_lowly_khan.sql:59`). One row per partition (unique index). An **existing** checkpoint's cycle state is never overwritten by the reconcile failure path — that path's fresh-row INSERT (`last_seq 0`, `ON CONFLICT DO NOTHING`, story 10.4) writes the no-checkpoint defaults and is the deliberate exception. |
 | `inventory_quarantines` (`schema.ts:854`) | Scopes that diverged **repeatedly** inside one checkpoint window, with the divergent seq range. | `inventory_quarantines_status_check` (`open|resolved`, `drizzle/0008_lowly_khan.sql:55`), `from_seq <= to_seq` (`:61`), and one OPEN row per scope (partial unique index). Consumed by ATP: an open quarantine excludes that (sku, bin) from sellable on-hand. |
@@ -56,7 +59,7 @@ Every column of every owned table. `tenantTimestamps` expands to `created_at` / 
 | `recorded_at` | timestamptz | NO | — | — | **Commit time** — the server's. Deliberately distinct |
 | `reference_doc` | jsonb | NO | — | discriminated union | `kind` + arm-specific fields. **JSON-serialised into the hash**, so a BigInt here throws |
 | `prev_hash` | text | NO | — | — | Chain link |
-| `event_hash` | text | NO | — | — | Over the canonical form. **Migration 0026 rewrote `quantity_delta` without rehashing** — every pre-migration event fails `verifyChain` by design |
+| `event_hash` | text | NO | — | — | Over the canonical form. **Migration 0026 rewrote `quantity_delta` without rehashing** — a pre-migration event reproduces its hash only in the pre-0026 form (`quantity_delta / 1000`, `legacyEventHashOf`), which 9-3c accepts at or below the warehouse's baseline B (§Ledger integrity). Un-baselined, it still fails `verifyChain` |
 
 **Indexes:** `ledger_events_tenant_warehouse_seq_unique` (tenant, warehouse, seq) · `(tenant_id, serial_ref, seq)` — the one-query serial history · keyset `(tenant_id, warehouse_id, created_at, id)`
 **RLS:** `ledger_events_tenant_isolation`
@@ -93,7 +96,9 @@ Bumped inside the folds, same transaction and same advisory lock as the movement
 | `digest` | text | NO | — | Chain digest over the range |
 | `anchored_at` | timestamptz | NO | — | |
 
-Same append-only trigger pair as `ledger_events`. **No HTTP route and no job** — facade-only, exercised today by tests.
+| `kind` (9-3c) | text | NO | `ledger_anchors_kind_check` | `verified` (the range verified in the current form — every pre-9-3c anchor reads this through the 0071 constant default) or `legacy` (the baseline's pre-0026 prefix) |
+
+Same append-only trigger pair as `ledger_events`. Since 9-3c the `LedgerIntegrityWorker` anchors every warehouse on a schedule, and three owner-only reads serve them (§Ledger integrity).
 
 ### `reservations` — the hold journal Valkey mirrors
 
@@ -179,7 +184,10 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 | `lockWarehouseInTx(tx, tenantId, warehouseId)` :781 | Takes the same per-warehouse advisory xact lock `appendMovement` takes, so a caller that reads stock state and then acts on it holds writers off for the whole decision. Callers own lock **order**. | `outbound/pick.command.ts` |
 | `rebuildProjections(tenantId, warehouseId, scope?)` :486 | Operator/test repair: rewrite divergent scopes to replayed quantities, alert in the same commit. | tests / operator |
 | `reconcile` :468 / `reconcileNext` :477 | One reconciliation cycle / one partition per tick. | `src/jobs/jobs.module.ts:170` |
-| `anchorChain(tenantId, warehouseId, uptoSeq?)` :444 | Verify-before-anchor, then commit one anchor row. Returns `ChainBreakReport` instead of anchoring on a break. | tests only today — no HTTP route, no job |
+| `anchorChain(tenantId, warehouseId, uptoSeq?)` :747 | Verify-before-anchor, then commit one `verified` anchor row. Returns `ChainBreakReport` instead of anchoring on a break (a seq gap included, since 9-3c), and the typed no-op `AnchorNothing` (`{nothing: true, anchoredThroughSeq}`) when there is nothing (new) to anchor — before 9-3c both were 422s. | the integrity run (bounded by `uptoSeq`); tests |
+| `runLedgerIntegrity(tenantId, warehouseId)` :774 (9-3c) | One integrity run: baseline once, anchor the tail in bounded chunks, re-verify one anchored range, copy anchors to WORM (§Ledger integrity). | `src/jobs/jobs.module.ts` `LedgerIntegrityWorker` |
+| `ledgerIntegrityScopesOf(tenantId)` :760 (9-3c) | Every warehouse of the tenant, the worker's scope list. | `LedgerIntegrityWorker` |
+| `acknowledgeChainBreak(command, idempotencyKey)` :799 (9-3c) | The owner acknowledges a break (keyed, `ledger.acknowledge`, audited). Repairs nothing. | `src/api/inventory.controller.ts` |
 | `expireDueReservations()` :871 | The reaper entry. | `src/jobs/jobs.module.ts:234` |
 | `rebuildReservationCounters(tenantId, warehouseId?)` :1530 | Re-seed Valkey counters from the journal (Postgres wins). Joins the warehouse's single-flight rebuild like every other caller. **Not needed for readiness** — a cold warehouse's first ATP read arms it; the suites keep calling it as a state reset. | tests / operator |
 
@@ -203,7 +211,7 @@ Two shapes recur. A plain method opens its own tenant transaction. A `…InTx(tx
 
 ### Reads
 
-`listEvents` :292 (keyset, newest first; **9-1** adds the dashboard drill filters — `types` (registry-validated at the DTO via `registeredLedgerEventTypes()`), `from`/`to` on the server-stamped `recorded_at`, `orderId` (`reference_doc ->> 'orderId'`), `shortPick` — served by 0058's `ledger_events (tenant_id, warehouse_id, type, recorded_at)` index, a plain build; see PENDING's reporting runbook; **9-3a** adds the five document filters `grnId`, `poId`, `transferId`, `adjustmentPendingId`, `countVarianceId` — §Document links), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :430, `exportDigest` :453.
+`listEvents` :292 (keyset, newest first; **9-1** adds the dashboard drill filters — `types` (registry-validated at the DTO via `registeredLedgerEventTypes()`), `from`/`to` on the server-stamped `recorded_at`, `orderId` (`reference_doc ->> 'orderId'`), `shortPick` — served by 0058's `ledger_events (tenant_id, warehouse_id, type, recorded_at)` index, a plain build; see PENDING's reporting runbook; **9-3a** adds the five document filters `grnId`, `poId`, `transferId`, `adjustmentPendingId`, `countVarianceId` — §Document links), `listStock` :369, `batchOnHand` :885, `batchBinsOnHand` :923 (tenant-wide by batch), `serialHistory` :945, `serialLocation` :981, `batchHistory` :1007, `replay` :420, `verifyChain` :733 (9-3c: the range is validated — 400, no break — and B is read), `exportDigest` :804. **9-3c's three gated reads** (`audit.view`, each asserted in its own transaction before the read): `ledgerIntegrity` :779 (unpaged), `ledgerAnchors` :784, `ledgerProof` :794.
 
 In-transaction reads for composing callers: `stockByBinsInTx` :706, `batchOnHandByBinsInTx` :791, `batchOnHandForBinInTx` :827, `binStateEpochInTx` :744, `binStateEpochsInTx` :760, `qcScopeOnHandInTx` :1047, `qcHeldArmsInTx` :1092, `serialsLocatedInBinInTx` :1132, `onHandInBinInTx` :1882 (every (sku, quantity>0) arm in one bin, ordered by SKU — 12-5's excursion sweep), plus the 12-6 by-ref ledger feeds the cold-chain read composes: `ledgerEventsByOrderRefInTx` (pick + dispatch events by `reference_doc->>'orderId'` — carries the `? 'orderId'` qual 0039's partial index needs; see the compliance gotcha), `ledgerEventsByScopeRefsInTx` (complete batch/serial histories by ref lists; empty lists short-circuit), `ledgerExcursionEventsBySkuInTx` (separate because the excursion arm carries no batch/serial).
 
@@ -346,7 +354,7 @@ sequenceDiagram
   end
 ```
 
-This is what makes the projections a cache rather than a second source of truth, and it is the acceptance oracle every quantity-shaped migration is judged against. **Nothing schedules `verifyChain` today**, and every pre-migration event reports severity-1 by design since 0026 rewrote `quantity_delta` without rehashing.
+This is what makes the projections a cache rather than a second source of truth, and it is the acceptance oracle every quantity-shaped migration is judged against. Chain verification is scheduled since 9-3c — the `LedgerIntegrityWorker` anchors (verify-before-anchor) and re-verifies anchored ranges in rotation; a pre-migration event is verified in its pre-0026 form at or below the warehouse's baseline (§Ledger integrity).
 
 ---
 
@@ -450,7 +458,7 @@ Pass kind (story 10.4): a cycle runs the **full** compare (`replayInTx`) when th
 
 `anchorChain` (`:906`) takes the warehouse lock, computes `fromSeq = lastAnchor.toSeq + 1`, refuses a gapped range (`:964`), then **verifies before anchoring** (`:975`): on a break it returns the `ChainBreakReport` and the transaction commits nothing. `digestOverRange` (`:273`) is sha256 over `seq:eventHash` lines joined by newline — independently recomputable from any export of the same rows. `exportDigest` (`:1018`) produces the same digest on demand and also refuses gapped or empty ranges.
 
-Anchoring has **no HTTP route and no background job**. Today it is driven only by tests (`test/ledger.spec.ts:499`, `test/reconciliation.spec.ts:855`). The anchor target is a seam (`LedgerAnchorStore`, `anchor-store.ts:34`) so a real external WORM store can replace the Postgres table; both operations run in the caller's transaction and the store never opens its own.
+Since 9-3c anchoring is scheduled (`LedgerIntegrityWorker`, §Ledger integrity) and bounded: the worker passes `uptoSeq = latest.toSeq + LEDGER_ANCHOR_MAX_RANGE`, so one anchor covers at most that many events. The anchor target is a seam (`LedgerAnchorStore`, `anchor-store.ts`) whose `anchor()` now takes the `kind` and returns the row's id; both operations run in the caller's transaction and the store never opens its own. WORM storage is NOT that seam — an S3 put cannot roll back with the anchor transaction — but a separate port the worker copies through after commit (`ledger-anchor-worm.ts`).
 
 ---
 
@@ -477,6 +485,8 @@ Anchoring has **no HTTP route and no background job**. Today it is driven only b
 | A rebuild never clobbers a concurrent increment | The same per-warehouse advisory lock as the append path, plus a fresh read-committed re-fold (`ledger.service.ts:801`, `reconcile.ts:186`) |
 | A projection is never rewritten without being proven divergent by replay | `rebuildProjections` returns early when `report.matches` (`ledger.service.ts:805`) |
 | An anchor is only ever committed over a chain that still verifies | Verify-before-anchor (`ledger.service.ts:975`); `test/reconciliation.spec.ts:840` |
+| A detected break is recorded once and never cleared (9-3c) | `ledger_chain_breaks` unique `(tenant, warehouse, kind, first_seq)` + `ON CONFLICT DO NOTHING`; `broken_at_seq = least(…)`, never set back to null; `test/ledger-integrity.spec.ts` (re-detection, acknowledged) |
+| A pre-0026 event is accepted in its old form only at or below the warehouse's baseline B (9-3c) | `walkChain`'s `seq ≤ legacyThroughSeq` gate; B written once under the warehouse lock (`ensureBaseline`); `test/ledger-integrity.spec.ts` (edited legacy event → break) |
 
 ---
 
@@ -502,7 +512,8 @@ The two zero-quantity types keep both identity arms closed on purpose: they re-c
 
 - `stock.adjusted` — `inventory.command.ts:330`, in the command's transaction. Payload quantity is in **base** units.
 - `stock_adjustment.pending_approval` (5-2) — from the threshold branch, same transaction, `notifyRole: 'owner'`. The decision emits `stock_adjustment.approved` / `stock_adjustment.rejected` (`adjustment-approval.command.ts`, the decide transaction; payload `{pendingAdjustmentId, warehouseId, skuId, binId, quantityDelta, reasonCode, requestedBy, thresholdQuantityAtRequest, decidedBy, decidedAt, eventId, seq}`). **Consumed by notifications (9-2):** the pend raises the panel's `stock-adjustment` entry and the decision resolves it, keyed by `pendingAdjustmentId` and routed to `adjustments.approve` (see `notifications.md`). The requester is still not notified of the outcome (`PENDING.md`).
-- `ledger.chain_broken` — severity-1, from `verifyChain` (`ledger.service.ts:880`) and `anchorChain` (`:998`). It has no domain write to piggyback on, so it opens its own small tenant transaction, and a failure to append **propagates**: a lost chain-break alert must fail loudly.
+- `ledger.chain_broken` (`LEDGER_CHAIN_BROKEN_EVENT`) — severity-1, from the ONE recording path `recordChainBreak` (`ledger.service.ts:1149`), which `verifyChain`, `anchorChain` and the integrity run's re-verify and WORM read-back all go through. It opens its own small tenant transaction (the break row `ON CONFLICT DO NOTHING` + the state's `broken_at_seq = least(…)`), appends **only when the row is new** — a re-detection logs WARN and appends nothing — and a failure to append **propagates** (rolling the row back with it). Payload: the original `{warehouseId, fromSeq, toSeq, reason}` plus (9-3c, additions only) `{breakId, kind, detectedBy, firstSeq}`. **Consumed by notifications**: the owner panel's `ledger-chain-break` entry, keyed by `breakId`.
+- `ledger.chain_break_acknowledged` (`LEDGER_CHAIN_BREAK_ACKNOWLEDGED_EVENT`, 9-3c) — `{breakId, warehouseId}`, from the acknowledge command's transaction; resolves the panel entry `acknowledged`.
 - `reconciliation.divergence` — from the reconcile cycle (`reconcile.ts:243`) and from a manual rebuild (`ledger.service.ts:828`, with `trigger: 'manual-rebuild'`). One alert per cycle naming every divergent scope, its projected/replayed quantities in base units, its seq range, and whether it is a repeat. A batch-arm divergence additionally names its `batchRef` (optional key, story 10.4 — payload only; repeat classification and quarantine stay (sku, bin)-keyed).
 - `reconciliation.checkpoint_invalid` — on the twice-invalid checkpoint discard (`reconcile.ts:434`).
 
@@ -510,7 +521,7 @@ The two zero-quantity types keep both identity arms closed on purpose: they re-c
 
 ## Background jobs
 
-Both live in the jobs shell, not here; the module exposes the entry points through the facade and holds no timer.
+All three live in the jobs shell, not here; the module exposes the entry points through the facade and holds no timer. The third, **`LedgerIntegrityWorker`** (9-3c), is described in §Ledger integrity.
 
 **`ReconciliationWorker`** (`src/jobs/jobs.module.ts:136`) — interval poll over `reconcileNext()`, one (tenant, warehouse) partition per tick, oldest-checkpoint-first so no partition starves (`reconcile.ts:473`). The partition query has three arms (`reconcile.ts:506-508`): pending events (`head > last_seq`), a checkpoint ahead of head (the discard path, reachable from the worker too), and — story 10.4 — a **caught-up partition owed a full pass** (`incremental_count ≥ RECONCILE_FULL_PASS_EVERY`, default 20; the counter schedules the periodic full compare that closes the bounded scan's blind spot, including on a partition that has stopped receiving events). Env-gated OFF unless `OUTBOX_RECONCILE_POLL_MS` is set — tests drive `reconcileNext()` directly and must not race a background cycle. Shed by an in-process `running` flag, `unref`'d timer, shutdown hook. A failing cycle logs and retries next tick; before rethrowing, `reconcileNext` first **inserts an empty checkpoint row** (`last_seq 0`, `ON CONFLICT DO NOTHING` — an existing checkpoint's cycle state is never overwritten) and then stamps the checkpoint's `updated_at` (`reconcile.ts:426-460`), so a persistently failing partition re-queues behind the others instead of wedging every tick at the head of the queue.
 
@@ -538,7 +549,8 @@ The governing asymmetry: a counter that is too HIGH understates ATP (a sale is r
 | 503 vs 409 | Two distinct machine codes: 503 `reservation-store-unavailable` = "nothing was written, retry"; 409 `unavailable` = "the decision was made: no stock" (`unavailable` `reservation.service.ts:276`, `reservationStoreUnavailable` :362) | Callers must be able to tell "retry" from "don't". |
 | Replay diverges | **Never auto-heals silently.** Detect → alert + rebuild in one transaction; a repeat within the same checkpoint window → quarantine + re-alert (`reconcile.ts:191-260`) | Silence is never an outcome, and a scope that keeps diverging needs a human, not a third rewrite. |
 | Quarantined scope | Its (sku, bin) on-hand is excluded from the ATP ceiling (`committedOnHand` :1053-1065) | Fail closed: you cannot promise stock the system does not trust. |
-| Chain break | Error log + `ledger.chain_broken` outbox event; detection only, **never auto-heal** (`ledger.service.ts:867-891`). The alert append failure propagates. | An auto-healed audit chain is not an audit chain. |
+| Chain break | One `ledger_chain_breaks` row + `SEVERITY-1` error log + `ledger.chain_broken` outbox event (once per break — a re-detection is WARN only); `broken_at_seq` set and never cleared; detection only, **never auto-heal** (`recordChainBreak`, `ledger.service.ts:1149`). The alert append failure propagates. A broken tail stops anchoring (verify-before-anchor keeps refusing at the same seq) until someone investigates; acknowledging repairs nothing. | An auto-healed audit chain is not an audit chain. |
+| WORM read-back fails (network, 5xx) | Logged WARN with its `s3ErrorCode`; never a break. The rotation still advances, and the read-back retries when the rotation comes back round to that anchor. | A transport fault is not evidence of tampering, and must not pin the rotation either. |
 | Checkpoint corrupt | First failure skips the pass; second discards it and replays fully, alerting (`reconcile.ts:420-484`) | One transient read must not throw away a good checkpoint; two in a row is corruption. |
 | Fold accumulator overflows the exact-integer range | `assertExactQuantity` fails the fold loudly by name (`ledger.service.ts:1162-1172`) | Past the safe range the fold rounds, the compare fails, and reconciliation quarantines stock that is fine — the correctness oracle crying wolf, which trains people to ignore it. |
 | Startup rebuild fails | Logs; the warehouse stays not-ready until a read or grant repairs it (`onModuleInit`, `reservation.service.ts:448`) | |
@@ -588,6 +600,75 @@ These have all caused, or were caught one review short of causing, a real defect
 19. **Keyset cursors encode the FULL-precision instant, not `canonicalInstant`'s.** Postgres holds timestamptz to microseconds while `canonicalInstant` truncates to ms via JS `Date` — and rows appended in ONE transaction share one `now()` to the microsecond (a multi-serial adjustment appends its per-serial events in a single transaction), so a ms-truncated cursor's strict `<` predicate skipped the whole tail of the tie group on the next page. The ledger-timeline and pending-queue reads select the raw `::text` instant in a second pass and encode cursors from `fullPrecisionInstant` (`src/shared/primitives/time.ts`); responses still surface the ms-canonical instant. A regression back to canonical cursors is silent until a tie group spans a page boundary.
 
 ---
+
+## Ledger integrity — anchoring, the pre-0026 form, breaks and WORM (story 9-3c, AD-16)
+
+Files: `ledger-integrity.ts` (`LedgerIntegrityService` — the run, the baseline, the three reads), `ledger-break.command.ts` (the acknowledgement), `ledger-anchor-worm.ts` (the WORM port), plus `recordChainBreak` / `legacyEventHashOf` / `walkChain` / `gapReport` in `ledger.service.ts`. Migration `drizzle/0071_ledger_anchoring_and_chain_alerts.sql` (additive; probe DO-block over every new CHECK and the copy table's append-only triggers).
+
+### The run (`runLedgerIntegrity`, `ledger-integrity.ts:286`)
+
+The jobs shell's `LedgerIntegrityWorker` (`LEDGER_INTEGRITY_POLL_MS`, recommended `3600000`; the `StorageSnapshotWorker` shape — tenants on `AUTH_DATABASE`, warehouses through `ledgerIntegrityScopesOf`, a rotating window of `MAX_LEDGER_INTEGRITY_SCOPES_PER_TICK` (default 50), each scope in its own try/catch) calls it per warehouse. Step 1 gates the rest; steps 2–4 run **independently**, each in its own try/catch — only step 2 stops on a break.
+
+```mermaid
+sequenceDiagram
+    participant W as LedgerIntegrityWorker (jobs)
+    participant I as LedgerIntegrityService
+    participant L as LedgerService
+    participant DB as Postgres (tenant tx)
+    participant S as LedgerAnchorWormStore (s3)
+
+    W->>I: runLedgerIntegrity(t, w)
+    alt no ledger_integrity_state row (once)
+        I->>DB: chunked scan (1,000 rows, NO lock): largest B with [1..B] legacy-form + linked
+        I->>DB: lock warehouse; re-check no state row; latest(); legacy anchors over [1..B] when none exist; insert state ON CONFLICT DO NOTHING
+    end
+    loop ≤ LEDGER_ANCHOR_CHUNKS_PER_TICK
+        I->>L: anchorChain(t, w, latest.toSeq + LEDGER_ANCHOR_MAX_RANGE)
+        L-->>I: anchor | {nothing} | ChainBreakReport (recorded by anchorChain)
+    end
+    I->>DB: stamp last_run_at (+ verified_* only when no break)
+    I->>DB: next anchor with to_seq > reverify_after_seq (wrapping); walk with B; digest must match
+    opt s3 and the anchor copied
+        I->>S: get(bucket, key, version)
+        S-->>I: {id, kind, anchoredAt, digest, range} | 'missing' | throws (logged; not a break)
+    end
+    I->>L: recordChainBreak(…, detectedBy: 'reverify') on any mismatch
+    opt s3
+        I->>S: put(anchor) for ≤ 20 uncopied anchors, oldest first
+        I->>DB: insert ledger_anchor_worm_copies ON CONFLICT (anchor_id) DO NOTHING
+    end
+```
+
+- **Step 1 — the baseline** (`ensureBaseline` :376, human decision 1). B is fixed once per warehouse. The scan stops at the first event that does not reproduce its stored hash in the pre-0026 form or does not link; a trailing run of zero-delta events is trimmed off B (they hash identically in both forms — counting them would only overstate "pre-0026"). Under the lock: when B ≥ 1 and **no** anchor exists, `legacy` anchors are committed over [1..B] in chunks of `LEDGER_ANCHOR_MAX_RANGE` (digest over the stored hashes); when anchors already exist (a dev database anchored before 9-3c), none are written and they re-verify with B. The state row seeds `broken_at_seq` from any break **above B** recorded before the baseline (a manual `verifyChain`; one at or below B read a pre-0026 event in the current form and is not seeded). The scan chunk is the service's `baselineScanChunk` field. An empty warehouse gets B = 0. A baseline failure skips the run (without B a pre-0026 event would read as a break).
+- **Step 2 — anchor the tail, bounded** (`anchorTail` :497). Default 10,000 events per anchor × 10 per tick. The typed no-op ends it as a success; success stamps `verified_through_seq` (the latest anchor's `to_seq`, 0 for an empty warehouse), `verified_at`, `last_run_at` — never `broken_*`. A break (recorded by `anchorChain`, `detectedBy: 'anchor'`, a deleted event included) ends the step; it recurs every tick at the same seq (a WARN re-detection) until someone investigates.
+- **Step 3 — re-verify one anchored range** (`reverifyNext` :562), in rotation. Anchoring proves the tail only when it is anchored; a later edit of an anchored event is caught only by recomputing the range — and a superuser who rewrites an event AND its hash consistently passes the walk but not the anchor's digest (pinned in `test/ledger-integrity.spec.ts`). With `s3`, the WORM read-back also catches someone who edits both the ledger and `ledger_anchors`: `missing` or a different digest/range is a `worm` break (`first_seq` = the anchor's `from_seq`, `anchor_id` set). A transport error is WARN, never a break; the cursor still advances once the chain re-verify ran, so a failing read-back never pins the rotation — it retries when the rotation comes back round. The read-back compares the object's id, kind and anchoredAt as well as its digest and range.
+- **Step 4 — copy to WORM** (`copyToWorm` :672, `s3` only). Postgres stays the anchor's source; the copy is a retried side effect recorded in the append-only copy table. A put or copy-row failure (a bucket without Object Lock included — discoverable only at the first put) is logged with its `s3ErrorCode`, the remaining anchors still copy, the anchor counts in `wormPending`, and it is retried next tick. Two racing instances: the first committed copy row wins; the other S3 version is orphaned and harmless (PENDING).
+
+### The pre-0026 form
+
+`legacyEventHashOf(event)` (`ledger.service.ts:321`) = `eventHashOf({...event, quantityDelta: quantityDelta / 1000})`, only when `quantityDelta % 1000 === 0` (else `null`). 0026 scaled `quantity_delta` and changed nothing else that is hashed — proved against the repo's own 0026 by `test/fractional-quantity.spec.ts` ("every migrated event verifies in the pre-0026 form"). `verifyChainInTx(…, legacyThroughSeq)` accepts an event with `seq ≤ B` **only** when the pre-0026 form reproduces its stored hash (human amendment after code review E1 — "either form" let an edit dividing a legacy event's quantity by 1000 verify in the current form; a zero-delta event hashes identically in both); linkage is checked for every event as before, and a skipped seq is reported as the missing seq (so a head-bounded `verifyChain` and the worker's gap check record the same break row). `verifyChain`, `anchorChain` and the re-verify read B from `ledger_integrity_state` (`legacyThroughSeqInTx`, 0 when absent), so an un-baselined warehouse still reads its pre-0026 events as broken (`fractional-quantity.spec.ts` keeps that pin). **Why it is safe:** a later event multiplied by 1000 would match the old form, but it sits above B and breaks there; inside the prefix only the old form passes, so neither a second multiplication nor a division by 1000 verifies.
+
+### Recording a break (`recordChainBreak`, `ledger.service.ts:1149`)
+
+One tenant transaction: insert the `ledger_chain_breaks` row `ON CONFLICT DO NOTHING`, set `broken_at_seq = least(existing, first_seq)` (stamping `broken_detected_at` when it changes; never cleared); **only when the row is new**, append `ledger.chain_broken` and (after commit) log `SEVERITY-1 ledger chain break: tenant=… warehouse=… seq=<from>..<to> — <reason>`. The reason is bounded to 200 characters (`truncateReason` — a quoted digest must never push the panel summary past its 500). `broken_at_seq` only ever moves down, and the database enforces it: `ledger_integrity_state_broken_guard` refuses an UPDATE that clears or raises it; `ledger_chain_breaks_guard` refuses DELETE, TRUNCATE and any UPDATE but the one acknowledgement (both ack columns null → set, every other column unchanged) — all probed in 0071. `verifyChain` also refuses a `toSeq` beyond the head (400, no break). A gap report keeps `fromSeq` = the range start (the pre-9-3c contract) and names the first MISSING seq in `firstSeq`, which is the row's identity. `verifyChain` validates its range first (`assertVerifyRange`, PENDING a14 closed): non-integers, `fromSeq < 1` or `toSeq < fromSeq` → 400 `validation-failed`, no break row.
+
+### The acknowledgement (`LedgerBreakCommand.acknowledge`, `ledger-break.command.ts:63`)
+
+`POST /tenants/{t}/warehouses/{w}/inventory/ledger/breaks/{breakId}/acknowledge`, the §1 skeleton: hash `{arm: 'ledger-break-ack', tenantId, warehouseId, breakId}` → `ledger.acknowledge` (owner-only, the 43rd capability) → replay → lock the break row `FOR UPDATE` (unknown, or another warehouse's → 404 `chain-break-not-found`) → replay under the lock (race-tested: `test/ledger-integrity.spec.ts`, the parked-waiter pattern) → already acknowledged → 409 `chain-break-acknowledged` → conditional update → `ledger.chain_break_acknowledged` → audit `ledger_chain_break.acknowledged` (target `ledger_chain_break`) → key. Answers 200 `ChainBreakDto`. **Acknowledging repairs nothing**: `broken_at_seq` and a halted tail are unchanged.
+
+### The reads (owner-only, `audit.view`)
+
+Each asserts `audit.view` in its own transaction (`getMemberRoleIn` + `assertPermission`) before reading — three more named gated reads. `GET /tenants/{t}/inventory/ledger/integrity` is **unpaged** (a documented exception, bounded by the warehouse count; at most 10 breaks per warehouse) and adds `wormStore: 'none'|'s3'`; each row carries `openBreakCount` (every unacknowledged break, not only the listed 10 — the web's "· acknowledged" reads it). A cursor above int4 is 400 `invalid-cursor`. `GET …/warehouses/{w}/inventory/ledger/anchors` pages `to_seq DESC` (limit 1–200, default 50; a bad cursor → 400 `invalid-cursor`). `GET …/anchors/{anchorId}/proof` serves `{tenantId, warehouseId, anchor, algorithm, legacyForm, lines, recomputedDigest, matches}` from Postgres and the copy row only — `lines` are the digest's exact input (`seq:eventHash`, seq ascending, `\n`-joined, no trailing newline), bounded by `LEDGER_ANCHOR_MAX_RANGE`; unknown → 404 `anchor-not-found`.
+
+### The WORM port (`ledger-anchor-worm.ts`)
+
+`LedgerAnchorWormStore` (token `LEDGER_ANCHOR_WORM_STORE`), bound by `ledgerAnchorWormFromEnv` (the `pushGatewayFromEnv` precedent): `LEDGER_ANCHOR_WORM=none` (default) or `s3`. `s3` requires `LEDGER_ANCHOR_S3_BUCKET`, a well-formed `AWS_REGION` (default `ap-south-1`) and a positive `LEDGER_ANCHOR_RETENTION_DAYS` (default 2,557) — each else fails the boot. `put` sends `PutObject` with `ObjectLockMode: 'COMPLIANCE'`, `ObjectLockRetainUntilDate = anchoredAt + retention`, `ChecksumAlgorithm: 'SHA256'` (Object Lock's integrity-header requirement), key `ledger-anchors/<tenant>/<warehouse>/<toSeq padded to 12>-<anchorId>.json`, body the anchor (with `kind`) as canonical JSON; an answer without a version id throws. `get` reads by version: `NoSuchKey`/`NoSuchVersion` → `'missing'`; anything else throws. Credentials from the SDK default chain; IAM `s3:PutObject`, `s3:PutObjectRetention`, `s3:GetObject`, `s3:GetObjectVersion`, plus `s3:ListBucket` (without it a missing object answers 403, read as transient). Retention is capped at 36,500 days at boot. `@aws-sdk/client-s3` is pinned; the adapter is unit-tested on `aws-sdk-client-mock` (`test/ledger-anchor-worm.spec.ts`). The service's `wormStore`, `maxRange` and `chunksPerTick` are plain fields so the e2e suite drives the `s3` arms through a fake store (the `ReportingFacade.auditRead` precedent).
+
+### Gotchas
+
+- **`anchorChain` used to answer a gap with the same 422 as "nothing new"**, checked before verify — a deleted event would have hidden behind "nothing new" forever. It is a break now (9-3c design review #1).
+- **A tail break never halts re-verify or the WORM copy** — the steps are independent, so the status line is priority-ordered on the web: "Broken at #N" (never cleared) wins over "Verified through #N".
+- **The relay deletes an outbox row on ack**: a suite that counts `ledger.chain_broken` rows after a drain sees none — count before draining.
 
 ## Document links — the ledger filtered by its document (story 9-3a, FR-28)
 
