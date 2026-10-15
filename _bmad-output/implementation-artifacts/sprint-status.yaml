@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 09-08-2026 00:00
-last_updated: 10-15-2026 00:15
+last_updated: 10-16-2026 01:07
 project: WMS-Meta
 project_key: NOKEY
 tracking_system: file-system
@@ -1118,7 +1118,7 @@ action_items:
       the snapshot probe) and test the probe under a non-superuser two-role setup;
       unblocks audit exports and 21-4 storage snapshots"
     owner: "fix story (wms-be)"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-9-retro-2026-10-14.md"
   - id: "epic-9-retro-item-96-ops-readiness-story-one-deploy-checklist"
     epic: 9
