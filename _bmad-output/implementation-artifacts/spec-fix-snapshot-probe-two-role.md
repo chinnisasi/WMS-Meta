@@ -2,9 +2,10 @@
 title: 'Session-visibility fix — the §7d probe counts sessions it cannot see, and the provisioned app role can see them all'
 type: 'bugfix'
 created: '2026-10-16'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'wms-be ea3ecbf13084c1d4df4371a7f0dce11d9109ec62'
 context:
   - 'docs/design/IMPLEMENTATION-GUIDE.md'
   - 'docs/design/modules/tenancy.md'
@@ -53,7 +54,7 @@ context:
 - **The grant.** `scripts/provision-roles.sql` gains `grant pg_read_all_stats to wms_app;`, with a comment naming the §7d probe and its two callers.
   - The script stays idempotent: re-running the grant gives only a NOTICE.
   - `wms_auth` gets nothing new.
-- **The log text.** The refusal logs at `audit-export.runner.ts:241` and `storage-snapshot.ts:192-193` change their advice to "run scripts/provision-roles.sql (it grants pg_read_all_stats to the app role), or keep every app connection on one role". The comment at `storage-snapshot.ts:34-36` changes the same way. No other runner or snapshot logic changes.
+- **The log text.** The refusal logs at `audit-export.runner.ts:241` and `storage-snapshot.ts:192-193` change their advice to grant `pg_read_all_stats` to the app role: they name `current_user` and print the exact `GRANT` statement, and point to `scripts/provision-roles.sql`. *(Amended by the human, 2026-10-16, after code review: the "keep every app connection on one role" alternative is dropped. With the fixed filter, hidden autovacuum workers count, so a one-role deployment without the grant refuses at random.)* The comment at `storage-snapshot.ts:34-36` changes the same way. No other runner or snapshot logic changes.
 - **The new suite, `test/session-visibility.spec.ts`.** It runs against the suite database URL; the probe filters on `datname`.
   - **Setup.** Read `scripts/provision-roles.sql` and make these replacements, then run the result as one multi-statement `tx.unsafe` in a superuser transaction holding `pg_advisory_xact_lock(742105)`, the cross-suite role lock from `test/users.spec.ts:664`:
     - `wms_app` → `wms_sv_app` and `wms_auth` → `wms_sv_auth` (exact whole-word replacement; neither name contains the other);
@@ -71,7 +72,7 @@ context:
   - **Teardown.** Release the held transaction, close every connection, and end the drizzle client with `$client.end()`. The roles are cluster-wide and harmless to leave (the `wms_rls_probe` precedent).
 - **The docs follow the code.**
   - **IMPLEMENTATION-GUIDE §7d** gains a gotcha: a hidden row has a NULL `backend_type`, so never filter on `backend_type` before counting hidden rows. The probe silently ignored hidden sessions until this fix.
-  - **The deploy requirement** now reads "the provisioning script grants `pg_read_all_stats` to the app role (or keep one role)" at every site:
+  - **The deploy requirement** now reads "the app role must hold `pg_read_all_stats`; the provisioning script grants it" at every site, with no one-role alternative (amended, as above):
     - IMPLEMENTATION-GUIDE §7d;
     - `tenancy.md:508`;
     - `billing.md:196,214`;
@@ -125,11 +126,11 @@ Paths are under `workspace/core/backend/wms-be`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/shared/db/open-transactions.ts`: the filter and its comment.
-- [ ] `scripts/provision-roles.sql`: the grant and its comment.
-- [ ] Log text and comment: `audit-export.runner.ts:241`, `storage-snapshot.ts:34-36,192-193`.
-- [ ] `test/session-visibility.spec.ts`: every matrix row.
-- [ ] **Meta docs:** the §7d gotcha; the deploy-requirement sites; the README check; PENDING; the retro corrections.
+- [x] `src/shared/db/open-transactions.ts`: the filter and its comment.
+- [x] `scripts/provision-roles.sql`: the grant and its comment.
+- [x] Log text and comment: `audit-export.runner.ts:241`, `storage-snapshot.ts:34-36,192-193`.
+- [x] `test/session-visibility.spec.ts`: every matrix row.
+- [x] **Meta docs:** the §7d gotcha; the deploy-requirement sites; the README check; PENDING; the retro corrections.
 
 **Acceptance Criteria:**
 - Given the provisioned two-role setup, when the probe runs as the app role while an auth-role transaction is open, then it sees that transaction and reports nothing hidden.
@@ -137,6 +138,19 @@ Paths are under `workspace/core/backend/wms-be`.
 - Given the full BE suite, lint and typecheck, when run, then they pass.
 
 ## Implementation Notes
+
+Built on wms-be `fix/snapshot-probe-two-role` (`ea3ecbf..b16c133`, one commit with the code-review patch). Re-verified 2026-10-16: full BE run 83/84 suites, 1974/1975 tests; the one failure (`test/reporting.spec.ts`, untouched by this story) passes alone 25/25, a load flake. Lint and typecheck clean.
+
+- **Setup revokes before running the script.** The roles are cluster-wide and persist across runs, so a grant left by an earlier run would let the positive case pass with the grant deleted from the script. The suite's setup revokes `pg_read_all_stats` from `wms_sv_app` (when the role exists) under lock 742105, then runs the substituted script — so the "grant deleted from the script" matrix row genuinely fails the positive case.
+- **The substitution is asserted.** The suite checks the original script still contains `wms_app`, `wms_auth` and both `'change-me-*'` placeholders, and that none survive substitution — a renamed role or placeholder fails loudly instead of running the script against the real role names. The script's header comment mentions `'change-me-*'` (generic), which is left as is.
+- **Extra pins beyond the matrix.** One test pins the provisioned role shape (`wms_sv_app` plain with `pg_read_all_stats`; `wms_sv_auth` BYPASSRLS without it). The negative control re-probes after the re-grant (visibility restored); the re-run compares each role's attributes, membership, table-grant count and schema usage before and after.
+- **Mutation checks (run, then reverted):** the old filter → the negative control fails (`hidden` expected `true`, received `false`); the grant line deleted from the script → the role-shape and positive cases fail.
+- **Code-review round 1 (after the human's amendment dropping the one-role alternative):**
+  - The refusal logs call `sessionVisibilityAdviceInTx(tx)` (only on the refusal path), which reads `quote_ident(current_user)` and prints `GRANT pg_read_all_stats TO <role>;` with a pointer to the script. The one-role advice is gone from code, script, READMEs and meta docs.
+  - `checkSessionVisibility(db, logger, worker)` (`shared/db/open-transactions.ts`) runs once from `AuditExportWorker` / `StorageSnapshotWorker` `onApplicationBootstrap` when the worker is enabled, on the app `DATABASE` (injected as an optional last constructor parameter): one warning when `pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')` is false, one warning when the check itself fails, never a throw. Tested in the suite against the real non-superuser role (granted → silent; revoked → exactly one warning with the GRANT) and with a stub that rejects.
+  - The script header says re-running is safe (existing roles keep their passwords), gives the one-line fix, and qualifies the NOTICE claim as "re-run by the same grantor".
+  - The suite: the held start races the transaction's settlement; existing test roles get their passwords reset under the lock; the positive case asserts equality to the millisecond; every connection asserts `current_user`; after the revoke, `pg_has_role(…, 'MEMBER')` is asserted false before the negative probe.
+- **The managed-Postgres check** lives in `wms-be/README.md` (the worker section) and `docs/repos/wms-be/README.md` (the storage-snapshot worker line).
 
 ## Spec Change Log
 
@@ -155,6 +169,26 @@ Design review (2026-10-16), one backend lens with SQL experiments on PG 18.6. 8 
 | 7 | The query-text claim slightly overstated | low (verified: `inventory.facade.ts:583` inlines only a fixed `LEDGER_DOCUMENT_KEYS` name; no parameterless `.unsafe` with values in `src`) | Fixed: Design Notes names both |
 | 8 | Action item 6 is only partly served: the probe is proven, not the jobs end to end | low | Fixed: wording |
 
+Code review (2026-10-16), three layers: blind hunter (B), edge-case hunter (E), verification gap (V). V found no gaps; it independently reproduced the filter fix (old `hidden = 0`, new `hidden = 1`).
+
+| # | Layer | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| 1 | B, E | With hidden rows now counted, a hidden autovacuum worker refuses a one-role deployment without the grant, so the documented "keep one role" alternative no longer works | medium (follows from the fix; matches design review #2) | **Human decision (2026-10-16): drop the alternative and require the grant.** Frozen wording amended. Patch: docs, the script comment and both logs (`current_user` plus the exact `GRANT`) |
+| 2 | B | The grant exposes every session's query text to the app role; a narrower `SECURITY DEFINER` function was not considered | low (verified: values travel out of band; `$n` placeholders only) | **Human decision: keep the grant.** Patch: the trade-off and the definer-function alternative recorded in the README and Design Notes |
+| 3 | B | Visible long transactions (an idle-in-transaction psql, a long `pg_dump`) now hold both jobs back, and this is undocumented | medium (the intended consequence of the fix) | Patch: PENDING and README, with `idle_in_transaction_session_timeout` and backup timing advice |
+| 4 | B | A missing grant is found only at the first tick, with one error per scope per tick | low | Patch: one boot-time warning from each enabled worker when `pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')` is false |
+| 5 | B | The script header doesn't say a re-run is safe or that passwords are ignored for existing roles, and offers no one-line fix | low | Patch: the header says so and gives the one-line `GRANT` |
+| 6 | E | `beforeAll` hangs until the jest timeout if the held auth transaction rejects before reporting its start (a login failure) | low | Patch: race the start against the transaction's settlement |
+| 7 | E | The script never resets the password of a role that already exists, so leftover test roles can't log in | low | Patch: `alter role … password` before running the script |
+| 8 | B | The positive case asserts `≤`, so an older foreign transaction would also pass | low | Patch: assert the oldest equals the held start to the millisecond (no other transaction in the suite database is older) |
+| 9 | E | A unix-socket `DATABASE_URL` silently ignores the rewritten username | low (CI and dev use TCP) | Patch: assert the rewritten URL carries the user |
+| 10 | E | On PG16+, a membership granted by another grantor survives the revoke | low (the suite's roles are only ever granted by the superuser) | Patch: assert `pg_has_role(…, 'MEMBER')` is false after the revoke |
+| 11 | E | "A re-run only raises a NOTICE" holds only for the same grantor | low | Patch: reword the comment |
+| 12 | B | The managed-Postgres grant path is unverified | low | Rejected: already stated as "verify on the target" with the `pg_has_role` check |
+| 13 | B | No end-to-end run of the callers as the unprivileged role | low (V verified the stub plus probe coverage meets at both ends) | Rejected: action item 6 holds it |
+| 14 | B | The test leaves LOGIN roles with fixed passwords on dev and CI clusters | low (the `wms_rls_probe` precedent) | Rejected |
+| 15 | B | Per-scope refusal log noise | low (it predates this story, from 21-4) | Rejected: #4 adds the one early warning |
+
 ## Design Notes
 
 **Why grant rather than exclude the auth role.** Excluding the auth role's sessions would rest the proof on an unenforced convention, that `wms_auth` never writes a row any snapshot reads, while it holds INSERT, UPDATE and DELETE grants today. The grant makes the probe see every session, including the auth role, an operator's psql and a backup, so the proof stays a proof.
@@ -162,6 +196,10 @@ Design review (2026-10-16), one backend lens with SQL experiments on PG 18.6. 8 
 **Why fix the probe as well as the grant.** The grant alone makes the provisioned deployment correct. But any deployment that misses it, or a role later added without it, would again silently skip invisible sessions. Counting hidden rows restores the documented promise: refuse, never guess.
 
 **Cost of the grant.** `pg_read_all_stats` also exposes other sessions' query text. postgres.js sends parameters out of band, so parameterized text shows `$n` placeholders. The one inlined fragment, `inventory.facade.ts:583`, is a key name from the fixed `LEDGER_DOCUMENT_KEYS`, never a value. No `.unsafe()` in `src` carries literal values.
+
+**The narrower alternative, not taken (human decision).** A `SECURITY DEFINER` function owned by a stats-reading role, returning only `min(xact_start)` and the hidden count, would give the probe what it needs without exposing query text to the app role. It was considered and not taken; the exposure is limited to `$n` placeholders as above, and the trade-off is recorded in `wms-be/README.md` and IMPLEMENTATION-GUIDE §7d.
+
+**A consequence of full visibility.** Every session is now visible, so a long visible transaction (an idle-in-transaction psql, a long `pg_dump`) holds both jobs back until it ends. Recorded in PENDING (billing) and the README, with `idle_in_transaction_session_timeout` and backup timing as the advice.
 
 ## Verification
 
