@@ -539,6 +539,7 @@ Each of these has actually cost something.
 **An order's client is derived from its SKUs, never chosen.** `createOrder`'s preflight reads each line SKU's and each kit component's `client_id` with the existence check (`assertSkuIdsInTenant` now returns `{uom, clientId}`), then — **after** the kit-component assertion and **after** the channel dedup pre-check (a redelivery re-serves its first order whatever its SKUs say today) — `assertSingleClientInTx` either yields the one client or refuses **409 `mixed-client`** naming the codes, before any grant moves. Phase 3 stamps the preflight's client on `orders.client_id`.
 
 - `OrderSnapshot.order.clientId`, `OrderEntry.clientId` and the DTOs carry it (optional/nullable on the snapshot — a replay stored pre-21-2b lacks it).
+- **13-1 (additive):** `orderInvoiceFactsInTx` also carries `clientId` and `externalEventId` — the returns module's RMA create and returnable read take the order's client, warehouse, channel reference, kit structure and Σ `picks.qty` from this one read rather than a third dispatched-quantity query (`returns.md`).
 - `orderInvoiceFactsInTx` carries `clientSystemOwned` (through `clients.facade.ts` `getClientsInTx`; a missing client row reads as NOT the tenant's own — fail closed). Invoicing skips client orders (`invoicing.md`).
 - Residual race (PENDING): the order path does not lock SKU rows, so a client correction committing between the preflight read and the write could leave the order on the SKU's old client. The correction itself only succeeds while the SKU has no order line.
 

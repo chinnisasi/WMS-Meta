@@ -107,6 +107,8 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 | `getBatches(tenantId, skuId)` `:198` | Batch identities, code-ordered | Inventory read surfaces |
 | `getBatchesForSkusInTx(tx, tenantId, skuIds)` `:223` | Batch identities for a set, in the caller's tx | Outbound's wave planner (the FEFO half) |
 | `findBatch` `:249` / `findSerial` `:275` | Identity + `skuId`, or `null` | Detail routes' 404 checks |
+| `skuFactsInTx(tx, tenantId, skuIds)` (13-1) | `Map<skuId, {serialTracked, catchWeightTracked, uom, uomPrecision}>` in the caller's tx; an unknown id is absent | Returns' RMA create and returnable read (`returns.md`) |
+| `serialIdentitiesInTx(tx, tenantId, skuId, {numbers} \| {ids})` (13-1) | One SKU's `{id, serialNumber, status}` matching either direction, sorted by number, in the caller's tx — only matches come back. `findSerial` reads one id in its own transaction, which neither use can | Returns: numbers → ids on create (the ledger's `serial_ref`), ids → numbers on every read |
 | `ensureBatches(tenantId, skuId, inputs)` `:307` / `ensureBatchesInTx` `:318` | Idempotent identity creation | Inbound's GRN command, stock adjustment |
 | `ensureSerials(tenantId, skuId, serialNumbers)` `:371` | Idempotent identity creation | Same |
 | `getKitCompositionInTx(tx, tenantId, kitSkuId)` `:457` | The composition rows (component sku id + milli-qty), **in the caller's tx** — the flat-BOM explosion read | Outbound's `createOrder` (11.4) |

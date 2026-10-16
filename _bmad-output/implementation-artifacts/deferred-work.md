@@ -844,3 +844,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-9-3b-async-audit-export.md`
   summary: `fullPrecisionInstant` drops the offset of a `timestamptz::text`, so every full-precision cursor (and 9-3b's export snapshot bound) assumes the database session's `TimeZone` is UTC.
   evidence: Unverified, medium if true — `shared/primitives/time.ts:84-93` matches an optional `[+-]HH[:MM]` suffix and discards it. Settle by checking the deploy's session `TimeZone`; the fix is `(col at time zone 'UTC')::text` at the call sites or honouring the offset in the primitive.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-13-1-return-authorization.md`
+  summary: `uuidv7()` is not monotonic across a sequence wrap — on wrap it bumps the local `now` but leaves `lastMs`, so the next same-millisecond id carries the earlier timestamp with seq 1 and sorts before the ids just issued.
+  evidence: `src/shared/primitives/ids.ts:15-21` (verified at 13-1 code review). Any ordering by id within one millisecond can invert (about 5% of 200-row inserts when the random seq start is high). 13-1 orders its lines by an explicit `line_no` instead. Fix: on wrap, set `lastMs = now` after the bump (or loop until the clock moves).

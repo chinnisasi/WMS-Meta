@@ -2,9 +2,10 @@
 title: 'Return authorization — an operator authorizes a dispatched order''s units for return (RMA), naming the expected units and a reason'
 type: 'feature'
 created: '2026-10-16'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'wms-be 0312a8821893d96952c76d84d7b3a56a0cb0fe10; wms-fe 1b4c4c2184d63d2cbe47dc7409f42fc3d3d7a314'
 context:
   - '_bmad-output/implementation-artifacts/epic-13-context.md'
   - 'docs/design/SYSTEM-DESIGN.md'
@@ -279,27 +280,27 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] **BE migration 0072** (§3): the tables, RLS, CHECKs and indexes; journal, snapshot and probe.
-- [ ] **BE catalog:** `skuFactsInTx` and `serialIdentitiesInTx`.
-- [ ] **BE outbound:** confirm or extend `orderInvoiceFactsInTx` (`externalEventId`).
-- [ ] **BE returns module:**
+- [x] **BE migration 0072** (§3): the tables, RLS, CHECKs and indexes; journal, snapshot and probe.
+- [x] **BE catalog:** `skuFactsInTx` and `serialIdentitiesInTx`.
+- [x] **BE outbound:** confirm or extend `orderInvoiceFactsInTx` (`externalEventId`).
+- [x] **BE returns module:**
   - the facade and the command: create and cancel, the guard orders, code allocation, the exported lock key;
   - the returnable read, list and get;
   - the events;
   - the ownership and read guards.
-- [ ] **BE vocabulary:** `returns.manage` (44) and its pins; the audit target and actions.
-- [ ] **BE api:** `api/returns.controller.ts`, its route order pinned; the DTOs; `openapi.json`.
-- [ ] **BE tests:**
+- [x] **BE vocabulary:** `returns.manage` (44) and its pins; the audit target and actions.
+- [x] **BE api:** `api/returns.controller.ts`, its route order pinned; the DTOs; `openapi.json`.
+- [x] **BE tests:**
   - every backend matrix row, in `test/returns.spec.ts`;
   - `test/support/dispatched-order.ts`, extracted from `cold-chain.spec.ts` and adopted there.
-- [ ] **FE:**
+- [x] **FE:**
   - `api:generate` and the capability mirror (44);
   - `lib/returns.ts`, `lib/use-returns.ts`, `components/returns/*`;
   - the order-detail Create form;
   - the `/returns` page and navigation (13);
   - `AUDIT_TARGET_LABEL`;
   - tests for every web item.
-- [ ] **Meta docs:**
+- [x] **Meta docs:**
   - `docs/design/modules/returns.md` (new);
   - `outbound.md` and `catalog.md` (the new facade reads);
   - API-SURFACE (routes, the 44th capability, codes);
@@ -314,6 +315,18 @@ Paths are under BE `workspace/core/backend/wms-be/src` and FE `workspace/core/fr
 - Given the full BE and FE suites, lint, typecheck, build and the capability-mirror check, when run, then they pass.
 
 ## Implementation Notes
+
+Built on wms-be `feat/13-1-return-authorization` (`0312a88..60ad8d7`) and wms-fe on the same branch (`1b4c4c2..ca0c54b`), each one commit with its code-review patch. Re-verified 2026-10-16: BE 85 suites / 2009 tests, lint, typecheck; FE 1537 tests, lint, typecheck, capability mirror (44), `next build`.
+
+Implemented 2026-10-16 on `feat/13-1-return-authorization` in wms-be and wms-fe (uncommitted at hand-off).
+
+- **Problem extension members are top-level on the wire.** `ProblemDetailsFilter` spreads `extensions` beside the standard members, so `exceeds-returnable` carries `orderLineId` + `returnableQty` and the serial codes carry `orderLineId` + `serialNumber` at the top level; the web reads them as `ApiProblem.extensions` (what makes "N left" and "Serial X" renderable without parsing prose).
+- **`OrderInvoiceFacts` gained `clientId` as well as `externalEventId`.** The spec named only `externalEventId`, but the facts carried `clientSystemOwned`, not the client id the RMA must store. Both additive; invoicing reads fields by name, so nothing it stores changes.
+- **The returnable computation lives in `return-authorization.command.ts`** (`returnableFactsInTx` / `readReturnableInTx`) and the facade calls it — the command needs it under the order lock and the facade wraps the command, so a facade-owned function would have been a circular import. Same rule, one definition.
+- **A kit parent's `dispatchedQty` reads 0** (its components carry the picks); a non-dispatched order reads 0 dispatched on every line, whatever it picked.
+- **The web quantity input has no `max`**: native constraint validation would block a submit the server must be allowed to refuse (the on-screen returnable may be stale). Caught by the component test.
+- **Cancel takes no order lock** — a create racing a cancel refuses conservatively (PENDING).
+- Verification: `test/returns.spec.ts` (23 tests, every backend matrix row; the same-key race mutation-checked by deleting the replay under the lock), `architecture.spec.ts` (new returns block with detector self-tests), `client-isolation.spec.ts` (policy count 107 → 109), `users.spec.ts` (44); FE `returns.test.ts`, `components/returns/returns.test.tsx` (mutation-checked: the status gate, the key clear on a 409), `client.test.ts`, `navigation.test.ts`, `users.test.ts`, `audit.test.ts`.
 
 ## Spec Change Log
 
@@ -345,6 +358,32 @@ Design review (2026-10-16), two lenses: backend (K) and web/API/tests (W). 30 fi
 | 20 | K | No index for the list | low | Fixed: `(tenant, warehouse, created_at, id)` |
 | 21 | K | Outbox event names broke the `<doc>.<verb>` pattern | low | Fixed: `return_authorization.created/.cancelled` |
 | 22 | W | Race-test template wrong; seeding helpers buried in one suite; audit vs outbox order; Cancel shape; quantity type; `AUDIT_TARGET_LABEL`; the guard on every route | low | Fixed: advisory-lock template, exported key; seeding extracted; §1 order; inline cancel; JSON numbers; the label; every route guarded |
+
+Code review (2026-10-16), three layers: blind hunter (B), edge-case hunter (E), verification gap (V). About 30 findings; the same claim from several layers shares one row.
+
+| # | Layer | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| 1 | E | UUID case is not normalised. An uppercase `orderId` takes a different advisory lock from the lowercase form, so concurrent creates can over-authorize. It also misses the ledger text filter (500 at `dispatchedAt`). Uppercase `orderLineId`s fail the line map and slip past the duplicate check | high (verified: the lock key and the ledger filter compare strings) | Patch: lowercase `orderId`, `orderLineId` and `rmaId` at the DTO edge (`@Transform`) and again in the command |
+| 2 | B, E, V | Lines are ordered by `(created_at, id)`, which relies on `uuidv7()` being monotonic, and it is not across a sequence wrap | medium (verified: `ids.ts:15-21` bumps `now` but not `lastMs`) | Patch: a `line_no` column in 0072, ordered by it. The primitive's bug is deferred (`deferred-work.md`) |
+| 3 | B | Catch-weight lines are not held to whole cases (`catchWeightTracked` is read but unused); the pick path refuses fractions | medium (verified: `pick.command.ts:809`) | Patch: 400 `validation-failed` for a fractional catch-weight quantity; a test |
+| 4 | B, E | The web keeps refused serials and stale quantities in the draft after a 409 reload, so the same 409 repeats with no way to uncheck | medium | Patch: after a reload, prune the draft to `returnableSerials` and drop lines whose `returnableQty` is 0 |
+| 5 | B, E | A cancel mints a new key per click, so a lost response followed by a retry reports "Not cancelled" for a committed cancel | medium | Patch: a key per confirmation, reused on retry until success |
+| 6 | V | No route is tested against a foreign tenant's token (the only ownership check on the reads) | medium (test gap) | Patch: a foreign-tenant sweep of all five routes, expecting 403 `permission-denied` (`receiving.spec.ts:1595`) |
+| 7 | V | Cancel key reuse with a different body is never tested for 422 | medium (test gap) | Patch: different `rmaId` and different reason, each expecting 422 |
+| 8 | V | The list's cursor test can't see microsecond loss (no same-millisecond rows) | medium (test gap) | Patch: a same-millisecond tie case (`portal.spec.ts:892`) |
+| 9 | V | The `returns.manage` threading into `OutboundOrders` and `ReturnsSessioned` is untested; a dropped prop silently hides Create for every role | medium (test gap) | Patch: render with the role, expand, assert the button (ops_manager present, operator absent); Cancel by role |
+| 10 | E | `serialNumbers: []` on a non-serial line is refused | low | Patch: empty means absent |
+| 11 | B, E | A serial id the catalog can't resolve is shown as its UUID | low | Patch: throw a data fault, like every other impossible case |
+| 12 | B, E | The 500-serials-per-request cap isn't mirrored on the web | low | Patch: mirror it in `parseReturnDraft` |
+| 13 | B | No index for the tenant-wide list | low | Patch: `(tenant_id, created_at, id)` in 0072 |
+| 14 | B | The returnable read runs one serial query per line | low | Patch: batch by SKU, as `rmaDetailsInTx` does |
+| 15 | B | `returnLinesSummary` adds quantities across different UoMs ("5.5 units") | low | Patch: show the line count and the SKU count, never summed units |
+| 16 | E | The cancel confirmation hides silently when its row leaves the page | low | Patch: clear the confirm state when its target disappears |
+| 17 | B | The portal-token and conflict arms, and cancel-then-re-authorize of one serial, are untested | low | Patch: cancel-then-re-authorize one serial. The portal fence is covered by `portal.spec.ts`'s route reflection (verified by V) |
+| 18 | B | A serial's current status (since restocked, or re-dispatched elsewhere) is not checked | low | Rejected: 13-1 authorizes against this order's dispatch history; 13-2 checks the physical unit at receipt. Noted in PENDING |
+| 19 | B | A line that became serial-tracked after dispatch would be stuck (no dispatched serials) | maybe-false, would be low (the catalog likely forbids changing serial tracking on a SKU with history; settle by checking `sku.command.ts`) | Rejected (low) |
+| 20 | B | The order detail doesn't list existing RMAs; no deep link to the new RMA | low | Rejected: 13-4's returns queue |
+| 21 | B | No return-window decision recorded | false: human decision 4 (no window in 13-1); `order_dispatched_at` is kept for a later window | Rejected |
 
 ## Design Notes
 
