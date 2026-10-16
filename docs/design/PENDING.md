@@ -51,11 +51,21 @@ Two sources, both authoritative:
 ## outbound
 
 - **A packed-but-abandoned order understates ATP indefinitely** — `expireDue` sweeps `held` only, cancel refuses a packed order, and dispatch is the sole `committed → released` writer *(4-6 review)*
-- **No read-back for a dispatch record** — carrier, tracking and dispatch time live only in `ledger_events.reference_doc`. "What is the tracking number for order X" needs a raw jsonb scan *(4-6 review)*
+- **No read-back for a dispatch record** — carrier, tracking and dispatch time live only in `ledger_events.reference_doc`. "What is the tracking number for order X" needs a raw jsonb scan *(4-6 review)*. **Partly served by 13-1:** `GET …/returns/returnable?orderId=` exposes each line's dispatched quantity and the dispatch instant; carrier and tracking still have no read. Recorded, not closed
 - **A short shipment leaves no queryable trace** and schedules no backorder follow-on *(4-6 review)*
 - **Terminal pick classification is a hand-maintained list** — the next status arm silently becomes retryable again. This is exactly the defect 4.6 fixed, with nothing preventing its recurrence *(4-6 review)*
 - **`orders` list has no status filter** — `OrderListQuery` carries only `cursor`/`limit`, so the FE's status filter is page-scoped *(4-2b)*
 - **The cutoff at-risk window does not wrap IST midnight** *(9-2b code review BE6)* — `sweepCutoffRisk` computes `r` as a difference of minutes-of-day, so a cutoff in the first hour after IST midnight (00:00–00:59) is never at risk the evening before (`r` reads negative), and the wave raises no `wave.cutoff_at_risk`. Fix with the cutoff instant on the next IST date when `r < 0`
+
+## returns (story 13-1)
+
+- **No return window** (decision 4): any dispatched order can be authorized, however old; the authorization records `order_dispatched_at` so a later window rule has its input
+- **No portal RMA request** (decision 1): operators only; a client-portal request (and a client-held capability) is a later story
+- **No amend and no close** of an authorization — cancel and re-create; close belongs to 13-3, after receipt
+- **Catch-weight and batch identity are bound at 13-2's receipt**, not at authorization: a catch-weight line authorizes quantity only (the physical cases are chosen at the scan); a batch-tracked line names no batch (checked at the scan against the line's picked batches)
+- **The 500-serial cap** per line and per request — a larger serialized return is split into several authorizations
+- **Cancel takes no order lock**: a create racing a cancel may read the authorization as still open and refuse `exceeds-returnable` conservatively (never over-authorizes); the retry succeeds
+- **No `openReturns` in the device snapshot and no notification source** — 13-2/13-5
 
 ## inbound
 
