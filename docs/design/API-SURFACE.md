@@ -1,6 +1,6 @@
 # API surface
 
-Every route the backend exposes, grouped by the module that owns it. **212 operations across 28 controller files** (counted from `wms-be/openapi/openapi.json` and `src/**/*.controller.ts` at story 9-3c — recount from the exported document, do not hand-increment).
+Every route the backend exposes, grouped by the module that owns it. **217 operations across 29 controller files** (counted from `wms-be/openapi/openapi.json` and `src/**/*.controller.ts` at story 13-1 — recount from the exported document, do not hand-increment).
 
 Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-be/README.md`](../repos/wms-be/README.md); this is the inventory — what exists, who owns it, what gates it.
 
