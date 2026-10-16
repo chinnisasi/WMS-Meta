@@ -399,6 +399,8 @@ Two sources, both authoritative:
 
 ## wms-mobile
 
+
+- **The 13-2 return-receive screen has not been run on a device against a live backend** *(13-2)* — `app/return-receive.tsx` is covered only through its pure rules (`src/returns/draft.ts`) and the op/replay tests; there is no screen-test convention (see the component/screen test entry). Run one real receipt on a handheld — an RMA with a serial line, a batch line and a catch-weight case, plus one unit not on the return — before floor use
 - **No connectivity detection exists.** `offline` is a manual switch; nothing observes the network, so there is no drain-on-reconnect and no background sync. A queue only moves when the operator confirms something or taps sync — an op enqueued while a replay pass is in flight waits for the operator's next action to send (12-8 re-confirmed this for `excursion.record`; nothing is lost, the single-flight gate protects the append) *(mobile design pass; 12-8)*
 - **Hardening batch**: batchCode-null confirm, wrong-shape seal, undecryptable row, refresh single-flight, stale retired-bin, reset confirm *(epic-3 retro a9)*
 - **Hand-written `api.ts` types** instead of the generated client, against AD-8 *(epic-1 retro item 7)* — 12-8 sharpened the cost: a shape drift between the BE snapshot DTO and the mobile parse fails nothing on either side; the FE generated client is the only automated cross-repo pin *(12-8)*
