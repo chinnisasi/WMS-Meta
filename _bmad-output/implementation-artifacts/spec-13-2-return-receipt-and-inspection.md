@@ -2,9 +2,10 @@
 title: 'Return receipt and inspection — the floor receives returned units scan-first against an authorization, grades their condition, and holds them awaiting disposition outside ATP'
 type: 'feature'
 created: '2026-10-16'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'wms-be 59f77dc847ef7a3a83a6a5f9e42137d8e0c9752a; wms-fe ca676f1b2dd7f401b3e41ef7f01c3ac875828b53; wms-mobile a459dcd4d9a3ee3c188bf47ff0e19132202e687e'
 context:
   - '_bmad-output/implementation-artifacts/epic-13-context.md'
   - '_bmad-output/implementation-artifacts/spec-13-1-return-authorization.md'
@@ -341,6 +342,26 @@ Paths are under BE `workspace/core/backend/wms-be/src`, mobile `workspace/core/m
 
 ## Implementation Notes
 
+Built on wms-be `feat/13-2-return-receipt-and-inspection` (`59f77dc..7f8689d`), wms-fe (`ca676f1..6f12142`) and wms-mobile (`a459dcd..9844218`), each one commit with its code-review patch. Re-verified 2026-10-17: BE 86 suites / 2036 tests, lint, typecheck; FE 1551 tests, lint, typecheck, capability mirror (44), `next build`; mobile 520 tests, typecheck. The new handheld screen has not been run on a device against a live backend (no screen-test convention exists; PENDING wms-mobile).
+
+Implemented 2026-10-16 against the baselines above; nothing committed or pushed (left on the `feat/13-2-return-receipt-and-inspection` branches for review). Choices the spec left open, and the places the code differs from its letter:
+
+- **ATP "API DTO and openapi" (Always → ATP):** verified — no route exposes `AtpSnapshot` (it is facade-internal: order acceptance, replenishment, channel sync). `returnsAwaiting` rides `AtpSnapshot`, `ChannelVisibleSnapshot`, the standing-buffer probe and the three refusal messages; there is no DTO to extend. Recorded in PENDING.
+- **`recordServerRejectedOpInTx`:** the body is an exported tenancy function `recordServerRejectedOpInTx(tx, outbox, input)` (`tenancy/server-rejected-op.ts`); `SyncReportCommand.recordServerRejectedOpInTx` delegates to it. Returns calls the function with its own outbox, so `ReturnsModule` does not import `TenancyModule` (and its facade graph).
+- **`reviewOpId` in the 201:** "recorded in the idempotency snapshot" is met by a nullable `reviewOpId` on the response (the snapshot IS the response); the mobile type mirrors it.
+- **Per-type decisions on the wire:** each `RejectedOpResponse` carries `decisions?` (optional — a resolve snapshot stored before 13-2 lacks it); the 409 `decision-not-available` carries member `decisions`.
+- **Refusal vocabulary widened after code review to nine:** the six of the spec plus `unexpected-capture` (a capture the SKU does not take), `weight-out-of-range` (the DTO also carries `@Max`) and `qty-precision` (a too-precise quantity is a per-entry refusal — one bad entry no longer fails the whole receipt). `batch-not-dispatched` also refuses more units back from a batch than the order line picked from it (`pickedMilliByLineBatch`, earlier receipts and earlier entries counted).
+- **Code-review fixes (also):** `RETURNS` is reserved at zone/bin create (409 `reserved-location-code`); the RETURNS adjustment refusal has its own code `returns-bin-not-adjustable`; `ensureReturnsBinInTx` reads the bin first (a renamed system zone breeds no stray zone); the outbox payload gains `code`, `rmaCode`, `clientId`; catalog/RMA inconsistencies are a typed 500 `data-fault`. Mobile: a failed multi-slice enqueue drops the committed slices from the draft; a settled `return.receive` triggers a snapshot refresh; quantity/note edits target the entry a scan merged into; a fractional line with under one unit open matches; the retraction line prints worded reasons.
+- **Batch-and-serial arm:** `pick.command.ts` refuses to pick a SKU that is both batch- and serial-tracked, so the "serial's own pick `batchRef`" arm is unreachable end to end; it is pinned as a pure test over the exported `classifyReturnEntry`. Recorded in PENDING.
+- **The hash** also carries `deviceId` and `operatorUserId` (the `grn.submit` precedent) and an `arm: 'return-receive'` discriminator; optional entry keys are normalised to `null` before hashing, so absent and null are one request.
+- **The user-zone rule:** a pre-existing zone is the system zone only if it already held the system `RETURNS` bin before the call (the bin insert's `returning` decides); otherwise 409 `returns-bin-conflict`, rolled back. A user bin coded `RETURNS` → the same 409.
+- **Adjustment refusal:** the RETURNS arm reuses the code `qc-bin-not-adjustable` (its siblings' — the clients branch on it) with its own detail naming RETURNS.
+- **`countLiveHandlingUnitsInTx`** counts `returned` as live, so the catch-weight flag cannot flip under a returned case.
+- **`SkuFacts.batchTracked`** (additive) and `CatalogFacade.handlingUnitsByIdsInTx` / `InventoryFacade.serialsInStockInTx` (new reads) were needed; `assertDeviceOperatorInTx` is now also what `grn.submit` calls (body unchanged).
+- **Tests re-aimed, each with its reason in a comment:** `returns.spec.ts` — the status-CHECK probe now uses an undesigned status (`received` is real since 0073), and the detail-equals-create assertion now expects the detail's `receipts: []`; `metering.spec.ts` — the every-registered-type fold table classifies `return.received` as `to`; `client-isolation.spec.ts` — policy count 109 → 111.
+- **Mobile:** an excess unit or an unauthorized serial of a SKU that IS on the RMA is sent with that line's id (the server refuses it `exceeds-authorized` / `serial-not-authorized`); `rmaLineId: null` only for a SKU on no line. The retraction line counts units from the op's own payload.
+- **Not built:** a parked-waiter same-key race test for `return.receive` (the command does replay under the RMA lock) — recorded in PENDING.
+
 ## Spec Change Log
 
 ## Review Triage Log
@@ -373,6 +394,34 @@ Design review (2026-10-16), two lenses: backend (K), and mobile/web/API/tests (M
 | 22 | K | ATP read shapes (snapshots, messages, DTO) need the new term; Code Map line refs were wrong | low | Fixed |
 | 23 | K | Old RMA snapshots replay without the new field; locking and backstops | low | Fixed: optional `receipts`; sorted serial pre-lock; `serial-in-stock`; unique serial index; `received ≤ authorized` CHECK |
 | 24 | M | Touch points missing; per-type rejected-op rendering; fixture gaps; `context:` | low | Fixed: listed; `rejectedOpSummary`; fixture task; context amended |
+
+Code review (2026-10-16), three layers: blind hunter (B), edge-case hunter (E), verification gap (V). About 34 findings; the same claim from several layers shares one row.
+
+| # | Layer | Finding | Verdict | Disposition |
+|---|---|---|---|---|
+| 1 | E | If a later `enqueueOp` throws after earlier slices have committed, a retried Confirm re-enqueues the committed slices: double receipt or review rows | medium | Patch: drop the already-enqueued slices from the draft (or enqueue atomically) before allowing a retry; test |
+| 2 | B, E | The device view goes stale after an op settles. Settled ops leave the queue before a fresh snapshot is sealed, so received units read open again and re-scans land in Discard-only review | medium | Patch: keep settled `return.receive` work counted until a snapshot sealed after its settle time, or refresh the snapshot after replay; test |
+| 3 | B | One over-precise entry throws 400 inside the transaction and fails the whole receipt, breaking decision 3 | medium (verified: `assertRecordableQuantity` throws) | Patch: a per-entry refusal `qty-precision`; test |
+| 4 | E | A return can claim more units of one batch than were picked from that batch (multi-batch line) | medium | Patch: track picked milli per (line, batch); refuse `batch-not-dispatched` past it; test |
+| 5 | E | Set quantity and Note edit the last entry, not the merged one just scanned | medium | Patch: track the `entryIndex` from `addUnit`; test |
+| 6 | B, E | The review guidance ("create an authorization…") shows for every reason and every `return.receive` row, wrong for most; `rejectedOpsResolveReason` returns it for any op type | medium | Patch: per-reason guidance (re-scan for capture, batch and precision; authorization for not-on-authorization, exceeds and serial-not-authorized; master data for bin conflict and warehouse mismatch); only on `return.receive` rows; the generic resolve reason stays generic |
+| 7 | B, E | A `partially_received` RMA can never be closed, so its unreceived remainder stays committed indefinitely and the RMA stays in every snapshot | medium (a consequence of design-review row 1) | Defer to 13-3's close-short (PENDING, with the consequence stated) |
+| 8 | V | `countLiveHandlingUnitsInTx` now counts `returned`, untested | medium (test gap) | Patch: a SKU whose only live units are `returned`: PATCH `catchWeightTracked: false` → 409 |
+| 9 | V | A `partially_received` RMA still holding its units is untested | medium (test gap) | Patch: after a partial receipt, a new RMA for the full quantity → 409 `exceeds-returnable` |
+| 10 | V, B | The snapshot's per-serial data is never asserted; a missing serial number falls back to the UUID | medium | Patch: assert the `serials` array after a serial receipt; throw a data fault instead of the `?? id` fallback |
+| 11 | V | The same serial twice in one op is untested on the server | low (test gap) | Patch: `[S-2, S-2]` → entry 1 refused `serial-not-authorized` |
+| 12 | B | `missing-capture` conflates three conditions (absent, unexpected, overweight); no `@Max` on weight | low | Patch: `missing-capture`, `unexpected-capture`, `weight-out-of-range`; `@Max` on the DTO |
+| 13 | B | `return_receipt.recorded` lacks `clientId` and codes, unlike its siblings | low | Patch: add `clientId`, `code`, `rmaCode` |
+| 14 | B | Nothing reserves the `RETURNS` code before the first receipt | low | Patch: zone and bin create refuse the code `RETURNS` (409); existing collisions still get `returns-bin-conflict` (recorded) |
+| 15 | B | Adjusting RETURNS reuses `qc-bin-not-adjustable` | low | Patch: a distinct `returns-bin-not-adjustable` |
+| 16 | B | The reviewer summary omits batch, weight, note and line; the mobile settled note prints raw reason codes | low | Patch: include them; worded reasons on mobile |
+| 17 | B | `CONDITION_WORDS` duplicates the labels without union keying | low | Patch: reuse `RETURN_CONDITION_LABEL` (a Record over the union) |
+| 18 | B | Received quantities render unformatted | low | Patch: `quantityLabel` with UoM and precision |
+| 19 | B, E | The expanded row's receipts go stale on a list refresh | low | Patch: refetch on the status, received-sum or refresh token |
+| 20 | E | A fractional line with less than one unit open reads amber | low | Patch: match when remaining > 0 and let the quantity setter size it |
+| 21 | E | `ensureReturnsBinInTx` can create a stray zone when the bin exists under a renamed zone | low | Patch: refuse, or return the bin's zone |
+| 22 | E | An RMA line SKU missing from `skuFactsInTx` throws an untyped `Error` | low | Patch: a typed data-fault problem |
+| 23 | B | Discard-only also covers whole-op master-data refusals that could be re-applied after the data is fixed | low | Rejected: human decision 4 (Discard only); recorded in PENDING |
 
 ## Design Notes
 

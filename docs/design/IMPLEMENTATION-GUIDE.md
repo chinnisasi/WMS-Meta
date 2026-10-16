@@ -348,6 +348,18 @@ Every stamp is taken inside a transaction that began no later than the stamp, so
 
 **Any derivation of putaway work or Receiving-bin occupancy must count `applied_qty` PLUS the line's APPROVED over-receipt excess** (`approvedExcessByLine` / `approvedExcessOfLineInTx` in `putaway/putaway.command.ts`; the same sum inline in `reporting/kpis.ts`). Approval appends a further `grn.received` into Receiving but **never mutates the GRN line** — GRN lines are immutable records — so a reader of `applied_qty` alone strands the approved units (it did, on every document, until 21-9).
 
+## 7g. Partial settlement — book what matches, raise the rest for review (story 13-2)
+
+A floor op that carries many units and may be partly wrong (a returns parcel) **settles 201 with what matches and raises the rest itself** — it does not refuse the whole op (the device would drop everything) and does not silently drop the misfits. The pattern, as `ReturnReceiptCommand` built it:
+
+- **Classify every entry in request order** against the locked document, one refusal reason per entry from a closed vocabulary, the remaining quantity decremented as entries apply; precision and shape errors stay whole-op 400s.
+- **Write ONE review row for all the refused entries, in the same transaction**, through tenancy's `recordServerRejectedOpInTx` (a module never writes `rejected_ops` itself). Its `op_id` is **derived from the key, never the key** (the device's op id would collide with a later upload of the same op) — a ULID from the key's timestamp plus a hash — and is **recorded in the idempotency snapshot**, so a replay re-serves it and inserts nothing.
+- **Declare the review row's decisions** in `REJECTED_OP_DECISIONS_BY_TYPE`. If re-applying the stored payload could never succeed (the refusal is about the document, not a transient state), the type is Discard only and `applyArm` gets no case — which also keeps tenancy from importing the owning module.
+- **The audit target must exist when nothing applied** (`target_id` is NOT NULL): target the document instead, and list the command in the audit guard's `DYNAMIC_WRITERS`.
+- **On the device the settled op is still a retraction** when entries were refused — a summary line, never "Held for review" (that is the quarantine fate).
+
+**Widening a status vocabulary re-opens every predicate that named the old set** (design review #1): 13-1's returnable sums read `status = 'open'`, which silently stopped counting a received RMA the moment `received` existed. Grep the old literal across the module before widening, and pin the consequence with a test.
+
 ## 8. Before you say it's done
 
 ```bash

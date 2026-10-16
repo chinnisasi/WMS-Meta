@@ -54,6 +54,7 @@ revoked       → /revoked     (full-screen, terminal)
 | `/receive` | `app/receive.tsx` | Pick a PO **or an ASN** (21-6b), or blind receive with a reason → scan SKU barcodes → batch/mfg-date/quantity per line → confirm. One `grn.submit` op carries the **whole GRN**. Routed in with `?asnId=` / `?poId=` / `?blind=1` — precedence ASN, then PO, then blind, and only a **cached** document id preselects (`initialDraftFromRoute`). The draft holds at most one context (`draftContextSet`); every `choose*` re-resolves the lines' document references, and `confirmPayload` builds them from the context, so a stale reference can never reach the server. A SKU not on the active PO/ASN is booked unmatched — advisory on the line (`Not on {code} — will be booked; no {PO\|ASN} line credited`), never refused |
 | `/putaway` | `app/putaway.tsx` | Task pick → SKU scan verifies the pallet → quantity → bin scan → mismatch reason if the bin differs from the suggestion → confirm. One `putaway.place` op per placement |
 | `/pick` | `app/pick.tsx` | Walk pick → bin scan → item scan → serials (if tracked) → confirm, plus the short-pick arm. One `pick.record` op per line |
+| `/return-receive` | `app/return-receive.tsx` | **13-2.** Receives returned units against a cached open return authorization: choose an RMA (cards "RMA-0007 · N lines open" — line counts, never summed units; or `?raId=` preselects) → choose the condition grade (required, starts unset, then sticky) → scan units (camera + HID + manual) → the captures the SKU needs (serial / batch / case weight) → confirm queues `return.receive` op(s) (split above 150 entries). Reached by `?raId=` or the inbox's plain **"Receive a return"** button (not a chip, not a task card — 13-5 owns those). A known SKU not on the RMA, an unauthorized serial or an excess unit reads amber **"Not on this return — it will be reviewed"** and is still queued; only an unknown barcode is refused on the device. The divergence banner says so on the screen: **"Return receipt — anything not on the return is queued for review, never refused here."** `app/receive.tsx` and `src/receiving/draft.ts` are untouched (the scan and weight pieces are written fresh — PENDING) |
 | `/scan` | `app/scan.tsx` | The bare substrate scan surface: camera + HID + manual into `decideScan`. Today only self-test payloads are accepted there (see **Scanning**) |
 | `/self-test` | `app/self-test.tsx` | The substrate's end-to-end proof: scan → decision → queue → replay → server echo, each step logged (`:38-93`) |
 | `/revoked` | `app/revoked.tsx` | Full-screen terminal state. Queued work is held for review; an operator-initiated **Reset** wipes the enrollment and the queued scan data, and the button says so (`:34-37`) |
@@ -104,6 +105,8 @@ expo-sqlite ships no SQLCipher, so there is no whole-database encryption. Instea
 
 ```ts
 type OpType = 'self-test.echo' | 'grn.submit' | 'putaway.place' | 'pick.record'   // types.ts:19
+  | 'pack.execute' | 'excursion.record' | 'transfer.confirm' | 'count.submit'
+  | 'return.receive'                                                          // 13-2
 ```
 
 `QueuedOp` (`types.ts:21-63`) is capture-time data plus the ULID:
@@ -177,6 +180,7 @@ Fetched online from `GET /tenants/{t}/devices/catalog-snapshot?warehouseId=…` 
 | `bins[]` | id, code, zone, type, capacity, **`blocked`**, **`systemOwned`** | Bin-code resolution — and blocked/system bins ride the payload *deliberately*, so the device can **reject a scan against them pre-queue** rather than queueing an op the server will refuse |
 | `putawayTasks[]` | GRN line + placeable qty + `suggestedBin` + `rationale` | The putaway unit of work. The suggestion is advisory; the server re-gates at placement |
 | `pickTasks[]` | The whole walk: picklist/line ids, sku, bin, batch, qty, `sliceSeq`, `walkSeq`, `stopCount`, `binStateEpoch?` — and, 11.7: **`kitParentSkuCode`** (nullable) | **The whole walk rides the snapshot on purpose** — that is what lets a wrong-bin scan name *the next walk bin holding the expected SKU* with no network call (`src/picking/draft.ts:133-157`). 11.7 adds the exploded kit component's parent kit SKU code, display-only (`from kit {code}` header line); no pick logic reads kit-ness |
+| `openReturns[]` *(13-2)* | `{id, code, orderReference, lines{id, skuId, authorizedQty, receivedQty, openQty, batchCodes, serials{id, serialNumber, received, batchCode}}}` — the warehouse's `open` / `partially_received` return authorizations | Which RMA line a returned unit belongs to (a serial's own line first, else the first line with open quantity), the amber "not on this return" read, the batch hint (amber when not among `batchCodes`), and a batch-and-serial unit's own batch. The device subtracts its own queued `return.receive` entries from `openQty` and the serials' `received` (the pick `refreshConsumed` pattern, `queuedReturnWork`). `parseCatalogSnapshot` defaults it `?? []`, pinned by equality |
 | `binStateEpoch?` on a pick task | The bin's opaque `state_epoch` at snapshot time | AD-14: the observation a queued pick carries back so the server can tell a bin that merely *moved on* from one that is unresolvable. Opaque — captured, stored and sent verbatim; the client never interprets or compares it |
 
 `parseCatalogSnapshot` (`src/state/catalog-snapshot.ts:13`) is the read boundary and exists because the snapshot grows additively: a cache sealed by an older build carries none of the keys a later story added, and a raw cast hands the screens `undefined` where they iterate. It defaults `bins`, `putawayTasks`, `pickTasks` (and every later array, `openAsns` included since 21-6b) to `[]`, so a device that upgraded without refreshing shows **no tasks of the new type instead of crashing**. It is kept dependency-free so it is testable without Expo.
@@ -195,7 +199,9 @@ code 'pick-bin-short'      → re-plannable  (AD-14 case 3 — KEPT)
 code 'pick-unresolvable'   → quarantined   (AD-14 case 4 — terminal)
 code 'asn-not-open'                → rejected, BY NAME (21-6b — a closed/cancelled ASN never re-opens;
                                      unreachable against a 21-9 server, which holds the receipt for approval)
-code 'document-warehouse-mismatch' → rejected, BY NAME (21-6b — a PO/ASN of another warehouse)
+code 'document-warehouse-mismatch' → rejected, BY NAME (21-6b — a PO/ASN of another warehouse; 13-2 — an RMA of another warehouse)
+code 'rma-not-receivable'          → rejected, BY NAME (13-2 — the RMA was cancelled or fully received before replay)
+code 'returns-bin-conflict'        → rejected, BY NAME (13-2 — a user bin/zone named RETURNS; a web-side rename fixes it)
 anything else (incl. role-denied) → rejected
 non-ApiProblem throw       → rejected, code 'unknown'
 ```
@@ -203,6 +209,8 @@ non-ApiProblem throw       → rejected, code 'unknown'
 **Clients branch on the machine-readable `code`, never on prose** (AD-9). The problem `detail` is read only to *say* something useful — which bin moved on, how much it holds now — never to decide anything.
 
 `settledNote` (`:56`) is the other half: a settled pick whose `conflictClass` is not `none` says the bin had changed, and a `short` line says where the remainder went (a re-planned stop, or that the order ships short). Without it a moved-on pick would read identically to an untouched one. **21-6b adds the `grn.submit` arm**, and it speaks **only** when the receipt settled partially — a clean receipt still says nothing: `{grnCode} recorded against {asnCode | "the purchase order"} — {n} line(s) booked without crediting the {ASN|PO}; {n} line(s) refused ({codes, deduplicated}) — not booked; {n} line(s) held for approval` (each part only when it applies; every count a line count; a malformed response yields no note). The snapshot is deliberately not passed in, so a PO is named generically. For a refused line this note is its only record (PENDING).
+
+**13-2 adds the `return.receive` arm (`returnReceiptNote`).** A `201` is a SETTLED op even when entries were refused — the server already put them in the review queue (one server-raised row), so it is **not** "Held for review" (that glyph stays reserved for quarantined replays). When entries were refused the summary carries a retraction line, e.g. `RRN-0003 — 2 unit(s) not booked (more than authorized, not on the return) — sent to review` (reasons in words, `RETURN_REFUSAL_WORDS`); a settled `return.receive` triggers a snapshot refresh (`settledOpStalesOpenReturns`) (units summed from the op's own payload; reasons de-duplicated in first-seen order; `Return receipt — …` when nothing applied and `code` is null). A whole-op refusal (`rma-not-receivable`, `document-warehouse-mismatch`, `returns-bin-conflict`) drops the op and the sync report uploads its full payload to the review queue (Discard only).
 
 ---
 
