@@ -393,6 +393,10 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 
 ---
 
+**The api shell's composition beside it (not this facade).** `ReceivingController.getCatalogSnapshot` adds the task arms from other modules as separate, sequential facade calls — `pickTasks`, `packTasks` + `handlingUnits` (outbound), `transferTasks`, `countTasks` (movements) and, **story 13-2, `openReturns` (`ReturnsFacade.getOpenReturns`)** — each in its own transaction, never nested in this one. 13-2 **grew the fan-out** again (one more transaction, and a per-RMA ledger read for RMAs with batch- or serial-tracked lines); the "not single-tx, unbounded fan-out" PENDING item is updated, not closed. The `CatalogOpenReturn*Dto` classes are declared in `receiving.dto.ts` (only the api shell may import the returns module).
+
+**13-2 also moved the `grn.submit` device and role guard** into tenancy (`assertDeviceOperatorInTx`, `device-operator.ts`) — the body is unchanged and `submitGoodsReceipt` calls it; the returns receipt runs the same guard.
+
 ## Invariants
 
 | Invariant | Enforced by |

@@ -84,6 +84,16 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 `sku_id` · `serial_number` (`unique (tenant, sku, serial_number)`) · `status` (`serials_status_check`).
 **No location column, by design** — a serial's location is derived from its latest `ledger_events` row via the `(tenant_id, serial_ref, seq)` index. The ledger is the only source of serial location and history.
 
+### `handling_units` (10.3; return provenance 13-2)
+
+One physical unit (a case) of a catch-weight SKU: `warehouse_id`, `sku_id`, `batch_id`, `weight_grams` (integer grams, captured once), `status`, `packed_order_line_id`. Written ONLY through `handling-unit.store.ts` (the `CatalogFacade` seam — `createHandlingUnits`, `settleHandlingUnitIntake`, `markHandlingUnitsAdjusted`, `markHandlingUnitsPacked`, `lockHandlingUnits`; 13-2 adds the unlocked read `handlingUnitsByIdsInTx`).
+
+**Story 13-2 (0073) — provenance and `returned`:**
+- `grn_line_id` became **nullable** and `return_receipt_line_id` was added; CHECK `handling_units_provenance` — exactly one of the two is set. `CreateHandlingUnitInput` is a union: a GRN line with status `active | pending_approval`, or a return-receipt line with status `returned` (a compile-time pairing; the CHECK is the backstop). `HandlingUnitIdentity` carries both (`grnLineId: string | null`).
+- `HANDLING_UNIT_STATUSES` gains **`returned`** (the CHECK widened by DROP and re-ADD; pinned by `test/catch-weight.spec.ts`): a case a customer returned, booked into RETURNS and awaiting disposition. **Not packable** — pack admits only `active` and the snapshot's `handlingUnits` lists only `active`, so a returned case cannot ship on another order. 13-3 changes the status when it restocks or scraps. `countLiveHandlingUnitsInTx` counts `returned` as live (it backs RETURNS on-hand), so the catch-weight flag cannot be flipped under it.
+- No link from a returned case to the original case it was shipped as (PENDING).
+- `SkuFacts` (`skuFactsInTx`) gained `batchTracked` for the receipt's batch binding.
+
 ### `catalog_imports`
 `mode` text NOT NULL (`initial \| fix`) · `committed_rows` / `failed_rows` / `skipped_rows` integer NOT NULL — **counts, not quantities**, deliberately unscaled · `client_id` uuid NOT NULL (21-2b, 0059 — the client the run imported for; backfilled to `self`).
 
