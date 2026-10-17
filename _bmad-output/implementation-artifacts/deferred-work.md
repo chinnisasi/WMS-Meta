@@ -848,3 +848,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-13-1-return-authorization.md`
   summary: `uuidv7()` is not monotonic across a sequence wrap — on wrap it bumps the local `now` but leaves `lastMs`, so the next same-millisecond id carries the earlier timestamp with seq 1 and sorts before the ids just issued.
   evidence: `src/shared/primitives/ids.ts:15-21` (verified at 13-1 code review). Any ordering by id within one millisecond can invert (about 5% of 200-row inserts when the random seq start is high). 13-1 orders its lines by an explicit `line_no` instead. Fix: on wrap, set `lastMs = now` after the bump (or loop until the clock moves).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-page-tabs.md`
+  summary: Arrow-key roving focus (and tabIndex=-1 on inactive tabs) for the shared page tab bar — Inbound, Outbound, Replenishment, Compliance, Settings — and the Conflicts tabs, per the WAI-ARIA tabs pattern.
+  evidence: `PageTabBar` (wms-fe `src/components/shared/page-tabs.tsx`) renders role=tablist/tab with every tab a separate Tab stop and no arrow-key handling; deferred explicitly by spec-inbound-tabs and spec-page-tabs, raised again in page-tabs code review (C11).
