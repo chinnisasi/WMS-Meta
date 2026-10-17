@@ -2,7 +2,7 @@
 title: 'Inventory screen — stock by location, batches and the ledger on /inventory'
 type: 'feature'
 created: '2026-10-17'
-status: 'in-progress'
+status: 'done'
 baseline_commit: '90196e6519a315904201f25442d22ae7ae343db6'  # wms-fe; wms-be baseline: 154a06c992f6c7f0998616965aeb43ece0b00963
 route: 'dispatch'
 review_loop_iteration: 0
@@ -208,3 +208,28 @@ Design review: one pass, 13 findings. The load-bearing ones were checked against
 | 11 | System-bin labelling decided twice | low | Always: label only when `binSystemOwned`; an unknown-code fallback; codes verified |
 | 12 | `nonZero` semantics; the `useStockScopes` cap | low | `quantity > 0` citing the CHECK; `useStockScopes` unchanged, its cap → PENDING; the existing tests named |
 | 13 | Test plan gaps: openapi export, the FE generate order, the BE file, matrix rows, wrapper pins | medium | A named test plan in Tasks & Acceptance |
+
+Code review: one pass over wms-be `154a06c..8ab7c2b` and wms-fe `90196e6..95d0d39`, with three layers (blind hunter 13, edge-case hunter 7, verification gap 3 + 1 other). The patch round landed in wms-be `fa0c4f6` and wms-fe `480363d`, then was re-verified: BE 86 suites / 2042 tests, and lint and typecheck clean; FE 1646/0, typecheck, lint and build clean. Live check against the dev database: Bengaluru DC returns D-01-01 297 and D-01-02 148, storage bins first and system bins last, with no zero rows.
+
+| # | Finding | Verdict | Disposition |
+|---|---|---|---|
+| R1 | The SKU-search total reads "Loading every bin…" forever after a later page fails (blind + edge) | medium | **patch.** "Total unavailable — a page failed to load" |
+| R2 | Every batch-detail failure is headed "Batch not found" (blind + edge) | medium | **patch.** "Batch unavailable" unless not-found; a 500 test; the 404 test asserts the full sentence (VG2) |
+| R3 | The SKU walk has no page cap (blind + edge) | medium | **patch.** A 50-page cap; "too many bins to total here"; a test with an endless cursor |
+| R4 | Retry after a failed Load more restarts from page one | low | **reject.** The spec chose it (Always: Retry resets the cursor and rows together, reload epoch) |
+| R5 | Rows within a bin are ordered by SKU id, not code | low | **reject.** The spec's order `(sys, bin code, sku_id, id)`; a SKU-code tiebreak needs a catalog join, not worth it |
+| R6 | The rows lose SKU labels when the SKU map fails or is truncated | low | **reject.** The failed map is already named in the search note; truncation is in PENDING |
+| R7 | The Batches tab shows "—" bins silently when the bin map fails (blind + edge) | medium | **patch.** "Bin codes not loaded" + Retry; a loading note; a test |
+| R8 | The batch status shows the raw enum | low | **patch.** `batchStatusLabel` (active / blocked), raw fallback |
+| R9 | BE assertions without error codes; untested `nonZero=false` | low | **patch.** Codes asserted; `nonZero=false` behaves like absent |
+| R10 | The full-precision cursor test mutates shared rows and depends on test order | medium | **patch.** Timestamps restored in `finally`; the expected count from a direct query |
+| R11 | `decodeCursorSafe` duplicates the invalid-cursor strings | low | **patch.** It uses `invalidCursor()` |
+| R12 | `reasonOf` kept out of the effect deps by an eslint-disable | low | **patch.** Held in a ref, disable removed |
+| R13 | Old millisecond cursors still skip a tie tail once | low | **reject.** Cursors are transient; the only other caller drains pages in one pass |
+| R14 | Edge: the footer total sits under Client when the client column shows | medium | **patch.** The label spans `columns.length − 1`; a test with clients |
+| R15 | Edge: the zone reads are one unbounded `Promise.all` | low | **reject.** The same pattern as the existing `useBinCodeMap`; zones per warehouse are few |
+| R16 | Edge: a case-insensitive match can silently pick one of `abc`/`ABC` | low | **patch.** An ambiguous result, "More than one SKU matches X — type the exact code" (bins too) |
+| R17 | VG: `order=location` + `skuId` has no backend test (dropping the filter passes everything) | medium | **patch.** A walk test over every SKU bin; proved to fail without the filter |
+| R18 | VG: the bin-map failure path is never exercised on the screen | medium | **patch.** A bins-500 test: note, Retry bin codes, a SKU search still sends `skuId` |
+| R19 | VG other: a stale "placeholder" comment in the overview test | low | **patch.** Reworded |
+
