@@ -336,3 +336,45 @@ context:
 | D23 | Credential renewal contract and failure rules unstated (`api.ts:108-114`) (handheld) | medium | `deviceToken` fields; old credential stays valid; write before session; never fail badge-in |
 | D24 | `last_used_at` write amplification; two clocks (sec) | low | Conditional update; DB `now()` only |
 | D25 | No purge of session rows; hand-minted tokens break in 5 suites and the runbook; "shared problem-code map" does not exist; client suspend needs a seam; PENDING :142/:148 also close (web) | low | Purge job; `mintSessionToken` helper; per-form maps; `revokeSessionsInTx`; PENDING rows listed |
+
+### Code review — 2026-10-18 (blind hunter 10, verification-gap 8 + 3, edge-case hunter 21; 42 raw)
+
+| # | Finding (layer) | Verdict | Route / disposition |
+|---|---|---|---|
+| C1 | Sign-out by cookie revokes on the `sid` alone, never checking the secret; the sid is readable from any access token (blind, edge ×2) | **high** — `signOut` called `revokeSessionsInTx` straight from `parseRefreshCookie` | patch: `refreshSecretMatchesInTx` under the tenant tx; a non-matching cookie falls through to the bearer path; test "right sid, wrong secret ends nothing" |
+| C2 | `parseRefreshCookie` accepts a non-UUID 36-char sid → `uuid` cast 22P02 → 500 (blind, edge) | medium | patch: `isUuid`; test (401 / 204, never 500) |
+| C3 | Refusals that are not wrong credentials count toward the lock: badge-in `!bound` / deactivated / role-denied after a right PIN; sign-in `invite-pending` / `client-suspended` after the right password (blind, gap-other ×2, edge ×2) | medium | patch: badge-in returns `pinOk` and only a wrong PIN settles (a right one clears); sign-in clears on both refusals; tests |
+| C4 | The handheld drops the server's usual end-of-shift reason `expired` (badge `exp` == session end) (blind, edge) | medium | patch: `expired` added to `SESSION_END_REASONS` with the shift-ended words; test |
+| C5 | "12 hours" copy shown to portal users, whose sessions last 7 days (blind, edge) | low | patch: neutral wording on /login and the `absolute` notice |
+| C6 | The token-expired retry's own 401 bypasses the handler — UI stays signed in on a dead session (blind, edge) | medium | patch: `signOutFrom(retried)`; test |
+| C7 | Every request is cloned (large uploads) (blind) | low | rejected: bounded by the request itself, freed with it; no user-visible harm |
+| C8 | `TRUSTED_PROXY_HOPS` unvalidated / defaults 0 behind a load balancer (one shared address — A3's per-IP promise collapses) (blind) | medium (deploy) | defer to 6.2 (deploy config must set it; boot warning) — deferred-work |
+| C9 | `::ffff:a.b.c.d` and `a.b.c.d` key separately (blind) | low | patch: normalised in `clientIpOf`; test |
+| C10 | No per-email cap across many addresses (blind) | false | A3 (user-confirmed) deliberately keys on (email, IP) so an attacker cannot lock an owner out of their own network |
+| C11 | Security events not audited: refresh-reuse revocation, locks, sign-out, badge-out, CLI unlock (blind) | medium | **follow-up (not patched)**: adds audit vocabulary with a system actor — reported to the user; deferred-work entry |
+| C12 | Purge worker, `auth:unlock`, per-device 429, hops=0, vocabulary direction, two migration probe arms untested (blind) | low–medium | patch: purge-worker test (two tenants, live kept), `unlockSignIn` test, `clientIpOf` test, two-way vocabulary pin, the two probes added to 0074. The per-device 429 claim is **false** (asserted in "badge-in limit is per device") |
+| C13 | Pure-JS scrypt (N=2^14, r=8) on the JS thread at every online badge-in, unmeasured on a low-end handheld (blind) | maybe-false (medium if true) | defer: measure on a device; lower N or move off-thread if > ~300 ms |
+| C14 | Changing the device clock resets the offline PIN lock (blind) | low | rejected: needs a monotonic source the platform does not give offline; the sealed verifier + scrypt still bound the guess rate |
+| C15 | `.env.example` ships `COOKIE_SECURE=false` (blind) | low | patch: commented out (Chrome/Firefox accept Secure on localhost) |
+| C16 | Extra transaction per guarded request, no load test (blind) | low | rejected: recorded in PENDING (design note); one indexed read |
+| V1 | Expired-bearer sign-out tested with a fresh token (gap) | gap | patch: test mints an expired bearer |
+| V2 | Refresh / sign-out / sign-in request shape (`credentials`, `X-WMS-Session`) never asserted (gap) | gap | patch: assertions in `session-refresh.test.ts` |
+| V3 | Portal refresh never exercised (gap) | gap | patch: portal sign-in → refresh → portal route |
+| V4 | `AnySessionGuard`'s session re-read untested (gap) | gap | patch: signed-out web token and released badge token on the excursion route |
+| V5 | Purge worker untested (gap) | gap | patch (C12) |
+| V6 | Store-level A4 wiring and the `X-Op-Operator` header untested (gap) | gap | patch: store replay test, `op-dispatch` and `api` wire tests |
+| V7 | A successful badge-in resetting the PIN count unverified (gap) | gap | patch: 4 wrong / 1 right / 4 wrong never locks |
+| V8 | `clientIpOf` untested (gap) | gap | patch (C9) |
+| V9 | Test title "30 operators … on 30 devices" overstates (gap-other) | low | patch: renamed |
+| E1 | After a natural 12 h end the binding persists — the next shift is refused until a supervisor releases (edge ×2) | medium | patch: a binding with no LIVE badge session is free (`hasLiveBadgeSessionInTx`); A4 holds the old queue on the device; test |
+| E2 | Mobile badge-out swallows a server failure — the server binding stays (edge) | medium | patch: unreachable → stay badged in with a message; a 401 badges out; test |
+| E3 | A stale-secret refresh's 401 clears the jar's NEWEST cookie (edge) | medium | patch: only `session-ended` clears the cookie; test |
+| E4 | `?ended=constructor` reads an `Object.prototype` member → render throws (edge) | low | patch: `Object.hasOwn`; test |
+| E5 | A garbled 200 refresh makes `refreshAccessToken` reject (edge) | low | patch: guarded parse; test |
+| E6 | Release/unlock response has `operatorEmail` null (edge) | low | rejected: the card reloads the list after every action; the response feeds only the banner, which uses the label |
+| E7 | Release/unlock accepted on a revoked device (edge) | low | rejected: the card hides both on a revoked device; the write is harmless and audited |
+| E8 | Refresh in the session's last second mints an expired token (edge) | low | patch: `absoluteInSeconds <= 0` → `session-ended absolute` |
+| E9 | One tenant's purge failure skips the counter purge (edge) | low | patch: independent try blocks |
+| E10 | Cookie path fixed at `/api/v1` though the API base is configurable (edge) | maybe-false (medium in a prefixed deploy) | defer to 6.2: derive from the deploy's public path if the API sits behind a path prefix |
+| E11 | A role change revokes web sessions only; the badge session keeps the old role (edge) | false | every device command re-reads the role per request (`assertDeviceOperatorInTx`); the badge token carries no role |
+| E12 | Ops with no creator id (older builds / no session) still replay under the next operator (edge) | low | rejected: the decided legacy arm (an absent header is accepted for builds before 6-1a); every 6-1a enqueue stamps the creator |

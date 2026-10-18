@@ -864,3 +864,13 @@
 - source_spec: none
   summary: Password reset — emailed reset link with forgot-password screens on the web and portal, and an owner-initiated operator PIN reset from the web.
   evidence: Split from 6-1-auth-hardening on 2026-10-18; blocked on roadmap 5.1 (no mailer exists in wms-be).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
+  summary: Security events are not audited — refresh-reuse revocation (the token-theft signal), sign-in / badge-in locks, web sign-out, badge-out and the `auth:unlock` CLI leave no audit row, so an owner cannot see an attack or a hijack.
+  evidence: 6-1a code review C11. Only the owner/supervisor actions (deactivate, reactivate, unlock, release) are audited. Needs a system-actor audit vocabulary (`session.reuse_detected`, `auth.locked`, …) and the AUDIT_NEW_ACTIONS pins.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
+  summary: Deploy (6.2) must set `TRUSTED_PROXY_HOPS` to the real proxy depth and warn at boot when it is unset behind a proxy — with 0 every sign-in shares the load balancer's address, so the (email, IP) lock and the 300/min per-IP limit apply site-wide.
+  evidence: 6-1a code review C8 (`auth-attempts.ts clientIpOf`). Also: the refresh cookie path is fixed at `/api/v1/tenants/session` (E10) — a deploy that puts the API behind a path prefix must derive it.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
+  summary: Measure the handheld's offline PIN verifier cost (pure-JS scrypt N=2^14, r=8, run on the JS thread at every online badge-in) on a low-end device; lower N or move it off-thread if it exceeds ~300 ms.
+  evidence: 6-1a code review C13, unverified — no on-device timing exists.
