@@ -852,3 +852,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-page-tabs.md`
   summary: Arrow-key roving focus (and tabIndex=-1 on inactive tabs) for the shared page tab bar — Inbound, Outbound, Replenishment, Compliance, Settings — and the Conflicts tabs, per the WAI-ARIA tabs pattern.
   evidence: `PageTabBar` (wms-fe `src/components/shared/page-tabs.tsx`) renders role=tablist/tab with every tab a separate Tab stop and no arrow-key handling; deferred explicitly by spec-inbound-tabs and spec-page-tabs, raised again in page-tabs code review (C11).
+
+- source_spec: none
+  summary: Purchase-order import from a CSV or Excel file, reusing the ASN import machinery (WMS-BE #99 sheet reader, grouping, per-group savepoints; WMS-FE #84 Import from file).
+  evidence: Split from po-create-and-import on 2026-10-18 at the user's choice — the web PO create form ships first, and its vendor/SKU/quantity rules become the import's rules.
