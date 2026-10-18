@@ -2,7 +2,8 @@
 title: '6.1b Owner two-factor sign-in — authenticator-app codes and backup codes on the web'
 type: 'feature'
 created: '2026-10-18'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'c13ceb613f6e4fdfc328b984eeb6fb2f11913085'  # wms-be; wms-fe: 448eec99dfbdc9273cbd17fb1ad05bd38423f858 (branches feat/6-1b-owner-two-factor-sign-in)
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -294,7 +295,7 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] wms-be, in order:
+- [x] wms-be, in order:
   1. 0075 and the schema.
   2. `second-factor-secrets.ts` and the boot check.
   3. `second-factor.ts`, with the RFC vectors.
@@ -308,7 +309,7 @@ context:
   11. The scripts.
   12. `second-factor.spec.ts`.
   13. The OpenAPI export.
-- [ ] wms-fe, in order:
+- [x] wms-fe, in order:
   1. Regenerate the client.
   2. `lib/second-factor.ts`, the interceptor and `writeSession` guards.
   3. The login two-step and `BackupCodesPanel`.
@@ -316,8 +317,8 @@ context:
   5. The Team card.
   6. Notices.
   7. Tests.
-- [ ] wms-mobile: no change (decision 4).
-- [ ] meta: the Code Map docs.
+- [x] wms-mobile: no change (decision 4).
+- [x] meta: the Code Map docs.
 
 **Acceptance Criteria:**
 - Given an owner, when only the right password has been given, then no `sessions` row exists for them until a valid code is accepted.
@@ -353,7 +354,35 @@ context:
   - Lock with five wrong codes, then Unlock.
   - With an old bundle tab open, sign in: "Reload this page".
 
+## Implementation Notes
+
+**How it was built.** Implemented directly against this spec (wms-be `feat/6-1b-owner-two-factor-sign-in`: three commits; wms-fe: one commit; meta docs uncommitted for the review pass). Nothing pushed.
+
+**wms-be.** Migration `0075_second_factor.sql` (generated, hand-amended below the marker: the pairing/counter CHECKs, the challenge CHECKs, RLS on both tables, the revoke-reason CHECK re-added, a post-migration probe with accepted and refused shapes; `db:generate` reports no changes). `second-factor-secrets.ts` (the only `MFA_ENCRYPTION_KEY` reader; GCM + AAD + key id; HKDF pepper; `assertSecondFactorKeyConfigured`, called by `main.ts` before `createApp`). `second-factor.ts` (TOTP/base32 on `node:crypto`, backup codes, the challenge store, `verifySecondFactorInput` + `commitSecondFactorInTx`, the escalating lock, the purge block). `second-factor.command.ts` (the sign-in step, Security, the reset, `resetSecondFactorInTx` shared with the CLI). `sign-in.command.ts` branches after `clearSignInAttempts` and exports `issueWebSessionInTx`. `users.command.ts`: unlock clears the 2FA lock in its transaction; deactivation and a role change clear open challenges; the list adds `secondFactorEnabled` and the later lock. Scripts: `auth-reset-2fa.ts`, `auth-unlock.ts` (2FA lock in a tenant transaction), `scripts/lib/two-step-sign-in.ts` for `seed-demo` (prints the owner's URI and backup codes) and the three load tests.
+- **Tests:** `test/second-factor.spec.ts` (36 — the RFC 6238 vectors for SHA-1/256/512, AAD and key-id rotation, the boot check, the vocabulary pin and CHECK refusals, `wms_rls_probe` on both tables and the `users` writes, every matrix row, the six `expectAuditRow` pins, the reset race via `raceTwice`/`waitParked`, the CLI run as a subprocess, the no-leak scan, the purge, the OpenAPI paths and `oneOf`). `test/support/sign-in.ts` (`mintSessionToken`, `mintSignIn`, `signInAs`); a codemod moved 149 `…/sign-in` chains in 69 suites to `mintSignIn`; sign-in-under-test cases were retargeted explicitly (`tenancy.spec`, `users.spec`, `sessions.spec`, `portal.spec` — the portal one now pins that the portal needs no header and answers the 6-1a body). Architecture pins: the key's one reader, tenancy's envelope importers, `main.ts` runs the check. `MFA_ENCRYPTION_KEY` for the suites comes from a jest setup file. Mutation-checked: deleting the reset's second replay fails the race test (409); undoing the tx1 count fails the "ALREADY COMMITTED" test.
+- **Decisions taken in implementation:**
+  - **An expired enrolment code still blocks enrolment** (required whenever `mfa_enrol_code_hash` is set; an expired one never matches) — the literal "when the user holds one (unexpired)" would let anyone enrol freely 72 h after a reset. The owner resets again. Recorded in PENDING.
+  - **The reset's no-op arm** is "no `mfa_enabled_at` AND no enrolment code at all" (an expired code is re-issued); its answer is `{enrolmentCode: null, enrolmentCodeExpiresAt: null}` (`AUDIT_NO_OP_ARMS` `users.resetSecondFactor:not-enrolled`).
+  - **The reset's audit row** is written with `tx.insert(auditEvents)` (the static audit-rule scan needs the reference in the command file); its action string is typed against `SecurityAuditAction`.
+  - **Lock mechanics:** the 5th wrong code sets the lock after the check, in its own short transaction (and resets `mfa_failures`, so each cycle allows five); tx1 also locks as a backstop if a count is already at the limit. A permanent lock reads `9999-12-31T23:59:59.999Z` in `lockedUntil` and `retryAfterSeconds: null` in the 423.
+  - **New refusal codes beyond the spec's list** (each worded on the web): `second-factor-not-enabled`, `second-factor-setup-expired`, `second-factor-changed` (409 on Security when the factor moved between tx1 and tx2 — a 401 there would sign the web user out).
+  - **The purge block** does not add to `SessionPurgeWorker.tick`'s returned count (6-1a's test pins it as sessions purged).
+  - **Self-service rate limit** shares the sign-in IP limit (300/min) under its own bucket.
+- **Verification:** `bun run test` (91 suites), `lint`, `typecheck`, `db:migrate` + `db:generate` (no changes), `openapi:export`.
+
+**wms-fe.** Client regenerated. `lib/second-factor.ts` (narrowing by the presence of `challenge`, `secondFactorReason`, input normalisation, copy), `lib/use-second-factor.ts`; `isSessionRoute` gains `sign-in/second-factor`; `fetchApiSignIn` sends `X-WMS-Second-Factor: 1` and returns the union; new wrappers for the second step, Security and the reset; `writeSession` refuses a non-session body (returns `boolean`). `LoginForm` two-step (`second-factor-steps.tsx`), `qr-code.tsx` (`qrcode` 1.5.4 pinned, `@types/qrcode` 1.5.6, `import()` only), `backup-codes-panel.tsx`; the `?ended=` notice moved into the form so step two can hide it. `/account/security` (`security-view.tsx`) linked beside both Sign out mounts. Team card: chip, Reset 2FA, the enrolment code once. Notices for the two new reasons.
+- **Tests:** `lib/second-factor.test.ts` (17), `auth-forms.test.tsx` (+9: header, in-place switch, attributes, backup code, `challenge-ended`, the held session until "I've saved", the enrolment code field, failed attempts, reload), `components/account/account-security.test.tsx` (8, incl. a 422 keeping the session and the portal redirect pin in the lib test), `client.test.ts` (a second-step 401 never clears a session).
+- **Verification:** `bun test` (1724 pass), `typecheck`, `lint`, `build`, `check:capability-mirror`. The `generated-client` drift job stays red until the backend merges (expected).
+
+**Not done / left for review:** no live manual run with a real authenticator app (the spec's manual checks); `bun run loadtest:smoke` not run locally.
+
 ## Spec Change Log
+
+### 2026-10-18 — code review: reset follow-through (user chose "patch in place" over a full loopback)
+- **Trigger:** code review E1/E2/E13 + verification-gap "other" — a reset of a non-owner never asks for the enrolment code (sign-in challenges only enrolled or required users, `sign-in.command.ts:254`); an expired enrolment code never matches, so the owner burns attempts toward the permanent lock; the Team card offers Reset only when `secondFactorEnabled`, so a lost or expired code can be re-issued only by the CLI.
+- **Amended (outside the frozen block):** (a) sign-in issues the `enroll` challenge to any staff user holding an enrolment code, not only owners — a reset user re-enrols with the code; (b) an expired enrolment code answers the password step with 403 `enrolment-code-expired` ("Ask an owner to reset your two-factor sign-in again") — no challenge, nothing counted; (c) the user list DTO gains optional `secondFactorResetPending`, and the Team card offers Reset when `secondFactorEnabled === true || secondFactorResetPending === true`.
+- **Known-bad state avoided:** a reset user locked out with no web recovery; an orphaned enrolment code for staff.
+- **KEEP:** everything else in the implementation — the verifier's commit-first order, the reset's guard order and race test, the key handling, the test-helper migration, the web two-step.
 
 ## Review Triage Log
 
@@ -390,3 +419,34 @@ context:
 | R27 | Code Map line refs: `SecurityAuditAction` `:70`; me path style; `SESSION_END_DETAIL`; envelope importer pin; `seal` default key; role subscription at `users-card.tsx:85` (data, web) | low | Corrected |
 | — | Challenge token entropy, constant-time comparison, IP binding (sec) | low | `newSecret()`; constant-time; not bound, IP audited |
 | — | Unkeyed self-service routes (data) | false | Sound: no guard requires keys, and the audit rule covers keyed commands only; the lost-response recovery is stated |
+
+### Code review — 2026-10-18 (blind hunter 14, edge-case hunter 13, verification-gap 3 + 2, orchestrator 1; 33 raw)
+
+| # | Finding (layer) | Verdict | Route / disposition |
+|---|---|---|---|
+| C1 | Deadlock: tx1 locks the challenge then updates the user; tx2 locks the user then the challenge — a duplicate verify overlapping another's tx2 aborts with 40P01 → 500 (orchestrator) | high — `second-factor.ts:521-608` vs `:688-701`; the concurrency test's timing never overlaps | patch: tx1 locks the user `FOR UPDATE` first, then the challenge (one order everywhere) |
+| C2 | Reset follow-through: non-owner reset never asks for the code; expired code is a dead end toward the hard lock; Team card cannot re-reset (edge ×3, gap-other) | high | user chose patch in place — Spec Change Log 2026-10-18 |
+| C3 | A reuse caught at commit (step spent, backup code spent) counts but never sets the lock, and answers `attemptsLeft: 0` (blind, edge) | medium — `commitSecondFactorInTx` throws after tx1's count with no `settleFailure` | patch: settle the lock after the rollback and report the real attempts left |
+| C4 | An undecryptable secret (key lost / rotated away) reads as a wrong code and walks the user into the permanent lock, unlogged (blind) | medium — `verifySecondFactorInput` catch → `secret = null` | patch: open the secret before counting; failure logs and answers 503 `second-factor-unavailable`, nothing counted |
+| C5 | Reset and disable leave `mfa_failed_since_success`, so the first sign-in after re-enrolment reports stale failures (edge, blind, gap-other) | low — direct correction | patch |
+| C6 | `setup`'s password path decides "2FA off" outside the lock; a concurrent confirm lets a password replace an active factor (blind) | medium | patch: re-check `mfa_enabled_at IS NULL` under the lock, else 409 `second-factor-changed` |
+| C7 | Web stores `expiresAt`/`refreshUntil` from Continue time, not arrival (edge, blind) | low — direct correction | patch |
+| C8 | `auth:reset-2fa` has no no-op arm, resets portal users, audits every run (blind, edge) | medium | patch: no-op when nothing to reset (no audit); refuse `client` users |
+| C9 | `:` in a tenant name or email breaks the otpauth label (edge) | low — direct | patch |
+| C10 | `MFA_ENCRYPTION_KEY_PREVIOUS` set but short is silently ignored → old secrets unreadable (edge) | medium | patch: boot refuses it, like the main key |
+| C11 | `auth:unlock` prints "no lock to clear" after clearing a 2FA lock (edge) | low — direct | patch |
+| C12 | A wrong enrolment code reads as a wrong authenticator code, so users retype the TOTP and burn attempts (edge) | low — copy only | patch: the detail names both codes on an enroll challenge that needs one |
+| V1 | Open challenges ending on a role change / deactivate→reactivate untested; `:534` never opens a challenge (gap) | gap | patch: rewrite `:534`; add the reactivate case |
+| V2 | Expired enrolment code never tested (gap) | gap | patch (covered with C2's 403) |
+| V3 | `auth:unlock` clearing the 2FA lock never run (gap) | gap | patch: spawn test beside `auth:reset-2fa`'s |
+| B1 | Anyone with the password sees the pending secret during an owner's first enrolment (blind) | false — decision 5 accepts first enrolment on the password (today's sign-in is password-only); the pending-secret reuse is R8 | reject |
+| B2 | Deploy-day trust on first use; 6-1a sessions not ended (blind) | false — decision 5; spec states pre-deploy sessions run to their end | reject |
+| B3 | A phone clock ahead (t+1) spends the next step (blind) | low — inherent to the RFC window | reject |
+| B4 | No re-seal on rotation; no count of rows on the old key (blind) | medium | defer — already recorded in PENDING by the implementation |
+| B5 | Enrolment code plaintext in the reset snapshot; 40-bit unsalted hash; stale replay (blind) | false/low — the snapshot is the frozen invite-token precedent; the code is 72 h and useless without the password | reject |
+| B6 | Security's password typos share the sign-in counters (blind) | false — the spec says "counts on `signin_attempts` (email, IP), as at sign-in" | reject |
+| B7 | 409 `client-outdated` still clears the attempt counter (blind) | low — the password was right, and a right password resets the count | reject |
+| B8 | No step-up for reset/unlock; no out-of-band notice of 2FA events (blind) | medium | defer — notices need the mailer (5.1); step-up is its own story (a stolen owner session already holds every owner power) |
+| B9 | Anyone with the password can hard-lock an owner (blind) | false — the designed trade (Design Notes "Why escalate", R4) | reject |
+| B10 | ~70 suites no longer exercise HTTP sign-in (blind) | false — R15's design; sign-in itself is covered by the sign-in suites | reject |
+| E3 | A non-owner disabling between the outer read and the lock gets an enroll challenge (edge) | low — needs the user's own concurrent disable; fix adds a branch | reject |

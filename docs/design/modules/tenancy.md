@@ -22,6 +22,8 @@ This module is the spine every other module calls into. `assertPermission` + `ge
 | `audit_events` (`schema.ts:104`) | Append-only actor/action/target trail; `reference` carries the idempotency key | No update or delete code path exists anywhere. **Shared with every module that has a keyed command** — it is the one table this module owns that siblings write; since 9-3a every keyed command writes a row (`IMPLEMENTATION-GUIDE.md` §1 step 10), and reporting reads it (the audit trail, its third read-only exception) |
 | `audit_exports` (9-3b) | One row per requested export of the audit trail: `requested_by`, `filters` jsonb (the validated body, absent keys omitted, instants canonical UTC), `snapshot_at` (= `created_at`), `status`, `attempts`, `started_at`/`heartbeat_at`/`finished_at`/`expires_at`, `row_count`/`byte_size`/`sha256`, `failure_reason` | Written only by this module (`test/architecture.spec.ts` "the audit exports are tenancy-owned"). CHECKs only in migration `0070`: status/reason vocabularies, `attempts >= 0`, a hex `sha256`, and the **per-status shape** (§The async audit export). Partial unique `audit_exports_active_unique (tenant_id, requested_by) WHERE status IN ('queued','running')` — one active export per member. No FK |
 | `audit_export_files` (9-3b) | An export's gzipped CSV bytes (`bytea`), keyed by `export_id` | A table of its own so a list never reads bytes; written and removed only through the `AuditExportStore` port's Postgres implementation. No FK — expiry removes the file explicitly |
+| `sign_in_challenges` (6-1b, migration `0075`) | The pending second step of a web sign-in: `user_id`, `purpose` (`totp`\|`enroll`), `secret_hash` (sha256 of the token's secret), `enabled_at_seen` (the user's `mfa_enabled_at` when a `totp` challenge was issued), `failures`, `ip`, `expires_at`, `consumed_at` | CHECKs only in `0075`: the purpose vocabulary, `failures BETWEEN 0 AND 5`, `expires_at > created_at`, `(purpose = 'totp') = (enabled_at_seen IS NOT NULL)`. Indexes `(expires_at)` (the purge) and `(tenant_id, user_id) WHERE consumed_at IS NULL`. RLS. Looked up by id on `AUTH_DATABASE` (the `sessionTenantOf` shape); every write in the tenant's transaction |
+| `user_backup_codes` (6-1b, `0075`) | Single-use backup codes: `user_id`, `code_hash` (HMAC-SHA256 under a pepper derived from `MFA_ENCRYPTION_KEY`, HKDF info `backup-codes`, over `user_id ‖ code`), `used_at` | Unique `(user_id, code_hash)`; index `(user_id) WHERE used_at IS NULL`. A set of ten is replaced whole, never appended to. RLS |
 | `idempotency_keys` (`schema.ts:238`) | AD-5 storage: `(tenant_id, key)` unique + payload hash + response snapshot | Also written by every other module. Extra `idempotency_keys_key_idx` exists solely for registration's key-only replay lookup |
 
 Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy declared **only** in migration SQL (`drizzle/0001_greedy_scarecrow.sql:55-70`).
@@ -48,6 +50,12 @@ Every table carries `tenant_id` with a fail-closed `tenant_isolation` RLS policy
 | `status` | text | NO | `'active'` | **NO CHECK — app-layer only** | `invited \| active`, enforced solely by `USER_STATUSES` (`schema.ts:66`). One of the unguarded vocabularies the docs flag elsewhere |
 | `invite_token_hash` | text | **YES** | — | — | **sha256 of the one-time token.** The raw value is returned once and also persists in the idempotency snapshot so a replay re-serves it |
 | `invite_expires_at` | timestamptz | **YES** | — | — | 7-day TTL |
+| `mfa_secret_sealed` / `mfa_enabled_at` (6-1b) | text / timestamptz | **YES** | — | `users_mfa_secret_pairing`: both or neither | The authenticator secret, sealed by `second-factor-secrets.ts` (AES-256-GCM, AAD `tenant_id:user_id`, key id in the blob) — never readable elsewhere |
+| `mfa_last_step` (6-1b) | bigint | **YES** | — | `users_mfa_counters_check` (≥ 0) | The last TOTP step accepted; a code is single-use, steps only move forward (a confirm sets it to its matched step unconditionally — a new secret starts its own sequence) |
+| `mfa_failures` / `mfa_lock_cycles` / `mfa_failed_since_success` (6-1b) | integer ×3 | NO | 0 | `users_mfa_counters_check` (≥ 0) | Consecutive wrong codes (5 → a lock); consecutive locks without a success (the 3rd is permanent); wrong codes since the last successful sign-in (reported, then zeroed) |
+| `mfa_locked_until` (6-1b) | timestamptz | **YES** | — | — | 15 min, or `'infinity'` on the 3rd cycle (only an owner's Unlock or `auth:unlock` clears it) |
+| `mfa_pending_secret_sealed` / `mfa_pending_created_at` (6-1b) | text / timestamptz | **YES** | — | `users_mfa_pending_pairing` | An enrolment in progress — reused for 24 h by the sign-in's enrolment step, so a second challenge shows the same QR code; purged after 24 h |
+| `mfa_enrol_code_hash` / `mfa_enrol_code_expires_at` (6-1b) | text / timestamptz | **YES** | — | `users_mfa_enrol_code_pairing` | sha256 of the one-time enrolment code an owner's reset (or the CLI) hands over; 72 h. Required at enrolment whenever present; once expired, the password step answers `403 enrolment-code-expired` (spec amendment 2026-10-18) |
 
 ### `warehouses` / `zones`
 `warehouses`: `code` (unique per tenant), `name`, plus the origin address columns (story 11-1, migration `0030`): `origin_contact_name`, `origin_phone`, `origin_line1`, `origin_line2`, `origin_city`, `origin_state`, `origin_pincode` — text ×7, all nullable, pre-11.1 rows read back `origin: null`. **Set at create only** (`origin` is required on `POST /warehouses`); there is no update endpoint — story 4-6d owns that decision. `pincode` is TEXT, `/^\d{6}$/`.
@@ -249,6 +257,8 @@ Not a state change; **no idempotency key**. Runs entirely on `AUTH_DATABASE` (cr
 3. `verifyPassword(password, user?.passwordHash ?? DUMMY_HASH)` — **always** one scrypt round `:77`.
 4. Unknown email and wrong password are one 401 `unauthenticated` with identical text.
 
+**6-1b — the branch after `clearSignInAttempts`:** a staff user (`client_id IS NULL`) with `mfa_enabled_at` set, any owner (`secondFactorRequired(role)`), or — amendment 2026-10-18 — any staff user holding a reset's enrolment code (an expired one → `403 enrolment-code-expired`, nothing written), gets a CHALLENGE instead of a session — `TotpChallengeResponse` (enrolled) or `EnrollChallengeResponse` (an owner not yet enrolled: the pending secret, reused for 24 h, its `otpauthUri`, `enrolmentCodeRequired`) — written in the user's tenant transaction under the user row's lock; no session row, no cookie. The caller must have sent `X-WMS-Second-Factor: 1`, else `409 client-outdated` and nothing is written. Everyone else (and every portal user) gets the 6-1a body unchanged, from `issueWebSessionInTx` (extracted so the second step issues the session in the transaction that consumes its challenge).
+
 Returns the token plus `user {id,email,role,status,clientId}` and (21-7) `client {id,code,name} | null`. The role in that body is **for FE surface gating only** — the command path re-reads it. **21-7:** a client user whose client is not `active` is refused 403 `client-suspended` AFTER the password check (a wrong password stays 401); its token carries `client_id`.
 
 ### `WarehouseCommand.create` / `ZoneCommand.create`
@@ -422,6 +432,45 @@ There is **no role claim** — that is the point; capabilities stay a per-comman
 
 Guards stay transport plus the session check; ownership of the path is still `assertOwnTenant(session, tenantId)` at each controller method — 403 `permission-denied`.
 
+### Second factor (story 6-1b — `second-factor.ts`, `second-factor-secrets.ts`, `second-factor.command.ts`)
+
+**What it is.** Web sign-in takes a second step for an enrolled user: a 6-digit RFC 6238 code (SHA-1, 30 s, 20-byte secret; steps t−1…t+1 accepted, each step once) from an authenticator app, or one of ten single-use backup codes. **Owners must use it** (decision 1: `secondFactorRequired(role)` is `role === 'owner'`); `ops_manager`, `operator` and `accountant` may opt in on My account → Security. **The portal and the handheld are untouched** (decision 4 — an owner's badge-in stays PIN + email, an accepted risk: the badge session is fenced off every web route). No SMS, email, WebAuthn or "remember this browser"; no second factor on refresh.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as Owner (web)
+  participant T as tenancy
+  participant PG as Postgres
+  U->>T: POST /sign-in {email,password} + X-WMS-Second-Factor: 1
+  T->>PG: 6-1a lockout + password (unchanged)
+  T->>PG: tenant tx: lock user → pending secret (reuse < 24 h) → INSERT sign_in_challenges
+  T-->>U: 200 {challenge: enroll|totp, challengeToken} — no session, no cookie
+  U->>T: POST /sign-in/second-factor {challengeToken, code, enrolmentCode?}
+  T->>PG: rate limit; tx1: challenge FOR UPDATE, validate, user lock?, COUNT (challenge + user), COMMIT
+  T->>T: check the code (no transaction open)
+  T->>PG: tx2: user FOR UPDATE → challenge FOR UPDATE → re-check → advance mfa_last_step | spend backup code → consume → reset counters → (enroll: activate, 10 backup codes, audit) → session
+  T-->>U: 200 session (+ backupCodes once, + secondFactorFailedAttempts) + refresh cookie
+```
+
+**The one verifier** (`verifySecondFactorInput` → `withCommittedFactor`/`commitSecondFactorInTx`), run by the sign-in step and every self-service route, in this order: the per-IP attempt limit → **tx1, committed before any check** (lock the USER row, then the challenge — tx2's order; the secret must open first, else `503 second-factor-unavailable`, logged, nothing counted; unknown / wrong secret / expired / consumed / 5 failures → `401 challenge-ended`; a live lock → `423 second-factor-locked`; increment `challenge.failures`, `users.mfa_failures`, `users.mfa_failed_since_success`) → check the code with no transaction open (a wrong code: `second-factor-invalid` with `attemptsLeft` — **401 at sign-in, 422 on Security**, where a 401 would sign the web user out) → **tx2, the caller's** (user `FOR UPDATE`, then the challenge; re-check unspent, `active`, and the factor tx1 read — `mfa_enabled_at = enabled_at_seen` for `totp`, `IS NULL` for `enroll`; advance `mfa_last_step` to the MATCHED step only if greater, 0 rows = a reuse, which rolls back and settles exactly like a wrong code (the 5th locks); or spend the backup code `WHERE used_at IS NULL`, audited `user.backup_code_used`; consume; reset the counters; then the route's work). Why count first: a count made in the transaction that refuses rolls back with the refusal (the `countBadgeInAttemptInTx` precedent); counting on a second connection under a lock drains the pool.
+
+**Lockout, escalating, per user** (whoever reaches the second step has the password, so it is not per IP): the 5th consecutive wrong code sets a 15-minute lock and increments `mfa_lock_cycles`, audited once as `user.second_factor_locked` (system actor, reference `ip:<address>`); the **3rd** cycle without a success sets `mfa_locked_until = 'infinity'`, which only an owner's Unlock (`clearSecondFactorLockInTx`, inside the existing `unlockUser` transaction) or `bun run auth:unlock` clears. The user list's `lockedUntil` is the later of the two locks (a permanent one reads `9999-12-31T23:59:59.999Z`). The successful sign-in reports `secondFactorFailedAttempts` (the web shows "N failed two-factor attempts since your last sign-in").
+
+**Enrolment.** At sign-in (an owner's first sign-in after the deploy, or after a promotion — no code needed, audited with the client IP) and on Security (`setup` → `confirm`). The **reset** by another owner (`POST …/users/{id}/second-factor/reset`, `users.role_change`, keyed `arm: 'second-factor-reset'`, skeleton order with the replay under the target lock, self → `409 self-reset`, nothing to reset → the named no-op arm `users.resetSecondFactor:not-enrolled`) clears the factor, the backup codes, the counters and the open challenges, ends the target's web sessions (`second-factor-reset`) and sets an 8-character enrolment code (sha256, 72 h) that the next enrolment needs; the response — and the stored snapshot, the invite-token precedent — carries the code. `bun run auth:reset-2fa <email>` does the same for the sole owner (audited, reference `cli`).
+
+**Self-service** (`/tenants/{t}/me/second-factor[/setup|/confirm|/backup-codes|/disable]`, staff web sessions only, the caller on themselves): unkeyed (the answers carry secrets or codes, never stored in `idempotency_keys`; a lost answer is recovered by regenerating); audit reference a fresh uuidv7 per call. `setup` needs the password when off (counted on `signin_attempts`, wrong → `422 password-invalid`) and a code when on. `confirm` sets `mfa_last_step` to the matched step unconditionally. Replace, regenerate and disable end the caller's OTHER web sessions (`second-factor-changed`). Disable for a required role → `409 second-factor-required`.
+
+**Clearing open challenges:** reset, disable, confirm, enrolment, deactivation and a role change delete the user's open challenges (`clearOpenChallengesInTx`).
+
+**Secrets.** `second-factor-secrets.ts` is the ONLY reader of `MFA_ENCRYPTION_KEY` / `_PREVIOUS` (architecture pin): AES-256-GCM with associated data `tenant_id:user_id` (a secret copied to another row will not open), a key id in the blob (`v1:<kid>:<iv>:<tag>:<ct>`) so the previous key still opens old blobs during a rotation, and the backup-code pepper (HKDF). It does its own GCM — `envelope.ts` (whose `seal`/`open` default to the device key) is untouched; tenancy's envelope importers stay `enrollment.command.ts`. **The API refuses to boot** without a key of ≥ 32 characters (`assertSecondFactorKeyConfigured`, called by `main.ts` before `createApp`).
+
+**Purge.** `SessionPurgeWorker.tick` has its own block (`purgeSecondFactorState`): tenants found on `AUTH_DATABASE`, a try/catch per tenant; challenges expired over a day ago are deleted and pending secrets older than 24 h cleared.
+
+**Security events** (both `SecurityAuditAction` and `AUDIT_NEW_ACTIONS`, each pinned by `expectAuditRow` in `test/second-factor.spec.ts`): `user.second_factor_enabled` (sign-in: `challenge:<id>@<ip>`; Security: a uuidv7), `user.second_factor_disabled`, `user.backup_codes_regenerated`, `user.backup_code_used` (`backup-code:<row id>`), `user.second_factor_locked` (`ip:<address>`), `user.second_factor_reset` (the key; the CLI: `cli`).
+
+**Tests.** A suite that needs a session but is not testing sign-in mints one (`test/support/sign-in.ts` `mintSessionToken` / `mintSignIn` — the same `createSessionInTx` + `signTenantSession`, no bypass in production code); a suite testing sign-in itself uses `signInAs`, which completes the challenge with the exported `totpAt`, using step max(now−1, last+1) and waiting for the clock when it has spent them. Scripts (the demo seed, the load tests) use `scripts/lib/two-step-sign-in.ts`; the seed prints the owner's `otpauthUri` and backup codes.
+
 ### Password and PIN handling (`passwords.ts`)
 
 `scrypt:<salt hex>:<key hex>`, 16-byte salt, 64-byte key, `timingSafeEqual` compare. The same primitive hashes account passwords **and** device badge PINs — a device never sees an account password.
@@ -556,6 +605,9 @@ sequenceDiagram
 | One account per email, system-wide | `users_email_unique` + the `AUTH_DATABASE` pre-check in invite |
 | An `invited` user cannot sign in | 403 `invite-pending` (`sign-in.command.ts:68`), and their `passwordHash` is `DUMMY_HASH` |
 | An invite/enrollment code is redeemable exactly once | The redemption UPDATE carries every validity condition; the partial unique index backs the code hash |
+| No web session exists for an owner (or an enrolled user) until a valid second factor (6-1b) | The sign-in branch issues a challenge, never `createSessionInTx`; the session is issued in the transaction that consumes the challenge |
+| A TOTP step is accepted once per user; a backup code once (6-1b) | `mfa_last_step` advanced only when greater (`… WHERE mfa_last_step IS NULL OR < $matched`); `used_at IS NULL` on the spend — both in tx2 under the user row lock |
+| A wrong second-factor code always counts (6-1b) | tx1 counts and COMMITS before the code is checked; pinned by `test/second-factor.spec.ts` ("ALREADY COMMITTED") |
 | A session cannot act on another tenant's path | `assertOwnTenant` at every controller method + RLS |
 | Bin retirement is terminal and code-reserving | `bins_retired_pairing` CHECK, `bin-retired` 409, no delete path, `(warehouse_id, code)` unique |
 | System bins are never blocked, merged or retired | `systemOwned` guards in `mergeBin` `:532-541`, `retireBin` `:820`, `bin-state.command.ts` |
@@ -597,7 +649,7 @@ Warehouse ownership is *not* an RLS dimension — RLS stays single-dimension and
 
 ~~**A badge-in token satisfies `TenantSessionGuard`.**~~ **Closed by 21-7** — `verifyTenantSession` refuses a token carrying `device_id` (401 on every web route). Pre-21-7 record: Both families are HS256 under the same `JWT_SECRET`, and `verifyTenantSession` checks only `sub`/`tenant_id`/`exp` — all of which a badge-in token carries. A floor operator's 30-day device session therefore also opens the web surface for its own tenant, with whatever capabilities that operator's role grants. Not exploitable across tenants (`assertOwnTenant` and RLS still hold) and not a privilege escalation (the role is re-read per command either way), but it does hand a 30-day credential to a surface designed around a 15-minute one, and revocation only bites on endpoints that re-resolve the device row — which the web endpoints do not. Not recorded in `../PENDING.md`; verify before relying on the 15-minute TTL as a control.
 
-**Known gaps** (`../PENDING.md` → tenancy): no role gate on the operator *binding* — any `active` user of the tenant with the device's PIN can become its bound operator (the role gate exists only on the commands themselves). The PIN lockout closed in 6-1a; 2FA (6.1b) and password reset (needs email) are open.
+**Known gaps** (`../PENDING.md` → tenancy): no role gate on the operator *binding* — any `active` user of the tenant with the device's PIN can become its bound operator (the role gate exists only on the commands themselves). The PIN lockout closed in 6-1a; owner 2FA closed in 6-1b (owner badge-in deliberately stays PIN-only — decision 4); password reset (needs email) is open.
 
 ---
 

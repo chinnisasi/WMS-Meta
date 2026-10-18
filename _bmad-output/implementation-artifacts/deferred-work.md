@@ -874,3 +874,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
   summary: Measure the handheld's offline PIN verifier cost (pure-JS scrypt N=2^14, r=8, run on the JS thread at every online badge-in) on a low-end device; lower N or move it off-thread if it exceeds ~300 ms.
   evidence: 6-1a code review C13, unverified — no on-device timing exists.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1b-owner-two-factor-sign-in.md`
+  summary: No step-up and no out-of-band notice for two-factor events — an owner's reset of a colleague and Unlock need only a session, and enable / disable / reset / backup-code use / lock are only audited, never sent to the account holder.
+  evidence: 6-1b code review B8. Notices need the mailer (roadmap 5.1); step-up (re-enter a code for owner-power actions) is its own story.
