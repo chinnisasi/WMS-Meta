@@ -889,3 +889,7 @@
 - source_spec: none
   summary: 1.2b per-client operating policy — receiving tolerance %, QC on receipt, expiry required + minimum remaining shelf life, allocation FEFO/FIFO, enforced in receiving, QC and allocation (backend + web + handheld).
   evidence: Split from roadmap story 1.2 on 2026-10-18 at the user's choice; 1.2a (client master record: contacts, addresses, offboarding) ships first and its client page hosts the policy screen.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2a-client-master-record.md`
+  summary: Client contact audit rows (`client.contact_added/edited/removed`) name the client but not the contact or what changed, so a removed contact leaves no record of who it was.
+  evidence: 1-2a code review B7; `audit_events` carries no payload today — a contact-history or audit-detail story.
