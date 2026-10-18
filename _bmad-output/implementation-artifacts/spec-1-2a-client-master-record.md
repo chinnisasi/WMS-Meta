@@ -2,7 +2,8 @@
 title: '1.2a Client master record — contacts, registered and return addresses, offboarding (departed)'
 type: 'feature'
 created: '2026-10-18'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '634b6a3c9f8ea6fe7de9f1ba4259b6a640104dd6'  # wms-be; wms-fe: 03077fe467af5b7406165e2b89492727a3b84b5b (branches feat/1-2a-client-master-record)
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -44,6 +45,12 @@ context:
 7. **Stock that turns up after departure is refused until an owner reactivates the client** (design review).
    - Positive adjustments and count resolutions for a departed client's SKUs are refused.
    - Receipt lines carrying its SKUs are refused per line and go to the review queue.
+8. **An issued invoice that is not yet settled also blocks departure** (code review, user). `unsettled-invoices` = `draft`, `issued` or `disputed`; only `settled` and `void` clear it. This amends decision 1.
+9. **Departure is blocked while any of the client's SKUs is mapped to a channel** (code review, user). A new blocker `channel-mappings`: the owner unmaps them first. Nothing changes automatically.
+10. **A small handheld wording fix is allowed** (code review, user; amends the Never list).
+    - A `client-departed` refused line names the SKU and the client ("TSHIRT-M (Brand B): client has departed — not booked").
+    - The fully-refused note names the receipt's document (PO, ASN or blind).
+    - wms-mobile gets its own branch and PR.
 
 ## Boundaries & Constraints
 
@@ -285,7 +292,7 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] wms-be, in order:
+- [x] wms-be, in order:
   1. 0077 and the schema.
   2. The helpers: email, `assertPhone`.
   3. Contacts.
@@ -299,7 +306,7 @@ context:
   11. Vocabularies and audit.
   12. Tests.
   13. The OpenAPI export.
-- [ ] wms-fe, in order:
+- [x] wms-fe, in order:
   1. Regenerate the client.
   2. `clientTakesWork` and the pickers.
   3. Status actions and blockers.
@@ -307,7 +314,7 @@ context:
   5. The addresses panel.
   6. Copy.
   7. Tests.
-- [ ] meta: the docs above.
+- [x] meta: the docs above.
 
 **Acceptance Criteria:**
 - Given a departed client, when any path in the "No new work" list runs for it, then it is refused (`client-departed`, or per line or per row), and every read of its history still answers.
@@ -338,7 +345,43 @@ context:
   - Reactivate it.
 - A suspended client appears on the order form.
 
+## Implementation Notes
+
+**Branches:** `feat/1-2a-client-master-record`.
+
+| Repo | Build | Code-review fixes |
+|---|---|---|
+| wms-be | `591897f` | `e309411` |
+| wms-fe | `0c14ee2` | `6839625` |
+| wms-mobile | — | `de98001` (decision 10) |
+
+**Verified 2026-10-18:**
+
+| Repo | Result |
+|---|---|
+| wms-be | 94/94 suites, 2,255 tests; lint and typecheck |
+| wms-mobile | 612 tests; typecheck |
+| wms-fe | 1,796 tests; typecheck, lint, build |
+
+**Departures from the spec text, accepted:**
+- **Pending adjustments.** `pending-adjustments` counts only `pending`. The spec named `ADJUSTMENT_PENDING_STATUSES`, which is the whole vocabulary.
+- **Facade guards.** Four facade-only architecture guards admit `client-wind-down` by name. A pin restricts those files to imports from `drizzle-orm` and `shared/`.
+- **Lock mode.** `lockClientInTx` itself became `FOR NO KEY UPDATE`, which also covers rate-card activate and cancel and invoice refresh and issue.
+- **Lock order.** Kit and variant attach take the client lock after their SKU and product locks. This is deadlock-free, and the rule is documented on the gate.
+- **Contacts read by a portal user.** The answer is 403 `role-denied` from the existing operator-only guard.
+
+**Logged in PENDING:**
+- the rate-card picker hides departed clients' cards;
+- a departed client's reorder policies and draft POs stay in place, and the server refuses them on use.
+
+**Not verified:** the manual browser checks.
+
 ## Spec Change Log
+
+### 2026-10-18 — code review: decisions 8–10 (user)
+- **Trigger:** code review B3, VG-other (issued invoices did not block departure), B12 (live channel mappings fail forever after departure), and B2/VG3 (handheld wording for `client-departed`).
+- **Amended:** decisions 8–10 in the frozen block. Decision 10 lifts "No handheld code change" for the wording fix only.
+- **KEEP:** the rest of the implementation.
 
 ## Review Triage Log
 
@@ -370,3 +413,27 @@ context:
 | R22 | Nested contact editing in the one-panel model; mobile width; focus; role chips (web) | medium | Single panel kind, dirty confirm, wrap or Manage, focus, checkboxes |
 | R23 | Two state models; reuse `StateSelect` and the destination parser (web) | low | Specified |
 | R24 | Email parity on the web (web) | medium | `contactEmailProblem` |
+
+### Code review — 2026-10-18 (blind hunter 13, edge-case hunter 8, verification-gap 4 + 2; 27 raw)
+
+| # | Finding (layer) | Verdict | Route / disposition |
+|---|---|---|---|
+| C1 | A blind receipt naming a **suspended** client is refused 409, against decision 5; naming a departed client is refused whole, not per line (edge ×2, blind) | high — `receiving.command.ts:570-579` | patch: suspended accepted; departed → per-line `client-departed` |
+| C2 | The `FOR KEY SHARE` serialisation is never tested; removing it passes every test (gap) | gap | patch: gated creator → parked departure → 409 |
+| C3 | Issued, unpaid invoices do not block departure (blind, gap-other) | medium | user decision 8 → patch |
+| C4 | Live channel mappings fail forever after departure (blind) | medium | user decision 9 → patch: `channel-mappings` blocker |
+| C5 | The handheld names `client-departed` generically; a PO/ASN fully refused reads "Blind receipt" (blind, gap) | medium | user decision 10 → patch (wms-mobile) |
+| C6 | Replenishment sweep never resolves a breach open at departure (blind, edge) | medium | patch: departed SKUs still recover breaches, never raise |
+| C7 | `open-review-items` scans `payload::text` with `strpos` under the client `FOR UPDATE` (blind, edge) | medium | patch: only op types carrying SKU ids, via a JSON path, bounded |
+| C8 | Saving one address group discards the other's unsaved edit (blind, edge) | medium | patch: reset only the saved group |
+| C9 | Re-clicking the same panel resets `dirtyRef` with the draft kept (edge) | low | patch: same panel → no-op |
+| C10 | Channel editors with only departed clients' SKUs render an empty select (edge) | low | patch: placeholder on `pickable` |
+| C11 | Email: JS vs Postgres lower-casing of UTF-8 → unmapped CHECK 500; hard-coded 254; DTO name length in UTF-16 (blind) | medium | patch: ASCII emails (`allow_utf8_local_part: false`), constant, code-point length |
+| C12 | `assertPhone` extraction may change shipment-address errors (blind) | medium | patch: byte-identical errors, pinned by a regression test |
+| C13 | The "run first" rule is not what the callers do (blind) | low | patch: doc corrected (departure locks only the client row; the order is deadlock-free) |
+| V1 | No review-row assertion for departed lines on a recorded PO or no-client receipt (gap) | gap | patch: test |
+| V2 | The count-variance half of `open-counts` untested (gap) | gap | patch: test |
+| B7 | Contact audit rows do not name the contact (blind) | low | defer: audit rows carry no payload today; a contact-history story |
+| B10 | `client-departed` means 409 work and 403 portal (blind) | low | reject: one meaning to the user ("this client has departed"); the status code tells them apart |
+| E2 | Reactivating a departed (formerly suspended) client restores the portal (edge) | false | reactivation is an explicit owner action to `active`; the owner can suspend again |
+| G1 | The publish-side mapping guard is a test seam only (gap-other) | low | reject: harmless defence in depth |
