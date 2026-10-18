@@ -2,8 +2,8 @@
 title: '6.1a Secure sessions — revocable sessions, staff offboarding, lockout, shift-length handheld sessions'
 type: 'feature'
 created: '2026-10-18'
-status: 'ready-for-dev'
-baseline_commit: '41eb113152bafba1827af7efaacc4f7d5f2686cc'  # wms-be; wms-fe: caf526919642948035a3082869dac6c1aec0317f; wms-mobile: 265f1b6 (main)
+status: 'in-review'
+baseline_commit: '41eb113152bafba1827af7efaacc4f7d5f2686cc'  # wms-be; wms-fe: caf526919642948035a3082869dac6c1aec0317f; wms-mobile: 265f1b6f8724dcb5c1e0af1e0cfd298a833bb1ab
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -250,10 +250,10 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] wms-be: migration (`sessions`, user status `deactivated`, lockout columns) → token `kind`/`sid` → guards → sign-in lockout + refresh + sign-out routes → deactivate/reactivate/unlock → badge-in lockout, renewal, badge-out → role-change and suspend revocation → OpenAPI export. Each route gets cases in `test/sessions.spec.ts` / `users.spec.ts` / `devices.spec.ts` covering every matrix row.
-- [ ] wms-fe: regenerate the client → refresh-once interceptor and refresh-ahead → server sign-out → signed-out reasons → Team/Devices card actions → tests.
-- [ ] wms-mobile: session-ended phase and screen → lockout copy → badge-out → credential renewal → tests (queue kept across session-ended, badge-out refused with queued ops).
-- [ ] meta: close PENDING #1 as "closed by 21-7", PENDING :142 (PIN lockout) and :148 (portal revocation); record the 6.2 domain constraint; update `tenancy.md` (sessions, kinds, lockout), the API surface, and the frontend and mobile design docs.
+- [x] wms-be: migration (`sessions`, user status `deactivated`, lockout columns) → token `kind`/`sid` → guards → sign-in lockout + refresh + sign-out routes → deactivate/reactivate/unlock → badge-in lockout, renewal, badge-out → role-change and suspend revocation → OpenAPI export. Each route gets cases in `test/sessions.spec.ts` / `users.spec.ts` / `devices.spec.ts` covering every matrix row.
+- [x] wms-fe: regenerate the client → refresh-once interceptor and refresh-ahead → server sign-out → signed-out reasons → Team/Devices card actions → tests.
+- [x] wms-mobile: session-ended phase and screen → lockout copy → badge-out → credential renewal → tests (queue kept across session-ended, badge-out refused with queued ops).
+- [x] meta: close PENDING #1 as "closed by 21-7", PENDING :142 (PIN lockout) and :148 (portal revocation); record the 6.2 domain constraint; update `tenancy.md` (sessions, kinds, lockout), the API surface, and the frontend and mobile design docs.
 
 **Acceptance Criteria:**
 - Given any revoke path (sign-out, deactivate, role change, client suspend, device revoke), when the affected token is used again, then it answers 401 `session-ended` (403 `device-revoked` / `client-suspended` where those already apply) without waiting for expiry.
@@ -284,6 +284,24 @@ context:
 - Badge in on a handheld, then deactivate the operator: the session-ended screen appears and the queued scans reach web review.
 
 ## Implementation Notes
+
+**How it was built.** Four implementation sub-agents stalled (no output for 600 s — the spec plus nine context docs), two of them after partial work: the 0074 migration, the token rewrite, and the handheld's `session.ts` / `offline-pin.ts` / API plumbing. That work was reviewed and kept; the rest was implemented directly in the main session (the workflow's no-subagent fallback), committing per step.
+
+**wms-be** (`feat/6-1a-secure-sessions`): `sessions.ts` (store, `checkSessionInTx`, `revokeSessionsInTx`, refresh rotation with the 30 s grace, purge); `auth-attempts.ts` (counted-before-scrypt lockout, attempt windows, `clientIpOf` with `TRUSTED_PROXY_HOPS`); `session-cookie.ts` (cookie, Origin + `X-WMS-Session`, the 401 shapes); `session.command.ts` + routes `session/refresh`, `session/sign-out`; all four guards re-read the session (`verifyWebRequest`, `verifyDeviceRequest`); badge-in lockout / 12 h session / credential renewal; badge-out, release, device unlock; users deactivate / reactivate / unlock; role-change and client-suspend revocation; `SessionPurgeWorker`; `bun run auth:unlock`.
+- **Decisions taken in implementation** (none user-visible beyond the spec):
+  - A badge session revoked by **device revoke** answers the existing `403 device-revoked`, not the 401 — the handheld quarantines on that code (fate table). Found by `test/devices.spec.ts`.
+  - A portal session revoked by **client suspend** answers `401 session-ended` `client-suspended`, and stays ended after reactivation (sign in again). The portal guard's per-request client read still answers `403 client-suspended` for a suspension made outside the command (SQL). `test/clients.spec.ts` updated to the new contract.
+  - A role change revokes the target's **web** sessions only when the role actually changed.
+  - A re-badge on the same device ends the previous badge session as `released`.
+  - Two no-op arms declared to the audit guard: `users.deactivate:already-deactivated`, `users.reactivate:not-deactivated`.
+- Existing suites updated for the new contract: token pins (`portal.spec.ts`), expiry (`tenancy.spec.ts`), role change (`users.spec.ts`), suspend (`clients.spec.ts`), fence tokens (`audit-*`, `notifications.spec.ts`), the cookie routes allowlisted in the guard-coverage test, and `picking.spec.ts`'s SQL un-revoke also revives the badge session.
+
+**wms-fe:** `session-refresh.ts` (single-flight + `navigator.locks`, plain `fetch`), `api/base-url.ts`; `auth.ts` (`refreshUntil`, `sessionEndsAt`, `accessTokenExpired`, `clearSession(reason)`, `signedOutLoginHref`); client interceptors (refresh-before, retry-once on `token-expired` from a pre-send clone, `session-ended` → reason); login notices (`SESSION_ENDED_NOTICE`); server sign-out; Team card (status chips, Deactivate / Reactivate / Unlock via `ConfirmRow`, role through the subscription); Devices card (Badge-in locked, Unlock, Release device). Tests: `session-refresh.test.ts` (11), `session-admin.test.tsx` (7).
+
+**wms-mobile:** `device-store.ts` (`sessionEnded` with the phase kept `badged`, renewed credential written first, PIN verifier, offline restore under the local lock, `badgeOut`, creator id at enqueue, replay passes `currentOperatorId`, a 401 → `markSessionEnded`); `engine.ts` (A4 hold, code `operator-changed`); `replay-classification.ts` (`operator-mismatch` → quarantined, `sessionEndFromError`); `components/session-overlay.tsx` mounted in `_layout.tsx`; Badge out in the inbox; badge-in copy from `session.ts`. New dependency `@noble/hashes` (pure-JS scrypt for Hermes). Tests: `secure-sessions.test.ts` (13), `device-store-sessions.test.ts` (6).
+
+**meta:** PENDING (#1 closed by 21-7; :142 PIN lockout and :148 portal revocation closed; six new entries), `tenancy.md` *Sessions*, API surface, frontend and mobile designs, the three repo contracts.
+
 
 ## Spec Change Log
 

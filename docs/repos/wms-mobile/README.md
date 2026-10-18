@@ -22,6 +22,8 @@ Extracted from `wms-fe/mobile/` at Story 3.2 (7 files, expo@57.0.20 / RN 0.87.1)
 
 ## Interface Contract (what this repo consumes from `wms-be`)
 
+- **Shift sessions (story 6-1a):** badge-in returns a 12 h session plus a renewed `deviceToken` (stored before the session; the old one stays valid); `POST …/devices/badge-out` (badge token) ends the session — the device refuses while scans are queued. A `401 unauthenticated` with `reason` shows the session-ended overlay and keeps the queue; `403 device-revoked` stays revocation; `423 badge-locked` / `429 rate-limited` carry `retryAfterSeconds`. Every replayed op sends `X-Op-Operator` (its creator's user id); `409 operator-mismatch` is held for review, and an op whose creator is not the badged operator is never sent (code `operator-changed`). Offline badge-in verifies the PIN against a sealed scrypt verifier under a local 5 / 15-minute lock.
+
 Keep this current whenever a cross-repo change lands.
 
 - Base URL: `EXPO_PUBLIC_API_BASE_URL` (default `http://localhost:3000/api/v1`; inlined at bundle time). Hand-written API layer in `src/api.ts` (no codegen — the generated-client pipeline lives in wms-fe).
