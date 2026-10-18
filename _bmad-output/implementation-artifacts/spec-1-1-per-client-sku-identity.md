@@ -2,7 +2,8 @@
 title: '1.1 Per-client SKU identity — code and barcode unique per client, scans resolved through the work''s own SKUs and client'
 type: 'feature'
 created: '2026-10-18'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'bf612c5cebfeb32e3f9a45c18d89995d1fbd8bc4'  # wms-be; wms-fe: 4238d8c850c1c37a590cb758da3b28b57b1fbbd8; wms-mobile: 29696491149d7dffb31fc736d068da6b746b5a57 (branches feat/1-1-per-client-sku-identity)
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -32,6 +33,15 @@ context:
 2. **Product names stay tenant-unique until 1.4.**
 3. **One story**, over the 1,600-token guideline. The index swap cannot ship without per-client resolution.
 4. **Story 21-6 stands** (design review). A SKU of another client may still be received on a PO or ASN as an unmatched line, booked to the SKU's own client's ledger (`test/asn.spec.ts:1086-1108`, `inbound.md:546`). The handheld asks for confirmation first. The server adds no refusal for PO and ASN receipts.
+5. **The backfill takes the document's client first** (code review, user 2026-10-18).
+   - Older PO and ASN receipts take their PO's or ASN's client, the same rule new receipts follow.
+   - Only blind receipts are backfilled from their lines, and they stay null when the lines are mixed.
+6. **A blind receipt whose every line is refused records no receipt** (code review, user 2026-10-18).
+   - No GRN code is consumed and no empty receipt is created.
+   - Every line goes to review as `sku-client-mismatch`, like a partial refusal.
+7. **Queued blind receipts from older builds, which carry no `clientId`, settle as before 1-1** (code review, user 2026-10-18).
+   - Every line books to its own SKU's client, and the receipt's client stays null when the lines are mixed (the single client otherwise). Nothing goes to review.
+   - The one-client rule binds only builds that send `clientId`.
 
 ## Boundaries & Constraints
 
@@ -238,7 +248,7 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] wms-be:
+- [x] wms-be:
   1. 0076: indexes, the GRN column, backfill, probes.
   2. Renames.
   3. Catalog import, SKU edit, client correction.
@@ -249,14 +259,14 @@ context:
   8. Snapshot fields and `clients`.
   9. Tests.
   10. OpenAPI export.
-- [ ] wms-mobile:
+- [x] wms-mobile:
   1. Types and tolerant parse.
   2. Resolution order per flow.
   3. Receive confirm prompt and manual code entry.
   4. Blind client in the draft and payload.
   5. `rejectedLines` words.
   6. Tests.
-- [ ] wms-fe:
+- [x] wms-fe:
   1. Regenerate the client.
   2. `skuDisplayLabel`.
   3. Inventory chooser.
@@ -267,7 +277,7 @@ context:
   8. Invoice detail.
   9. Copy.
   10. Tests.
-- [ ] meta: the docs above.
+- [x] meta: the docs above.
 
 **Acceptance Criteria:**
 - Given two clients sharing a code and a barcode, when any receive, putaway, pick, pack or return flow scans it against either client's work, then it resolves to that work's SKU and never the other client's, including on a stale snapshot.
@@ -296,7 +306,46 @@ context:
 - On the handheld: receive a PO for each, scanning the GTIN, and a mis-shipped unit (confirm prompt). Do a blind receipt with the picker. Pick an order of each.
 - On the web: search the code in inventory, and create an order with the client first.
 
+## Implementation Notes
+
+**Branches:** `feat/1-1-per-client-sku-identity`.
+
+| Repo | Build | Code-review fixes |
+|---|---|---|
+| wms-be | `751bda4` | `2424ded` |
+| wms-mobile | `d64ca61` | `8c66d90` |
+| wms-fe | `14891c8` | `0bc5806`, plus `5ef279c` (client regenerated) |
+
+**Verified 2026-10-18:**
+
+| Repo | Result |
+|---|---|
+| wms-be | 92/92 suites, 2,209 tests; lint and typecheck |
+| wms-mobile | 609 tests; typecheck (the repo has no lint script) |
+| wms-fe | 1,771 tests; typecheck, lint, build |
+
+**Decisions taken in implementation:**
+- **Review type.** A new server-raised review type, `grn.lines-refused`, which can only be discarded. `grn.submit` rows need Apply, so they could not hold it.
+- **Client labels.** `CODE (client)` labels appear only in multi-client tenants.
+- **Fix mode.** When fix mode names a client, it fixes that client's latest run.
+- **Every line refused** (decision 6). The answer is 201 `{goodsReceipt: null, refusedReceipt}`. The audit row targets the review row. The handheld settles it as a retraction with a note per line.
+- **Inactive client.** A blind receipt naming a suspended or departed client is refused with 409 `client-not-active`, read under `shareLockClientInTx`.
+- **Snapshot clients.** The client list is read by id through `ClientsFacade.snapshotClients`.
+- **Device guard.** The guard refuses a switch to another document while the draft holds a confirmed other-client line. This is stricter than strictly needed, which is accepted.
+
+**Not verified:** the device screens (confirm prompt, blind picker) and the browser flows. Only their logic is tested; recorded in PENDING.
+
+**Local dev databases** that applied the first version of 0076 keep the old GRN backfill; re-seed to get decision 5.
+
 ## Spec Change Log
+
+### 2026-10-18 — code review: decisions 5–7 (user)
+- **Trigger:** the code review's blind-hunter B1, B2 and B6 findings, plus the edge-case hunter's E1.
+  - The backfill ignored the document's client.
+  - A fully refused blind receipt left a zero-line GRN.
+  - Older builds' mixed blind ops were attributed to their first line, sending received units to a Discard-only review.
+- **Amended:** decisions 5–7 in the frozen block, with the user's answers. The blind rule ("the first line's SKU's client when it is absent") is superseded by decision 7.
+- **KEEP:** everything else in the implementation (the resolver order, the snapshot fields, the import and client-correction re-scope, the web).
 
 ## Review Triage Log
 
@@ -332,3 +381,30 @@ context:
 | R26 | Migration: `(tenant, code)` lookups lose their index; lock cost; irreversibility; probe mechanics (data) | low | `skus_tenant_code_idx`; stated; 0064-style probes |
 | — | The snapshot's `clients` must come through `ClientsFacade`; include clients of open documents; size growth (data, handheld) | low | Stated; warehouse scoping → PENDING |
 | — | Returns typed-code collision with a barcode (handheld) | low | RMA line SKUs → barcode → code order |
+
+### Code review — 2026-10-18 (blind hunter 12, edge-case hunter 11, verification-gap 4 + 1; 28 raw)
+
+| # | Finding (layer) | Verdict | Route / disposition |
+|---|---|---|---|
+| C1 | Kit, catch-weight and precision checks run on a client-refused line before the per-line client split, so the whole blind op fails (edge ×2) | high — `receiving.command.ts:554,576` precede `:705` | patch: those checks and `ensureBatchIdentity` run on receivable lines only |
+| C2 | Backfill ignores the document's client (blind) | medium | user decision 5 → patch |
+| C3 | A fully refused blind receipt records a zero-line GRN (blind, edge) | medium | user decision 6 → patch |
+| C4 | An older build's mixed blind op is attributed to its first line (blind) | medium | user decision 7 → patch |
+| C5 | A blind receipt may name a suspended or departed client (blind, edge) | medium | patch: refused 409 `client-not-active` |
+| C6 | `snapshotClients` reads the capped (500) client list and filters in memory (blind) | medium | patch: direct `inArray(id)` read |
+| C7 | An ASN import `clientRequired` group still validates rows against `holders[0]` (blind, edge) | low | patch: skip row validation and report only `client-required` |
+| C8 | Device `clientChangeRefusal` misses carried other-client unmatched lines and legacy null clients (edge ×2) | medium | patch: refuse when any held line's SKU client differs from the next client |
+| C9 | `pendingOther` survives a context or snapshot change (edge) | low | patch: cleared on draft-context or snapshot change |
+| C10 | Channel mapping keeps other-client rows after row 0 changes client (edge) | low | patch: flag and clear foreign rows before save |
+| C11 | Order form lists inactive clients (edge) | low | patch: active only |
+| C12 | Dead fix-mode 400 branch and stale comment (edge) | low | patch: delete |
+| C13 | Device mismatch note drops the client (blind) | low | patch: "CODE (client)" |
+| C14 | Catalog-import kit pass locks other clients' same-coded SKUs (blind) | medium | patch: lock only the run client's rows; unlocked probe for `mixed-client` |
+| C15 | "Not in the catalog — type the SKU code instead" differs across flows (blind) | low | patch: one wording |
+| C16 | `chooseBlindReceive`'s `= null` default can silently drop the picked client (gap) | gap | patch: required parameter |
+| V1 | No test for a kit component code shared by two clients (gap) | gap | patch: test |
+| V2 | No test for a refused batch-tracked blind line (gap) | gap | patch: test (no batch row, 201) |
+| C17 | Client-move race (23505 → 409) untested; barcode holder null (blind) | low | patch: race test; holder named |
+| V3 | Occupancy messages never tested in a multi-client tenant (gap) | low | defer: message-only; helper tested directly |
+| B7 | `grn.lines-refused` review has no link to the corrective re-receipt (blind) | medium | defer: needs a dock-stock reconciliation story |
+| B5 | Fix mode naming another client skips silently (blind) | low | reject: the row count reports it; no harm |

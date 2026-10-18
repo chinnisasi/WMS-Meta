@@ -878,3 +878,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-1b-owner-two-factor-sign-in.md`
   summary: No step-up and no out-of-band notice for two-factor events — an owner's reset of a colleague and Unlock need only a session, and enable / disable / reset / backup-code use / lock are only audited, never sent to the account holder.
   evidence: 6-1b code review B8. Notices need the mailer (roadmap 5.1); step-up (re-enter a code for owner-power actions) is its own story.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-per-client-sku-identity.md`
+  summary: A `grn.lines-refused` review row (a blind line of another client) is Discard-only and nothing links it to the corrective re-receipt — the units can be discarded from review without ever being received on the right client.
+  evidence: 1-1 code review B7. Needs a dock-stock reconciliation or a link from the corrected GRN to the review row.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-per-client-sku-identity.md`
+  summary: Bin-occupancy refusal messages (putaway, bin merge, inventory) are never tested in a multi-client tenant, so a regression to bare codes would pass.
+  evidence: 1-1 verification-gap finding; the `skuCodeLabelsInTx` helper is tested directly, the call sites only in single-client tenants with `toContain`.
