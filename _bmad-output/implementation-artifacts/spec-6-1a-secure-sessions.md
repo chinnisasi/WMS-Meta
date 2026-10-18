@@ -2,7 +2,7 @@
 title: '6.1a Secure sessions — revocable sessions, staff offboarding, lockout, shift-length handheld sessions'
 type: 'feature'
 created: '2026-10-18'
-status: 'in-review'
+status: 'done'
 baseline_commit: '41eb113152bafba1827af7efaacc4f7d5f2686cc'  # wms-be; wms-fe: caf526919642948035a3082869dac6c1aec0317f; wms-mobile: 265f1b6f8724dcb5c1e0af1e0cfd298a833bb1ab
 route: 'dispatch'
 review_loop_iteration: 0
@@ -351,7 +351,7 @@ context:
 | C8 | `TRUSTED_PROXY_HOPS` unvalidated / defaults 0 behind a load balancer (one shared address — A3's per-IP promise collapses) (blind) | medium (deploy) | defer to 6.2 (deploy config must set it; boot warning) — deferred-work |
 | C9 | `::ffff:a.b.c.d` and `a.b.c.d` key separately (blind) | low | patch: normalised in `clientIpOf`; test |
 | C10 | No per-email cap across many addresses (blind) | false | A3 (user-confirmed) deliberately keys on (email, IP) so an attacker cannot lock an owner out of their own network |
-| C11 | Security events not audited: refresh-reuse revocation, locks, sign-out, badge-out, CLI unlock (blind) | medium | **follow-up (not patched)**: adds audit vocabulary with a system actor — reported to the user; deferred-work entry |
+| C11 | Security events not audited: refresh-reuse revocation, locks, sign-out, badge-out, CLI unlock (blind) | medium | **patched at the user's choice (2026-10-18, option 1):** `auditSecurityEventInTx` — `session.reuse_detected`, `session.signed_out`, `user.sign_in_locked`, `device.badge_locked`, `device.badged_out`, CLI `user.unlocked` (system actor); a lock is audited once, by the statement that sets it; every action pinned by `expectAuditRow` |
 | C12 | Purge worker, `auth:unlock`, per-device 429, hops=0, vocabulary direction, two migration probe arms untested (blind) | low–medium | patch: purge-worker test (two tenants, live kept), `unlockSignIn` test, `clientIpOf` test, two-way vocabulary pin, the two probes added to 0074. The per-device 429 claim is **false** (asserted in "badge-in limit is per device") |
 | C13 | Pure-JS scrypt (N=2^14, r=8) on the JS thread at every online badge-in, unmeasured on a low-end handheld (blind) | maybe-false (medium if true) | defer: measure on a device; lower N or move off-thread if > ~300 ms |
 | C14 | Changing the device clock resets the offline PIN lock (blind) | low | rejected: needs a monotonic source the platform does not give offline; the sealed verifier + scrypt still bound the guess rate |
