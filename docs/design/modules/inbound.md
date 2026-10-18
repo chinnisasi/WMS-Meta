@@ -4,7 +4,7 @@
 
 All paths are relative to `workspace/core/backend/wms-be/`.
 
-Files: `src/modules/inbound/inbound.module.ts`, `vendors.command.ts`, `po.command.ts`, `asn.command.ts` (21-6), `inbound.facade.ts`, `receiving.command.ts`, `receiving.facade.ts`, `qc.command.ts`, `qc.facade.ts`, plus the DTOs (`inbound.dto.ts`, `receiving.dto.ts`, `qc.dto.ts`). HTTP shells: `src/api/inbound.controller.ts`, `src/api/receiving.controller.ts`.
+Files: `src/modules/inbound/inbound.module.ts`, `vendors.command.ts`, `po.command.ts`, `asn.command.ts` (21-6), `asn-import.command.ts` + `asn-import.parse.ts` (the ASN import, 2026-10-17), `inbound.facade.ts`, `receiving.command.ts`, `receiving.facade.ts`, `qc.command.ts`, `qc.facade.ts`, plus the DTOs (`inbound.dto.ts`, `receiving.dto.ts`, `qc.dto.ts`). HTTP shells: `src/api/inbound.controller.ts`, `src/api/receiving.controller.ts`.
 
 ---
 
@@ -124,6 +124,7 @@ Three exported facades (`inbound.module.ts:55`). Nothing outside imports a comma
 | `createVendor(command, idempotencyKey)` → `VendorSnapshot` | Delegates to `VendorCommand.create`. | `api/inbound.controller.ts:72` |
 | `createPurchaseOrder / amendPurchaseOrder / closePurchaseOrder(command, key)` | Delegates to `PurchaseOrderCommand`. Close returns `ClosePoSnapshot` = closed PO + successor-or-null. | `api/inbound.controller.ts:136,256,309` |
 | `createAsn / amendAsn / transitionAsn(command, key)` (21-6) | Delegates to `AsnCommand`; `transitionAsn` is close (short) or cancel, with a note. Every response is `AsnSnapshot = {asn}`. | `api/inbound.controller.ts` (`/inbound/asns…`) |
+| `importAsns(command, key \| null)` → `AsnImportResponse` (the ASN import, 2026-10-17) | Delegates to `AsnImportCommand.execute` — Check file (`dryRun`, no key) or Import (keyed). See *ASN import* below. | `api/inbound.controller.ts` (`POST /inbound/asn-imports`) |
 | `announceAsn(command, key)` → `PortalAsnDetail` (21-7b) | Delegates to `AsnCommand.announce` — the client portal's one write. Deliberately not `portal*`-named: the client stamp lives in the command (it opens its own transaction), so the architecture scan of portal WRITES reads `asn.command.ts: announce`, not the facade. | `api/portal.controller.ts` (`POST portal/inbound/asns`) |
 | `listAsns(tenantId, actorUserId, warehouseId, query)` / `getAsn(tenantId, actorUserId, asnId)` (21-6) | The warehouse list (keyset `(created_at, id)`, `status`/`clientId` filters, `lineCount`/`announcedTotal`/`receivedTotal` folded over the page's ids) and the detail with lines. **A client-portal session is refused 403** — 21-7 opens them. | inbound controller |
 | `listVendors(tenantId, query)` → `Page<VendorEntry>` (`:143`) | Keyset page, newest first. | inbound controller |
@@ -209,6 +210,44 @@ sequenceDiagram
   else nothing came
     Ops->>Ib: POST /asns/{id}/cancel {note} (only from announced)
   end
+```
+
+### ASN import — many ASNs from one file (2026-10-17)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops as Ops (asn.manage)
+  participant Web as web — ASN card
+  participant Ctl as inbound.controller
+  participant Imp as AsnImportCommand
+  participant Asn as asn.command (shared checks)
+  participant Cat as catalog / clients / tenancy facades
+  participant PG as Postgres
+
+  Ops->>Web: pick file (.csv / .xlsx)
+  Web->>Ctl: POST /inbound/asn-imports {file, warehouseId, dryRun=true} (no key)
+  Ctl->>Imp: execute(dryRun)
+  Imp->>Asn: assertAsnAuthorityInTx (asn.manage + portal refusal) — before the file is read
+  Imp->>Imp: readSheet (shared reader, ASN options) → rows (sheet row numbers)
+  Imp->>Cat: warehouse code (404) · clients, warehouses, SKUs BY CODE (bulk)
+  Imp->>Imp: group by (resolved client, asn_code) — a blank client resolved from its SKU → ≤ 500 ASNs
+  loop each ASN
+    Imp->>Asn: code shape · line count · client rule (mixed / mismatch) · kit · quantity (positive, at precision) · code unused
+    Note over Imp: + file-only: rows agree on client / warehouse / expected_at; no repeated SKU
+  end
+  Imp-->>Web: 200 {asns ready, errors[]} — nothing written
+  Ops->>Web: Import (key minted once per checked file)
+  Web->>Ctl: POST /inbound/asn-imports {file, warehouseId} + Idempotency-Key
+  Imp->>PG: replay lookup (fingerprint {fileSha256, warehouseId}) → stored answer if any
+  Note over Imp: the same parse + validation as the dry run
+  loop each valid ASN — its own SAVEPOINT
+    Imp->>Asn: insertAsnInTx → emitAsnEvent (outbox asn.created, audit asn.created, reference = key)
+    Note over Imp,PG: a concurrent manual create's 23505 rolls back ONLY this savepoint → duplicate-asn-code
+  end
+  Imp->>PG: audit asn_import.executed (target asn_import → importId) → ONE idempotency key (snapshot = the response)
+  Imp-->>Web: 201 {importId, asns created, errors[]}
+  Web->>Web: notifyInboundChanged() — the list and the tab counts refetch
 ```
 
 ### Late receipts — a terminal document holds the receipt (story 21-9)
@@ -297,10 +336,21 @@ See *Key algorithms → PO close and carry-forward*. Guards: permission → repl
 
 The skeleton: hash → `assertPermission('asn.manage')` (owner + ops_manager, `po.manage`'s holders) → **portal refusal** (a user with a client: 403 `role-denied`, reads too — 21-7 opens them) → replay → validate → lock (amend, close and cancel: the ASN row `FOR UPDATE`, then **replay again under the lock** before any status guard — 21-11a; create locks no ASN) → write → outbox (`asn.created | amended | closed | cancelled`, payload `{asn}`) → **audit row** (`target_type 'advance_shipment_notice'`, reference = the key) → key.
 
-- **create:** (behind authority and replay) the code 1–64 **code points** and 1–200 lines (400) → warehouse in tenant (404) → client in tenant (404) → SKUs read **unlocked** (404) → `assertSingleClientInTx` (409 `mixed-client`) → the derived client must be `clientId` (409 `sku-client-mismatch`) → scale (precision refusal) → insert (unique violation → 409 `duplicate-asn-code`; the client label is read *before* the insert, because the violation aborts the transaction). Code trimmed, 1–64; 1–200 lines; `expectedAt` a Z-suffixed instant (400 above the transaction).
-- **amend:** ASN `FOR UPDATE` (404) → **replay again under the lock (21-11a)** → `announced`/`partially_received` else 409 `asn-not-open` → the PO amend's full line-set replace (duplicate id 400, unknown id 404) → SKUs of another client 409 `sku-client-mismatch` → **a line that has received anything may not be removed, change SKU, or have its quantity LOWERED to below what it received (409 `asn-line-received`)** — after an approved over-receipt received exceeds announced, and resending the line unchanged still amends → `expectedAt` absent = unchanged, `null` = cleared → status re-derived (lowering a line to what it received can complete the ASN).
+- **create:** (behind authority and replay) the code 1–64 **code points** and 1–200 lines (400) → warehouse in tenant (404) → client in tenant (404) → SKUs read **unlocked** (404) → `assertSingleClientInTx` (409 `mixed-client`) → the derived client must be `clientId` (409 `sku-client-mismatch`) → **kits 409 `kit-cannot-hold-stock` (`assertNoKitLinesInTx` — added by the ASN import, 2026-10-17, closing the PENDING gap)** → scale (precision refusal) → insert (unique violation → 409 `duplicate-asn-code`; the client label is read *before* the insert, because the violation aborts the transaction). Code trimmed, 1–64; 1–200 lines; `expectedAt` a Z-suffixed instant (400 above the transaction).
+- **amend:** ASN `FOR UPDATE` (404) → **replay again under the lock (21-11a)** → `announced`/`partially_received` else 409 `asn-not-open` → the PO amend's full line-set replace (duplicate id 400, unknown id 404) → SKUs of another client 409 `sku-client-mismatch` → **kits 409 `kit-cannot-hold-stock` (2026-10-17)** → **a line that has received anything may not be removed, change SKU, or have its quantity LOWERED to below what it received (409 `asn-line-received`)** — after an approved over-receipt received exceeds announced, and resending the line unchanged still amends → `expectedAt` absent = unchanged, `null` = cleared → status re-derived (lowering a line to what it received can complete the ASN).
 - **announce (21-7b — the client portal, `AsnCommand.announce`):** a SEPARATE command on the same tables, never a flag on `create` (whose hash, response and authority stay byte-identical — pinned by an `idempotency_keys` golden). The client is the portal session's (`PortalSession.clientId`, never the body — a body `clientId` or a line `id` is 400 via `forbidNonWhitelisted`). It opens `withTenantTransaction(db, t, fn, { clientId: command.clientId })` itself and does **not** call `assertAuthority`. Order: hash `{surface: 'portal', tenantId, clientId, warehouseId, asnCode (trimmed), expectedAt ?? null, lines[{skuId, announcedQty}]}` (above the tx) → `assertPermission('asn.announce')` → the actor's status and client re-read (not active 401 `unauthenticated`; another client — or none, e.g. an owner — 403 `role-denied`) → `shareLockClientInTx` (the client row `FOR SHARE` since 21-10, so a suspend cannot commit between this read and the insert; not active 403 `client-suspended`) → replay → code and line shape (the shared helpers) → warehouse in tenant (404) → SKUs read `tenant AND client_id = session client AND id IN (…)` (an unknown and another client's SKU are the same 404, detail `No SKU with id "<id>" exists for this client.`) → kits (`CatalogFacade.getKitSkuIdsInTx`) 409 `kit-cannot-hold-stock` naming the codes (receiving refuses a kit line, so it could never be received) → scale → the shared insert (409 `duplicate-asn-code`) → `finish`: outbox `asn.created` with the operator `{asn}` payload, the audit row (actor = the client user — the only record that the ASN came from the portal, decision 3), and the key whose snapshot is the `PortalAsnDetail` rebuilt by `portalAsnInTx` on the same transaction. `mixed-client` and `sku-client-mismatch` are unreachable by construction. The result is an ordinary ASN: the operator list, the device snapshot and receiving treat it exactly as one an operator keyed. There is no portal amend, close or cancel (decision 2 — PENDING).
 - **close / cancel:** note trimmed, 1–500 code points (400 above the transaction) → ASN `FOR UPDATE` → **replay again under the lock (21-11a)** → close only from `partially_received`, cancel only from `announced`, else 409 `asn-transition-invalid` → **cancel refuses 409 `asn-has-receipts` while any GRN references the ASN** (a receipt that credited no line leaves it `announced`, but goods arrived against it) → **409 `over-receipt-pending`** while any of its excess awaits a decision (under the ASN lock) → conditional update to the terminal status with the note.
+
+### `asn_import.execute` — `AsnImportCommand.execute` (`asn-import.command.ts`, 2026-10-17)
+
+Many ASNs from one CSV / XLSX file, one row per ASN line, on `POST …/inbound/asn-imports`. Staff only (decision 2); ASNs only (decision 3 — PO import is its own story); no PDF.
+
+- **Order:** fingerprint `{fileSha256, warehouseId}` above the transaction → `assertAsnAuthorityInTx` (`asn.manage`, then the portal refusal — **before the file is read**, unlike the catalog import) → replay (Import only; **a dry run takes no key, runs no replay and writes nothing**) → size cap → `readSheet` (`shared/import/sheet-reader.ts` with the ASN options: unknown columns ignored, spreadsheet row numbers, every missing required column named as `400 missing-columns`, an XLSX date cell read as its IST wall clock) → the target warehouse's code (404) → bulk lookups by code (`getClientsByCodesInTx` — case-insensitive on `upper(code)`, so `self` works; `existingWarehouseCodesInTx`; `CatalogFacade.getSkusByCodesInTx` — id, client, unit, precision, kit) → group → validate → dry run returns → Import inserts.
+- **Grouping:** rows group by (`asn_code`, the `client` cell case-insensitively). A blank client derives from the row's SKU (`resolveAsnGroups`): the row joins the ASN of that client and code and **agrees** with rows naming the client explicitly. A blank row whose SKU belongs to another client refuses the whole ASN (`asn-rows-disagree`), so one (client, code) is always exactly one ASN, and a dry run never reports two ASNs that the import would half-create. Error-report row numbers are record index + 2: a quoted cell containing a newline is still one spreadsheet row, as Excel shows it. The same code for two clients is two ASNs. > 500 ASNs → `422 import-too-large`.
+- **Per ASN, the operator create's rules — the extracted helpers, not copies:** `assertAsnCodeShape` (→ `invalid-asn-code`), `assertLineShape` (→ `too-many-lines`), `assertAsnClientInTx` / `assertSingleClientInTx` (→ `mixed-client`, `sku-client-mismatch` on each row of the other client), the kit refusal's words (→ `kit-cannot-hold-stock` per row), the quantity through `validateRecordableQuantity` sign **`positive`** with the precision read from the cell's TEXT (→ `invalid-quantity`, `quantity-precision`), and the `(client, code)` pre-check (→ `duplicate-asn-code`, `duplicateAsnCode`'s words). File-only rules: rows of one ASN agree on `client`, `warehouse`, `expected_at` after normalising (`asn-rows-disagree`, naming the column); a blank `client` is the row's SKU's client and a blank `warehouse` is the selected warehouse, so either agrees with a row naming the same one, while a blank `expected_at` beside a filled one disagrees; a SKU listed twice is refused, never summed (`duplicate-sku-in-asn`); `warehouse` must be blank or the target's code (`wrong-warehouse` for another warehouse of the tenant, `unknown-warehouse` otherwise). Cell refusals: `missing-value` (blank `asn_code`, `sku`, `quantity`), `invalid-expected-at`. **An ASN with any refused row is refused whole**; every other ASN is created.
+- **Import:** each valid ASN in its own **savepoint** (`tx.transaction`): `insertAsnInTx` → `emitAsnEvent` (read-back, outbox `asn.created`, audit `asn.created` with `reference` = the bare key — exactly what a single create writes). A concurrent manual create of the same code that commits after the pre-check raises 23505, which aborts only that savepoint: the ASN is refused `duplicate-asn-code` and the run carries on. Then one `asn_import.executed` audit row (target `asn_import` → a minted `importId`), then ONE `idempotency_keys` row whose snapshot is the response (counts and `fileSha256` included — `audit_events` has no payload column). A same-key retry replays it; the same key with another file or warehouse is `422 idempotency-key-reuse`.
+- **The split this needed in `asn.command.ts`:** `finish` used to write the key on every call, so it became `emitAsnEvent` (read-back → outbox → audit) and the callers write the key (`writeAsnKeyInTx`) — the operator commands and the portal announce still do, in the same order. `insertAsnInTx`, `scaleAsnLines`, `assertAsnClientInTx`, `assertNoKitLinesInTx`, `assertAsnAuthorityInTx`, `replayAsnKeyInTx` are module-level exports.
+- **The caps** (≤ 5 MB, ≤ 5,000 rows, ≤ 500 ASNs) bound one request (500 × 10 lines ≈ 4.5 s locally); repeated imports can still grow the device snapshot (PENDING).
 
 ### `grn.submit` — `ReceivingCommand.submitGoodsReceipt` (`receiving.command.ts:227`)
 
@@ -437,7 +487,7 @@ All four parts — catalog SKUs, open POs with lines, bins, derived putaway task
 
 **Consumed by notifications (9-2):** `over_receipt.requested` raises the panel's `over-receipt` entry and `.approved`/`.rejected` resolve it (keyed by `overReceiptId`, routed to `review.decide`); `qc_hold.placed`/`.released` do the same for `qc-hold` (keyed by `holdId`, routed to `qc.manage`). See `notifications.md`.
 
-**Audit rows** (`audit_events`, `reference` = the idempotency key): `over_receipt.approved|rejected` (`receiving.command.ts:810`), `qc_hold.placed` (`qc.command.ts:369`), `qc_hold.released` (`qc.command.ts:546`), `asn.created|amended|closed|cancelled` (21-6). **9-3a** adds the PO and vendor rows — `purchase_order.created` (`createInTx`, so the replenishment submit's in-transaction PO create writes it with the **submitting user** as actor, beside its own `suggested_po` row — two rows), `purchase_order.amended`, `purchase_order.closed` (target `purchase_order`, one private `auditInTx` helper), `vendor.created` (target `vendor`) — and the GRN submit's `goods_receipt.submitted`. Each is pinned by `expectAuditRow` in `test/inbound.spec.ts` / `test/receiving.spec.ts`. Every keyed inbound command now writes its row (`IMPLEMENTATION-GUIDE.md` §1 step 10). **21-7b:** a portal-announced ASN's `asn.created` row carries the CLIENT USER as actor — the only record that it came from the portal (no `origin` column, decision 3; no route reads it yet — the operator badge is PENDING). Its outbox `asn.created` payload is the operator `{asn}`, identical to an operator-keyed one.
+**Audit rows** (`audit_events`, `reference` = the idempotency key): `over_receipt.approved|rejected` (`receiving.command.ts:810`), `qc_hold.placed` (`qc.command.ts:369`), `qc_hold.released` (`qc.command.ts:546`), `asn.created|amended|closed|cancelled` (21-6). **9-3a** adds the PO and vendor rows — `purchase_order.created` (`createInTx`, so the replenishment submit's in-transaction PO create writes it with the **submitting user** as actor, beside its own `suggested_po` row — two rows), `purchase_order.amended`, `purchase_order.closed` (target `purchase_order`, one private `auditInTx` helper), `vendor.created` (target `vendor`) — and the GRN submit's `goods_receipt.submitted`. Each is pinned by `expectAuditRow` in `test/inbound.spec.ts` / `test/receiving.spec.ts`. Every keyed inbound command now writes its row (`IMPLEMENTATION-GUIDE.md` §1 step 10). **The ASN import (2026-10-17):** each ASN it creates writes its own `asn.created` row (reference = the import's key), plus one `asn_import.executed` row per import (target `asn_import` → `importId`), pinned by `expectAuditRow` in `test/asn-import.spec.ts`. **21-7b:** a portal-announced ASN's `asn.created` row carries the CLIENT USER as actor — the only record that it came from the portal (no `origin` column, decision 3; no route reads it yet — the operator badge is PENDING). Its outbox `asn.created` payload is the operator `{asn}`, identical to an operator-keyed one.
 
 ---
 
