@@ -272,11 +272,18 @@ Three credentials, three lifetimes:
 
 | Credential | Minted at | Scope |
 |---|---|---|
-| **Device token** | Enrollment, by redeeming a one-time code minted in web Settings | Long-lived (30 days). Only good for badging in |
-| **Badge-in session** (`accessToken`) | Badge-in: device token + operator email + PIN | The operator-bound session. **Every task op is sent under this**, never under the bare device credential |
+| **Device token** | Enrollment, by redeeming a one-time code minted in web Settings; **re-issued at every badge-in (6-1a — a rolling 30 days)** | Only good for badging in. The renewed one (`BadgeInResponse.deviceToken`) is written before the session; a failed write never fails the badge-in — the old one stays valid until its own expiry |
+| **Badge-in session** (`accessToken`) | Badge-in: device token + operator email + PIN | The operator-bound session — **one shift, 12 h** (6-1a), a server-side `sessions` row the server re-reads per request. **Every task op is sent under this**, never under the bare device credential |
 | **Offline-store key** | Delivered sealed at enrollment | Decrypts the local database. Keychain-resident |
 
-`BadgeSession` (`device-store.ts:33-38`) carries the operator, the device and an `expiresAt` derived from `expiresInSeconds` at mint (`:169`). There is **no refresh machinery** — an expired session means badge in again.
+`BadgeSession` carries the operator, the device and an `expiresAt` derived from `expiresInSeconds` at mint. There is **no refresh machinery** — an ended session means badge in again.
+
+**Story 6-1a — the shift session.**
+- **Session ended** (`DeviceSnapshot.sessionEnded {reason}`): a `401 unauthenticated` during replay (any `reason` — `absolute`/`expired` (the server's usual end-of-shift reason), `signed-out`, `released`, `deactivated`, `legacy`, or none from an older server — `sessionEndFromError`), or the device's own clock passing `expiresAt`, sets it. **The phase stays `badged`**, so the screen under it is not unmounted: `SessionOverlay` (`src/components/session-overlay.tsx`, mounted once in `app/_layout.tsx` above the Stack) covers it with the reason, the kept-queue line and a badge-in form. Replay pauses while it is set. Badging back in as the same operator clears it and the task is where it was. The cached session is deleted, so it can never be restored offline.
+- **Warning:** in the last 30 minutes the overlay shows a strip — "Your session ends in N minutes — sync your scans, then badge in again to keep working".
+- **Offline badge-in verifies the PIN** (`src/state/offline-pin.ts`): an online badge-in (and enrollment) leaves a salted scrypt verifier (N = 2^14, `@noble/hashes`) in the sealed store; an offline restore must match it, under the server's own rule counted locally (5 failures → 15 minutes, `local-pin-lock`; a corrupt counter fails closed). Before 6-1a the restore checked only the email.
+- **Badge out** (inbox): refused on the device while scans are queued (`badgeOutBlocker` — "Sync your N queued scans before badging out"); otherwise `POST …/devices/badge-out` and back to badge-in; an unreachable server keeps the operator badged in with "Could not reach the server — badge out again when you are back online" (a 401 badges out anyway). Once an operator's 12 h session has ended the server treats the device as free, so the next operator can badge in without a release; a supervisor's **Release device** on the web frees one mid-shift.
+- **Every words string** (warning, session ended, badge-in refusals incl. `badge-locked` / `rate-limited` with the minutes left) lives in `src/state/session.ts`, pinned by `secure-sessions.test.ts` — `app/` has no test seam.
 
 **Why every queued op re-authorises against the badge-in session that created it.** The server binds a device to one operator at first badge-in (see *Who uses it*), so today a second operator cannot badge in on the same enrollment — but the client is written as if devices were shared, and that is deliberate defence: re-enrollment changes the operator, and the binding is a server rule the client must not assume. The shape it guards against: operator A scans twenty pallets in a dead zone, walks out, badges out; operator B badges in; the queue drains. Three things follow:
 
@@ -285,6 +292,8 @@ Three credentials, three lifetimes:
 3. **A role denial is not a revocation.** `role-denied` falls through to an ordinary rejection (`replay-classification.ts:41`); only `device-revoked` strands the tail. And a 401 `unauthenticated` is neither — it is treated as unreachable so the ops stay queued for a re-badge (`:25-29`).
 
 Even if devices are shared, they never launder authority: an op queued under A's session replays as A's work, or not at all.
+
+**Story 6-1a made the last sentence literal (A4).** Replay authenticates with the CURRENT badge session, so after a release (or a deactivation) operator B's session would otherwise post A's scans. Now: each op stamps its creator's user id at enqueue (`OpSession.operatorId`); `replayOutbox(…, currentOperatorId)` never sends an op whose creator is someone else — it moves to the retained / sync-report path (code `operator-changed`, held for web review, attributed to its creator) and replay continues; and every send carries `X-Op-Operator`, which the server refuses with `409 operator-mismatch` (classified `quarantined`) if it ever differs from the session's operator. Ops sealed before the field existed carry no id and replay as before.
 
 ---
 

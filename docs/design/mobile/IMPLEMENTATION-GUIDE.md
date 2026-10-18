@@ -112,7 +112,9 @@ Send `null` explicitly where the server's DTO expects the arm closed (`serials: 
 | Server answer | `SendResult` | Op's fate | Surfaced as |
 |---|---|---|---|
 | Network failure / timeout (`ApiUnreachableError`) | `unreachable` | **Stays queued**; the walk stops here and resumes later | Nothing. Depth is not an error |
-| `401 unauthenticated` | `unreachable` | **Stays queued** | Nothing — re-badge, then replay. A session expiry is *not* a refusal |
+| `401 unauthenticated` (6-1a: with an additive `reason`) | `unreachable` | **Stays queued** | The session-ended overlay (`sessionEndFromError`) — re-badge, then replay. A session end is *not* a refusal. **The server keeps this code on every device route on purpose:** a field build drops any other 401 code as `rejected` |
+| `409 operator-mismatch` (6-1a, A4) | `quarantined` | Dropped from the outbox, **held for review** under its creator | `⚠ Held for review` — the op's creator is not the badged operator |
+| (never sent) an op whose creator is not the badged operator (6-1a, A4) | — (engine) | Held for review, code `operator-changed`; replay continues | `⚠ Held for review — Queued by <creator>` |
 | `403 device-revoked` | `revoked` | This op **and the entire tail** quarantine; phase flips to `revoked` | `⚠ Held for review — Device revoked`, per stranded op, each with its own attribution |
 | `409 pick-bin-short` (case 3) | `re-plannable` | **KEPT in the durable outbox**, attempt count incremented and persisted. Replay continues past it | `⧗ Needs re-planning — … Attempt N of 3 — it stays queued` |
 | `pick-unresolvable` (case 4) | `quarantined` | Dropped from the outbox, held for review. **Strands only itself** | `⚠ Held for review` with the creating session |

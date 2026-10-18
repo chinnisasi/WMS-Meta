@@ -852,3 +852,25 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-page-tabs.md`
   summary: Arrow-key roving focus (and tabIndex=-1 on inactive tabs) for the shared page tab bar — Inbound, Outbound, Replenishment, Compliance, Settings — and the Conflicts tabs, per the WAI-ARIA tabs pattern.
   evidence: `PageTabBar` (wms-fe `src/components/shared/page-tabs.tsx`) renders role=tablist/tab with every tab a separate Tab stop and no arrow-key handling; deferred explicitly by spec-inbound-tabs and spec-page-tabs, raised again in page-tabs code review (C11).
+
+- source_spec: none
+  summary: Purchase-order import from a CSV or Excel file, reusing the ASN import machinery (WMS-BE #99 sheet reader, grouping, per-group savepoints; WMS-FE #84 Import from file).
+  evidence: Split from po-create-and-import on 2026-10-18 at the user's choice — the web PO create form ships first, and its vendor/SKU/quantity rules become the import's rules.
+
+- source_spec: none
+  summary: 6.1b owner two-factor sign-in — authenticator-app (TOTP) codes and backup codes for owner accounts, setup and prompt on the web; the handheld needs none (PIN badge-in on an owner-enrolled device).
+  evidence: Split from 6-1-auth-hardening on 2026-10-18 at the user's choice; follows 6.1a secure sessions, whose refresh/session model it builds on.
+
+- source_spec: none
+  summary: Password reset — emailed reset link with forgot-password screens on the web and portal, and an owner-initiated operator PIN reset from the web.
+  evidence: Split from 6-1-auth-hardening on 2026-10-18; blocked on roadmap 5.1 (no mailer exists in wms-be).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
+  summary: ~~DONE in 6-1a (user chose to fold it in, 2026-10-18)~~ Security events are not audited — refresh-reuse revocation (the token-theft signal), sign-in / badge-in locks, web sign-out, badge-out and the `auth:unlock` CLI leave no audit row, so an owner cannot see an attack or a hijack.
+  evidence: 6-1a code review C11. Only the owner/supervisor actions (deactivate, reactivate, unlock, release) are audited. Needs a system-actor audit vocabulary (`session.reuse_detected`, `auth.locked`, …) and the AUDIT_NEW_ACTIONS pins.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
+  summary: Deploy (6.2) must set `TRUSTED_PROXY_HOPS` to the real proxy depth and warn at boot when it is unset behind a proxy — with 0 every sign-in shares the load balancer's address, so the (email, IP) lock and the 300/min per-IP limit apply site-wide.
+  evidence: 6-1a code review C8 (`auth-attempts.ts clientIpOf`). Also: the refresh cookie path is fixed at `/api/v1/tenants/session` (E10) — a deploy that puts the API behind a path prefix must derive it.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1a-secure-sessions.md`
+  summary: Measure the handheld's offline PIN verifier cost (pure-JS scrypt N=2^14, r=8, run on the JS thread at every online badge-in) on a low-end device; lower N or move it off-thread if it exceeds ~300 ms.
+  evidence: 6-1a code review C13, unverified — no on-device timing exists.

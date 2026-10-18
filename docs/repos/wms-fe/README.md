@@ -23,6 +23,8 @@ Durable notes about this repo (architecture, conventions, how it talks to `wms-b
 
 ## Interface Contract (what this repo depends on from `wms-be`)
 
+- **Secure sessions (story 6-1a):** the stored session adds `refreshUntil`; an expired access token is refreshable, not signed-out. `src/lib/session-refresh.ts` calls `POST /tenants/session/refresh` (plain `fetch`, `credentials: 'include'`, `X-WMS-Session: 1`) before a request whose token has lapsed and once on a `401 token-expired` (retrying a clone of the request, same Idempotency-Key), serialised across tabs with `navigator.locks`; `401 session-ended` clears the session with its `reason`, shown on `/login?ended=<reason>`. Sign-in sends `credentials: 'include'`; sign-out calls `POST /tenants/session/sign-out`. Settings consumes `POST /users/{id}/deactivate|reactivate|unlock` and `POST /devices/{id}/release|unlock`, and reads `UserResponse.lockedUntil` / `DeviceResponse.badgeLockedUntil`. Codes consumed: `token-expired`, `session-ended`, `sign-in-locked`, `rate-limited`, `last-owner`. Deploy constraint: the web and the API must share a registrable domain off the public suffix list (the cookie is `SameSite=Strict`).
+
 Keep this current whenever a cross-repo change lands — this is what lets an agent catch "this backend change breaks the frontend" *before* making the change, not after.
 
 - Backend base URL / API version consumed: `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:3000/api/v1`), api document version 1.0.0
