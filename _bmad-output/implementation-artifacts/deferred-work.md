@@ -856,3 +856,11 @@
 - source_spec: none
   summary: Purchase-order import from a CSV or Excel file, reusing the ASN import machinery (WMS-BE #99 sheet reader, grouping, per-group savepoints; WMS-FE #84 Import from file).
   evidence: Split from po-create-and-import on 2026-10-18 at the user's choice — the web PO create form ships first, and its vendor/SKU/quantity rules become the import's rules.
+
+- source_spec: none
+  summary: 6.1b owner two-factor sign-in — authenticator-app (TOTP) codes and backup codes for owner accounts, setup and prompt on the web; the handheld needs none (PIN badge-in on an owner-enrolled device).
+  evidence: Split from 6-1-auth-hardening on 2026-10-18 at the user's choice; follows 6.1a secure sessions, whose refresh/session model it builds on.
+
+- source_spec: none
+  summary: Password reset — emailed reset link with forgot-password screens on the web and portal, and an owner-initiated operator PIN reset from the web.
+  evidence: Split from 6-1-auth-hardening on 2026-10-18; blocked on roadmap 5.1 (no mailer exists in wms-be).
