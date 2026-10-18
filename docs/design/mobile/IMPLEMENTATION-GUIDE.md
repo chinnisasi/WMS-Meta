@@ -131,6 +131,8 @@ Send `null` explicitly where the server's DTO expects the arm closed (`serials: 
 - **Replay continues past every refusal.** Only `revoked` and `unreachable` `break` the loop. One refused stop must never block the rest of the walk.
 - **A settled op can still have something to say.** `settledNote` (`replay-classification.ts:56`) turns a non-`none` `conflictClass` or a `short` line status into a summary line, so a moved-on pick does not read identically to an untouched one.
 
+**Per-line refusals inside a settled receipt (1-1, 1-2a, 1-2b).** A `grn.submit` that settles `201` can still refuse lines (`rejectedLines[]`) — the op's fate is `settled`, and `settledNote` turns each refused line into words, never "Held for review" (§7g). The codes the device names: `sku-client-mismatch`, `client-departed` (1-2a), and story 1-2b's five expiry codes — `expiry-on-untracked`, `expiry-before-mfg`, `batch-expiry-mismatch`, `expiry-required`, `shelf-life-short` — which carry `index`, `batchCode`, `expiryDate` and (short only) `minShelfLifeDays`; the words name the SKU and batch (e.g. "TSHIRT-M batch B12: expiry 2026-11-01 is 20 day(s) out, below Brand B's 90-day minimum — in review"). `qcHeldLines` / `qcSkippedLines` add "N line(s) held for QC" / "N line(s) not QC-held (serial / catch-weight)". A legacy response (none of these fields) reads exactly as before. The device WARNS about the receiving policy at the dock and never refuses for it (1-2b decision 6) — the server decides on replay.
+
 ### Adding a new refusal code
 
 1. Decide which of the four fates it has, and write the reason down in the branch comment.

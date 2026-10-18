@@ -99,7 +99,7 @@ IST calendar days computed in TS (`IST_OFFSET_MS`, now in `shared/primitives/tim
 | # | Tile | Figure | Source & definition | Drill | Reconciles |
 |---|---|---|---|---|---|
 | 1 | dockToStock | `medianMinutes` {today, d7} | median of `putaway_placements.created_at − goods_receipt_notes.created_at` (minutes) over placements in the window; negative intervals excluded | ledger `type=putaway.placed` | no (a median) |
-| | | `awaitingPutaway` (live) | GRN lines with putaway units (`applied_qty` + Σ APPROVED over-receipt excess — story 21-9) whose (sku, batch) still has on-hand in the system Receiving bin — `PutawayFacade.getPutawayTasksInTx`'s derivation in one statement | `GET /putaway/tasks?warehouseId` | **yes** |
+| | | `awaitingPutaway` (live) | GRN lines with putaway units (`applied_qty` + Σ APPROVED over-receipt excess — story 21-9 — minus the line's units on an OPEN receipt QC hold — story 1-2b) whose (sku, batch) still has on-hand in the system Receiving bin — `PutawayFacade.getPutawayTasksInTx`'s derivation in one statement | `GET /putaway/tasks?warehouseId` | **yes** |
 | 2 | pickRate | `pickLines` {today, d7}, `lastHour` | `picks` rows by `created_at` — one per pick line (a 10-serial line is ONE line; the ledger has ten draws) | ledger `type=pick.picked` | no (units differ) |
 | 3 | shortPicks | `shortLines` {today, d7} | `picklist_lines.status = 'short'` by `updated_at` (the terminal flip), via `picklists` for the warehouse — **zero-unit shorts included** (they write no `picks` row and no event) | `…/outbound/picklist-lines?status=short` (window on `updated_at`, keyset on the immutable `(created_at, id)`) | **yes** |
 | 4 | grnVariances | `overReceipts` {today, d7} | `over_receipts.requested_at` in the window | `/receiving/over-receipts?warehouseId` | **yes** |
@@ -189,6 +189,8 @@ sequenceDiagram
 | `lateNotDispatched` | orders of c (+ wh) received in the window, not `cancelled`, received ≤ `asOf − 24 h`, with no `dispatch.dispatched` event before `asOf` (the 0039 `orderId` index) | orders received in the period |
 
 Ratios 0–1 to 4 dp, null with an empty denominator; medians minutes to 1 dp.
+
+**Dock-to-stock includes QC dwell (story 1-2b, decided).** A QC-on-receipt client's units wait on a receipt hold before they can be placed; the median still measures placement minus the GRN's creation, so the hold's time counts. It is real time to stock — the client's own policy put it there. A hold-free variant would subtract each line's hold interval (PENDING if asked for).
 
 **What reconciles to the ledger.** Every timeliness figure and the accuracy denominator come from `dispatch.dispatched`. Dock-to-stock and short picks are projections over rows written in the same transaction as their ledger events (9-1's argument). Pack failures come from a fact table not backfilled before 0058 — hence `packFailuresCountingSince`.
 

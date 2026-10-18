@@ -50,7 +50,7 @@ What blocks running real clients is mostly around that core:
 | # | Story | What it adds |
 |---|---|---|
 | 1.1 ★ | Per-client SKU identity | Code and barcode unique per (client); scan resolution by document client; migration + device catalog change (D1) |
-| 1.2 ★ | Client master completion | Contacts (name, email, phone), registered and return addresses, offboarding (`departed`), and a **per-client operating policy**: receiving tolerance %, QC on receipt, expiry required + minimum remaining shelf life, allocation FEFO/FIFO |
+| 1.2 ★ | Client master completion | Contacts (name, email, phone), registered and return addresses, offboarding (`departed`) — **1-2a**; and a **per-client receiving policy**: receiving tolerance, QC on receipt, expiry required + minimum remaining shelf life — **1-2b** (allocation FEFO/FIFO moved to 4.3) |
 | 1.3 ★ | Business partner master | One record per real company with roles vendor / consignee / transporter; GSTIN-deduplicated; client links (many-to-many) for vendors and consignees; documents snapshot the party; Settings → Partners (list, add, edit, link to clients, deactivate) (D3) |
 | 1.4 ★ | SKU master on the web | Single SKU create and full edit (dimensions, storage class, hazard), shelf life, multiple barcodes, case/pallet pack levels with their own barcodes |
 | 1.5 ★ | Client segregation | A client filter on every list and the stock/ledger reads; dedicated client bins enforced in putaway, moves and merge |
@@ -62,11 +62,11 @@ What blocks running real clients is mostly around that core:
 | 2.1 ★ | PO create form | Client → that client's vendors and SKUs; kit guard (spec draft `spec-po-create-form.md`, to be rewritten on 1.3) |
 | 2.2 | PO import | CSV/Excel, reusing the ASN import |
 | 2.3 ★ | Gate-in and receipt header | Vehicle number, transporter, LR/AWB, driver, supplier invoice/challan number + date, inward e-way bill, seal number + intact, packages declared vs counted, gate-in / unload start-end, dock door; optional appointment |
-| 2.4 ★ | Receipt line capture | Expiry date (or derived from shelf life), minimum-remaining-life check per client policy, good / damaged / short quantities with reason codes (damaged → a damaged location, not sellable), temperature on arrival for cold-chain SKUs |
+| 2.4 ★ | Receipt line capture | Expiry derived from SKU shelf life (after 1.4), good / damaged / short quantities with reason codes (damaged → a damaged location, not sellable), temperature on arrival for cold-chain SKUs. *(Expiry capture and the minimum-remaining-life check per client policy shipped in 1-2b.)* |
 | 2.5 ★ | Damage photos | Photo attachments on a receipt (needs file storage — S3) |
 | 2.6 ★ | Serial/IMEI capture at receipt | Scan serials or IMEIs on the handheld at receiving |
 | 2.7 | Desk receiving on the web | Receive against a PO/ASN at a desk (small sites, scanner down) |
-| 2.8 ★ | QC on receipt | Per-client policy auto-holds on receipt; inspection pass/fail; partial reject → return to vendor |
+| 2.8 ★ | QC inspection outcome | Inspection pass/fail on a receipt QC hold, including the **"QC fail" disposition** deferred by 1-2b (decision 7); partial reject → return to vendor. *(Per-client auto-holds on receipt, release and release-per-receipt shipped in 1-2b.)* |
 | 2.9 ★ | GRN document + client confirmation | Printable/exportable GRN with the header and damage details; GRNs in the portal; email/webhook on receipt (needs 5.1) |
 | 2.10 ★ | Labels | Bin labels; pallet/carton (LPN) labels at receiving; ZPL + PDF (D7) |
 
@@ -87,7 +87,7 @@ What blocks running real clients is mostly around that core:
 |---|---|---|
 | 4.1 ★ | Order intake for clients | CSV/Excel order import; portal order entry; client order number |
 | 4.2 ★ | Order fields and lifecycle | B2B/B2C, COD, priority and ship-by date; cancel/unpack a packed order; backorder follow-on |
-| 4.3 ★ | Per-client allocation rules | FEFO for perishables and pharma, FIFO otherwise, and minimum remaining shelf life to the customer, from the client policy (1.2) |
+| 4.3 ★ | Per-client allocation rules | FEFO for perishables and pharma, FIFO otherwise, and minimum remaining shelf life to the customer — its own fields on the client policy row 1-2b added (1-2b decision 1) |
 | 4.4 ★ | Client-arranged shipping capture | The client sends its own courier or transporter. **Labels, both ways:** (a) the client uploads ready-made label PDFs per order (portal, API or ops upload), which print at the pack station and are scan-verified onto the parcel; (b) the courier brings labels at pickup, and the AWB is captured by scanning at handover. Per shipment: courier, AWB/LR, cartons and weight, the pickup person and vehicle, handover time. **Documents, both:** a courier-signed handover manifest per pickup, and every outbound document per shipment (invoice/challan, e-way bill, POD) scanned or photographed, attached and shared with the client (portal + email). Courier API integration stays an **optional** later story (D5) |
 | 4.5 ★ | Packing documents | Multi-carton shipments, packing slip, carton labels |
 | 4.6 ★ | Client consignment compliance | Brand invoice/challan recorded, e-way bill for client goods (D4) |
