@@ -885,3 +885,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-per-client-sku-identity.md`
   summary: Bin-occupancy refusal messages (putaway, bin merge, inventory) are never tested in a multi-client tenant, so a regression to bare codes would pass.
   evidence: 1-1 verification-gap finding; the `skuCodeLabelsInTx` helper is tested directly, the call sites only in single-client tenants with `toContain`.
+
+- source_spec: none
+  summary: 1.2b per-client operating policy — receiving tolerance %, QC on receipt, expiry required + minimum remaining shelf life, allocation FEFO/FIFO, enforced in receiving, QC and allocation (backend + web + handheld).
+  evidence: Split from roadmap story 1.2 on 2026-10-18 at the user's choice; 1.2a (client master record: contacts, addresses, offboarding) ships first and its client page hosts the policy screen.
