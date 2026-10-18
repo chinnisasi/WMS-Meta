@@ -175,8 +175,9 @@ Fetched online from `GET /tenants/{t}/devices/catalog-snapshot?warehouseId=…` 
 | Field | Carries | Why the device needs it offline |
 |---|---|---|
 | `skus[]` | id, code, name, **barcode**, uom, `batchTracked`, `serialTracked` — and, 11.7: **`variantValues`** + **`axes`** (nullable) | Barcode → SKU resolution with no network call; the batch-required and serial-required gates — and, 11.7, so the device can **say which variant a scan holds, offline** (UX-DR28). Display only: nothing decides on them; `null` means the SKU is unattached to a product, `absent` means a pre-11-7 seal |
-| `openPurchaseOrders[]` | lines with `orderedQty` / `receivedQty` / `openQty` | Which PO line a scan maps to, and the over-receipt (excess) math |
-| `openAsns[]` *(server since 21-6; parsed on the device since 21-6b)* | `{id, code, clientId, warehouseId, expectedAt, lines{id, skuId, announcedQty, receivedQty, openQty}}` in base units — the warehouse's `announced` / `partially_received` advance shipment notices | The PO arm's twin: which ASN line a scan maps to, and the same excess math (one document-generic path, `documentProgress`, every `openQty` clamped to ≥ 0 — an approved over-receipt drives it negative). `parseCatalogSnapshot` defaults it `?? []`, pinned by equality. A closed, cancelled or fully received ASN is absent (so a late carton on a `received` ASN goes blind or unmatched — PENDING). `clientId` is carried but never shown: the floor stays client-agnostic. ASN cards show **line counts only**, never summed quantities |
+| `openPurchaseOrders[]` | lines with `orderedQty` / `receivedQty` / `openQty` — and, 1-1: **`clientId`** | Which PO line a scan maps to, and the over-receipt (excess) math; 1-1: the client an unmatched scan resolves within |
+| `clients[]` *(1-1)* | `{id, code, name, active}` — every client a SKU or an open document references | The names the device prints when a scan belongs to another client, and the blind receipt's client picker (active clients only). **Absent = legacy mode** (an older server, or a seal from before the update): deliberately NOT defaulted by `parseCatalogSnapshot`, pinned by equality in `device-store.test.ts` |
+| `openAsns[]` *(server since 21-6; parsed on the device since 21-6b)* | `{id, code, clientId, warehouseId, expectedAt, lines{id, skuId, announcedQty, receivedQty, openQty}}` in base units — the warehouse's `announced` / `partially_received` advance shipment notices | The PO arm's twin: which ASN line a scan maps to, and the same excess math (one document-generic path, `documentProgress`, every `openQty` clamped to ≥ 0 — an approved over-receipt drives it negative). `parseCatalogSnapshot` defaults it `?? []`, pinned by equality. A closed, cancelled or fully received ASN is absent (so a late carton on a `received` ASN goes blind or unmatched — PENDING). `clientId` is carried but never shown on the card; since 1-1 it scopes the scan resolution (below). ASN cards show **line counts only**, never summed quantities |
 | `bins[]` | id, code, zone, type, capacity, **`blocked`**, **`systemOwned`** | Bin-code resolution — and blocked/system bins ride the payload *deliberately*, so the device can **reject a scan against them pre-queue** rather than queueing an op the server will refuse |
 | `putawayTasks[]` | GRN line + placeable qty + `suggestedBin` + `rationale` | The putaway unit of work. The suggestion is advisory; the server re-gates at placement |
 | `pickTasks[]` | The whole walk: picklist/line ids, sku, bin, batch, qty, `sliceSeq`, `walkSeq`, `stopCount`, `binStateEpoch?` — and, 11.7: **`kitParentSkuCode`** (nullable) | **The whole walk rides the snapshot on purpose** — that is what lets a wrong-bin scan name *the next walk bin holding the expected SKU* with no network call (`src/picking/draft.ts:133-157`). 11.7 adds the exploded kit component's parent kit SKU code, display-only (`from kit {code}` header line); no pick logic reads kit-ness |
@@ -227,6 +228,30 @@ non-ApiProblem throw       → rejected, code 'unknown'
 | `manualScan` `:19` | Typed entry — a one-tap fallback at every step, never a degraded mode |
 
 `useCameraCapture` (`:61`) holds a **restream dedupe**: the same value inside 1.5 s (the decision budget) is dropped, because a scanner re-reports the same physical barcode across consecutive frames and each frame mints a fresh ULID, so ids could never match (`:68-79`). **Camera permission is never a requirement** — denial just leaves HID and manual active (`:57-60`).
+
+### Per-client SKU resolution (story 1-1)
+
+A SKU code and a barcode are unique per **(tenant, client)**: two brands may both own `TSHIRT-M` and sell one GTIN. Every scan op still posts a `skuId` — the barcode → SKU step is the device's, against the snapshot (whose `skus[]` carry an optional `clientId`). **One pure resolver for every flow**, `src/lib/sku-resolution.ts` (`resolveSku(snapshot, value, {workSkuIds, clientId})`), in a fixed order, each step **by barcode, then by code**:
+
+1. **The work's own SKUs** — the task's SKU (putaway, pick), the pack task's line SKUs, the PO / ASN / RMA line SKUs.
+2. **The document's client** — tenant-wide when there is no client in scope (legacy mode, a blind draft before a client is chosen, flows whose work carries none).
+3. **Other clients** — reported, never chosen silently.
+
+**Steps 1 and 2 work on a stale snapshot** — the work's SKU ids and barcodes are already on the device, so a second client importing the same GTIN after the seal cannot steal the first client's scan. **An absent `sku.clientId` is never a non-match** (an older seal is in every client's scope).
+
+| Flow | Step 1 | Anything else |
+|---|---|---|
+| Putaway, pick | the task's SKU | "Not this task's item" (a single other match keeps the 11-7 both-sides wording) |
+| Pack | the order's line SKUs | "Not on this order" |
+| Returns | the RMA's line SKUs, then the RMA's client | a value only another client holds: "This code is &lt;client&gt;'s — not on this return"; the old cross-client `.find` is gone |
+| Receive on a PO / ASN | the document's line SKUs, then the document's client | **one** other client holds it: "This is &lt;client&gt;'s &lt;code&gt; — receive it as unmatched on this receipt?" — yes adds the 21-6 unmatched line (booked to that client's ledger by the server), no discards the scan; **several**: the operator picks the client, nothing is booked without an answer |
+| Receive, blind | within the chosen client | "This is &lt;client&gt;'s — not this receipt's client" |
+
+Receive's manual entry takes a barcode **or a SKU code** through the same order ("Type the barcode or SKU code").
+
+**The blind client.** `ReceiveDraft.clientId`; the picker sits in the blind-reason step (active clients only; with one client it is preselected and hidden; in legacy mode it is not shown). `choosePo`, `chooseAsn` and `chooseBlindReceive` (snapshot and `clientId` both required) refuse the switch when the next context names a client and the draft's client, or ANY held line's SKU client, differs (an absent `sku.clientId` never counts) — so a confirmed other-client unmatched line pins the draft to its document. A pending other-client question is cleared when the context or the snapshot changes. `confirmPayload` sets `clientId` **only on a blind receipt and only when the snapshot carries `clients`** — a new app on an old server would otherwise be refused 400 by `forbidNonWhitelisted` and the op dropped; PO and ASN payloads never carry the key (byte-identical). The server refuses another client's line on a blind receipt **per line** (`rejectedLines[].code = 'sku-client-mismatch'`); the sync summary names the line with its client ("TSHIRT-M (Brand B): another client's item — not this receipt's client; sent to review"). When every line was refused the server records no receipt and answers `goodsReceipt: null` + `refusedReceipt`; the op still settles (a retraction: "Blind receipt not recorded — every line was refused: …"), never dropped and never "Held for review". One unknown-value wording across flows: "Barcode or SKU code is not in the catalog — check it and type it again".
+
+**Size.** `clientId` per SKU plus the `clients` list add about 50 B per SKU to every snapshot; the SKU arm is still tenant-wide (warehouse scoping is PENDING).
 
 ### The decision model, as actually built
 

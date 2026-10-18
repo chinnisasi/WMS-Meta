@@ -161,6 +161,10 @@ If a new rule means the device would otherwise have to guess, or queue-and-find-
 
 ---
 
+### Resolving a scanned SKU (story 1-1)
+
+Never resolve a barcode or code with a bare `.find` over `snapshot.skus` — two clients may share both. Call `resolveSku` (`src/lib/sku-resolution.ts`) with the work's own SKU ids and the document's client, and branch on its `kind` (`work`, `client`, `other-clients`, `ambiguous`, `unknown`, `empty`). Treat an absent `sku.clientId` as in scope, and a snapshot without `clients` as legacy mode (no client in scope, nothing sent). A new optional request field must be sent **only when the snapshot proves the server knows it** — the server's `forbidNonWhitelisted` answers 400 to an unknown key, and the op is dropped.
+
 ## 5. Writing a scan step
 
 ### The step machine
