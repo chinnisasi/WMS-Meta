@@ -2,7 +2,7 @@
 title: '1.5b Dedicated client bins — a bin dedicated to one client refuses other clients'' stock in putaway, merge and transfers'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'review'
 baseline_commit: '0c3962606e1468de4248189761530a653ac7ceb6'  # wms-be; wms-fe: 235701e631a5da64a4d20981fdaf9fcff2e18230; wms-mobile: 3a208c070c2bb7f9c74a274a2d36db6af028db0e
 route: 'dispatch'
 review_loop_iteration: 0
@@ -131,12 +131,12 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` primitive, shared ranking, gates in placement, merge, transfer; QC release lock -- the rule everywhere stock lands
-- [ ] `wms-be` bin admin DTOs, routing, hash, guard, shapes, snapshot, descriptions, openapi -- dedicate and clear
-- [ ] `wms-be` `test/dedicated-bins.spec.ts` + suite updates -- the matrix
-- [ ] `wms-fe` column, Edit-client panel, create/grid fields, merge labels, messages + tests -- web admin
-- [ ] `wms-mobile` snapshot field, conformance helper, local refusals, screens, replay code + tests -- handheld refusals
-- [ ] Meta docs (land last): `modules/putaway.md`, `tenancy.md`, `clients.md`, `inbound.md` (release lock), `API-SURFACE.md`, mobile guide, repo READMEs, PENDING
+- [x] `wms-be` primitive, shared ranking, gates in placement, merge, transfer; QC release lock -- the rule everywhere stock lands
+- [x] `wms-be` bin admin DTOs, routing, hash, guard, shapes, snapshot, descriptions, openapi -- dedicate and clear
+- [x] `wms-be` `test/dedicated-bins.spec.ts` + suite updates -- the matrix
+- [x] `wms-fe` column, Edit-client panel, create/grid fields, merge labels, messages + tests -- web admin
+- [x] `wms-mobile` snapshot field, conformance helper, local refusals, screens, replay code + tests -- handheld refusals
+- [x] Meta docs (land last): `modules/putaway.md`, `tenancy.md`, `clients.md`, `inbound.md` (release lock), `API-SURFACE.md`, mobile guide, repo READMEs, PENDING
 
 **Acceptance Criteria:**
 - Given an empty bin, when an ops manager dedicates it to GlowCo on the web, then the bin list shows GlowCo and a fresh handheld snapshot carries the bin's client and GlowCo's name.
@@ -146,6 +146,23 @@ context:
 - Given a GlowCo putaway task that suggested a shared bin before a GlowCo bin was dedicated, when the operator places into that shared bin with no reason, then it is placed.
 
 ## Implementation Notes
+
+Decisions taken in implementation where the spec left a choice (backend):
+
+- **The recorded suggestion follows the match (decision 10).** `suggestBinInTx` returns the preferred suggestion plus the unpreferred one (`unpreferred: {binId, binCode} | null` — the same eligible set, so both are null together). When the target equals the unpreferred bin, the placement records THAT as `suggestedBinId`/`suggestedBinCode`, so every stored row keeps "reason is null iff target = suggestion" (otherwise a followed stale suggestion would read as a mismatch with no reason in the SM-3 report).
+- **The client gate lives in `candidateFitsSku`** (right after the class gate), so `pickPutawayCandidate`'s passes need no separate acceptance check; `preferOwn: false` is one stable pass over every accepting bin.
+- **`assertClientTakesWorkInTx` on edit runs only when the value changes to a non-null client** — re-sending the current (since-departed) client is not refused, matching decision 8 ("an existing dedication to a departed client stays"). On create and grid it runs for any non-null value.
+- **A null `dedicatedClientId` on a system bin passes** (decision 6 refuses a non-null value only); it is a no-op write.
+- **Create/grid hash `dedicatedClientId ?? undefined`** — null (shared) and absent both drop out of the fingerprint, so a pre-1.5b request and an explicit-shared request hash alike. The PATCH hashes it as given (null = clear is a distinct intent).
+- **The `bin-client-conflict` detail** names up to 10 distinct SKUs (holds first, then on-hand) and says which of "open QC holds that return to it" / "stock on hand" applies.
+- The rationale names the client by its refusal label (`getClientLabelsInTx`: the code, or "<tenant> (your company)" for self) — `Dedicated to GLOW — lowest occupancy …`.
+
+Web and handheld:
+
+- **Web:** when the clients read fails the Client column and Edit client are hidden behind a note with Retry (rather than a disabled editor — with no list there is nothing to name or offer). A create/grid `not-found` with a client chosen reads "That warehouse, zone or client no longer exists" (the server does not say which).
+- **Handheld:** the client argument to `evaluateBin` / `evaluateLandingBin` is optional (null = legacy mode), so the existing `evaluateBin` test calls were left unchanged; new cases cover the client arms. A refused pre-filled planned landing bin now shows any refusal reason (blocked and system bins included), not only the client one.
+
+Verification: wms-be full jest suite 101 suites / 2472 tests green, lint, typecheck, build, `db:generate` no changes; mutation checks (client gate in `candidateFitsSku`, placement, merge, transfer, edit guard, the release lock, the decision-10 rule) each fail `test/dedicated-bins.spec.ts`. wms-fe lint/test (2081)/typecheck/build/capability mirror green. wms-mobile `bun test` 717 / typecheck green.
 
 ## Spec Change Log
 

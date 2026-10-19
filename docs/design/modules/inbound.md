@@ -300,7 +300,7 @@ sequenceDiagram
   Note over Inv: EXCLUDED from ATP while held
   Ops->>Ib: release
   Ib->>Inv: qc.released → back to the origin bin
-  Note over Ib: releaseHold lacks .for('update') on the<br/>origin read, and release-into-a-BLOCKED-bin<br/>is unpinned. Both tracked.
+  Note over Ib: 1-5b: the origin bin is locked FOR UPDATE<br/>before the release writes. Release-into-a-<br/>BLOCKED-bin is still unpinned (tracked).
 ```
 
 An adjustment through the QC bin is refused (`400 qc-bin-not-adjustable`) — it would drop ATP with no hold row and no release path.
@@ -391,7 +391,7 @@ Writes: one `qc.held` ledger movement per batch on-hand arm (untracked SKUs move
 
 ### `qc-holds/:id/release` — `QcCommand.releaseHold` (`qc.command.ts:390`)
 
-Guards: `qc.manage` → replay → hold row `.for('update')`, 404 / 409 `qc-hold-released` if already released → the **origin bin must still exist and not be retired** (409 `qc-hold-origin-bin-gone`, and the hold **stays open**) → **12-3 secure-authority gate**: `assertSecureBinAuthority(role, [origin])` on the origin read (`:552`) → 403 `role-denied` naming `secure.move` when the origin-return bin is secure-class and the actor lacks the capability (FR-42 — released units return to the origin). The origin read has no `.for('update')` (the standing PENDING `inbound:45` currency note; 12-3 adds the assert on the class read, not the lock) → the hold's own `qc.held` arms must exist (409 if none — refuses a blind release rather than guessing).
+Guards: `qc.manage` → replay → hold row `.for('update')`, 404 / 409 `qc-hold-released` if already released → the **origin bin must still exist and not be retired** (409 `qc-hold-origin-bin-gone`, and the hold **stays open**) → **12-3 secure-authority gate**: `assertSecureBinAuthority(role, [origin])` on the origin read (`:552`) → 403 `role-denied` naming `secure.move` when the origin-return bin is secure-class and the actor lacks the capability (FR-42 — released units return to the origin). **Since 1-5b the origin read is `.for('update')`** (closing the PENDING note): the bin edit's dedicate guard locks the same row and then counts the bin's open holds, so a release and a dedication serialise and another client's units never land in a freshly dedicated bin. Lock order hold row(s) → origin bin row → the warehouse advisory inside the ledger append; nothing locks a bin row and then a hold row. The release itself is **not** client-gated — the dedicate guard refusing a dedication while another client's hold originates in the bin is what keeps it safe (1-5b Design Notes) → the hold's own `qc.held` arms must exist (409 if none — refuses a blind release rather than guessing).
 
 Writes: one `qc.released` movement per replayed arm, `qcBin → row.binId`; conditional `UPDATE … WHERE status='open'`; audit row; outbox `qc_hold.released`.
 
