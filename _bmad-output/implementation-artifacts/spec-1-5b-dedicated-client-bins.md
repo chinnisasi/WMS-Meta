@@ -2,7 +2,7 @@
 title: '1.5b Dedicated client bins — a bin dedicated to one client refuses other clients'' stock in putaway, merge and transfers'
 type: 'feature'
 created: '2026-10-20'
-status: 'review'
+status: 'in-review'
 baseline_commit: '0c3962606e1468de4248189761530a653ac7ceb6'  # wms-be; wms-fe: 235701e631a5da64a4d20981fdaf9fcff2e18230; wms-mobile: 3a208c070c2bb7f9c74a274a2d36db6af028db0e
 route: 'dispatch'
 review_loop_iteration: 0
@@ -149,7 +149,7 @@ context:
 
 Decisions taken in implementation where the spec left a choice (backend):
 
-- **The recorded suggestion follows the match (decision 10).** `suggestBinInTx` returns the preferred suggestion plus the unpreferred one (`unpreferred: {binId, binCode} | null` — the same eligible set, so both are null together). When the target equals the unpreferred bin, the placement records THAT as `suggestedBinId`/`suggestedBinCode`, so every stored row keeps "reason is null iff target = suggestion" (otherwise a followed stale suggestion would read as a mismatch with no reason in the SM-3 report).
+- **The recorded suggestion follows the match (decision 10).** `suggestBinInTx` returns the preferred suggestion plus the unpreferred one (`unpreferred: {binId, binCode} | null` — the same eligible set, so both are null together). When the target equals the unpreferred bin and no reason was given, the placement records THAT (with a reason it records the preferred suggestion and keeps the reason — a deliberate skip, per code review) as `suggestedBinId`/`suggestedBinCode`, so every stored row keeps "reason is null iff target = suggestion" (otherwise a followed stale suggestion would read as a mismatch with no reason in the SM-3 report).
 - **The client gate lives in `candidateFitsSku`** (right after the class gate), so `pickPutawayCandidate`'s passes need no separate acceptance check; `preferOwn: false` is one stable pass over every accepting bin.
 - **`assertClientTakesWorkInTx` on edit runs only when the value changes to a non-null client** — re-sending the current (since-departed) client is not refused, matching decision 8 ("an existing dedication to a departed client stays"). On create and grid it runs for any non-null value.
 - **A null `dedicatedClientId` on a system bin passes** (decision 6 refuses a non-null value only); it is a no-op write.
@@ -196,6 +196,33 @@ Verification: wms-be full jest suite 101 suites / 2472 tests green, lint, typech
 - D24 low (E13): refusal order when class and client both change. Class first.
 
 Rejected: none.
+
+**Code review, 2026-10-20.** Three layers over the three-repo diff: blind (BH1–BH15), edge cases (EC1–EC5), verification gaps (VG1–VG5). 25 raw findings, 8 patch entries after grouping, the rest rejected. Claims checked against the code: the reason strip at `putaway.command.ts:823`, `suggestBinInTx`'s single caller (`:745`, rationale unread), `getClientLabelsInTx` short-circuiting on an empty list, the retired check ahead of the dedication arm (`bin.command.ts:1461`), the stale schema comment (`schema.ts:651`).
+
+- P1 med (BH1, EC1, BH8) patch: a placement into the unpreferred (shared) bin WITH a reason was recorded as followed — the reason stripped and the unpreferred bin stored as the suggestion, losing a deliberate skip of the client's own bin. The unpreferred bin counts as followed only when no reason is sent.
+- P2 med (VG3) patch: `evaluateBin` / `evaluateLandingBin` default the client lookup to null, so a screen can drop it and the offline gate silently turns off; the Code Map asked for the test calls to be updated. Make it required.
+- P3 low (BH2) patch: `suggestBinInTx` reads client labels to build a rationale its only caller (placement) never reads — an extra query inside the bin-row lock. Drop the rationale from that path.
+- P4 low (VG1, BH10) patch: create and grid fingerprints with `dedicatedClientId` are unpinned. Same key, other client → 422, for both.
+- P5 low (VG2, BH10) patch: the `normalizeBin` `?? null` for stored pre-1.5b responses is unasserted. Add `dedicatedClientId: null` to the legacy-replay expectations in `bin-admin.spec.ts`.
+- P6 low (VG4) patch: the create/grid refusal copy for `client-departed` and the client `not-found` is untested. Drive a refused create.
+- P7 low (BH5) patch: the `bins.dedicatedClientId` schema comment still reads "Inert until 21-2+".
+- P8 low (BH9) patch: the QC race test claims "either way" but drives release-first only. Name what it drives.
+
+Rejected:
+- BH3: adjustments and counts bypass the gate — decision 9 names it; PENDING records it.
+- BH4: the dedicate guard ignores in-transit transfers into the bin — decision 12 accepts refusal at receive with the override.
+- BH5 (FK/index part): "No FK, no new column, no migration".
+- BH6: a departed client's bins stay dedicated — decision 8; clearing is per bin.
+- BH7, EC4, VG5 (other): the transfer pre-fill refusal also shows blocked/system reasons and has no scan suffix — the spec asks the refused pre-fill to show its reason; no scan happened, so no "scan not recorded" suffix; the wider arm is a clearer message than the generic prompt. Low.
+- BH10 (rest): own-bins-full fallback, grid unknown client, mixed-line receive, suspended client — not matrix rows; the shared code paths are covered.
+- BH11: the event name `bin.capacity_changed` is the spec's; a no-op PATCH writing an event is pre-existing.
+- BH12: the rationale not saying the own bins are full — enhancement, low.
+- BH13: create forms keep the chosen client after success — every other create field (type, class) sticks the same way; low.
+- BH14: linear lookups on the device — a few finds per scan; negligible.
+- BH15: dedicating dock/staging bins — decision 1 dedicates bins without a type rule; no defect shown.
+- EC2: a client departing while a create form is open — rare, the server refuses 409 with clear copy; low, fix adds an effect.
+- EC3: Edit-client panel holding a stale bin after another user's edit — rare; the server state wins on reload; low.
+- EC5: clearing a retired bin is 409 — the spec's guard order puts retired first; a retired bin holds nothing to gate. False.
 
 ## Design Notes
 
