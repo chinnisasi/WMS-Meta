@@ -28,7 +28,7 @@ Vocabularies (`schema.ts`): `PARTNER_ROLES`, `PARTNER_LINK_ROLES` (vendor, consi
 | `GET /tenants/{t}/partners?role&clientId&status&q&cursor&limit` | staff read | keyset on `(code, id)`; links inline; `clientId` = an `EXISTS` over ACTIVE links (in `role` when given); `q` = escaped `ILIKE` over code, name, legal name, GSTIN; `400 invalid-cursor` |
 | `POST /tenants/{t}/partners` | `vendor.manage` | 201 `{partner}`; 400 `validation-failed` naming the field / `pan-gstin-mismatch` / `gstin-state-mismatch`; 409 `partner-code-taken`, `partner-gstin-taken` (naming the holder) |
 | `PATCH /tenants/{t}/partners/{id}` | `vendor.manage` | tri-state (absent unchanged, `null` clears); every rule on the MERGED row; 409 `partner-role-in-use`; an unchanged patch stores the key (`partners.update:unchanged`) |
-| `PATCH /tenants/{t}/partners/{id}/status` | `vendor.manage` | `{status, reason?}`; reason only with `inactive` (400); deactivating clears every `is_default` of the partner; reactivating clears the reason and restores no default; same status + reason = no-op storing the key (`partners.status:unchanged`); a new reason on an inactive partner audits `partner.updated` |
+| `PATCH /tenants/{t}/partners/{id}/status` | `vendor.manage` | `{status, reason?}`; reason only with `inactive` (400); deactivating clears every `is_default` of the partner; reactivating clears the reason and restores no default; same status with the same reason, or with no reason (the stored one is kept), = no-op storing the key (`partners.status:unchanged`); a new reason on an inactive partner audits `partner.updated`; the shape checks run before the lock |
 | `POST /tenants/{t}/partners/{id}/links` | `vendor.manage` | `{clientId, role, clientCode?, isDefault?}` → 201 `{partner}`; 400 `link-role-invalid` (transporter, or a role the partner lacks), 400 a default on a non-vendor link; 404 client; 409 `client-departed`, `partner-inactive`, `link-exists` (`extensions.linkId`), `link-client-code-taken`, `default-vendor-conflict` |
 | `PATCH /tenants/{t}/partners/{id}/links/{linkId}` | `vendor.manage` | `{clientCode?, active?, isDefault?}`; `active:false` clears the default; reactivating needs an active partner holding the role and a non-departed client; a default needs an active vendor link of an active partner and clears the client's previous one; unchanged = no-op (`partners.linkUpdate:unchanged`) |
 
@@ -46,9 +46,9 @@ Hash discriminators: `arm: 'partner-create' | 'partner-update' | 'partner-status
 | update | partner `FOR NO KEY UPDATE` → replay again |
 | updateStatus | partner `FOR UPDATE` → replay again |
 | createLink | client `FOR KEY SHARE` (`assertClientTakesWorkInTx`, 409 `client-departed`); a default also `FOR NO KEY UPDATE` (`lockClientInTx`) → partner `FOR NO KEY UPDATE` → replay again |
-| updateLink | an unlocked read learns the client → client (`KEY SHARE` when `active:true`, `NO KEY UPDATE` when `isDefault:true`) → partner `NO KEY UPDATE` → link `FOR UPDATE` when `active` or `isDefault` is named, else `NO KEY UPDATE` → replay again |
+| updateLink | an unlocked read learns the client → client (`KEY SHARE` when `active:true`, `NO KEY UPDATE` when `isDefault:true`) → partner `NO KEY UPDATE` → link `FOR UPDATE` when `active` or `isDefault` is named, else `NO KEY UPDATE` → replay again; `client-departed` is judged on the real transition (a reactivation or a new default), so a no-op request on a departed client's link takes the no-op path |
 
-**Why those modes.** The PO guard takes `FOR KEY SHARE` on the partner and the link. That conflicts only with `FOR UPDATE` — which a plain `UPDATE` of a non-key column does **not** take (it takes `NO KEY UPDATE`). So the status flip and a link's active/default flip lock `FOR UPDATE` explicitly: a deactivation and a PO create serialise (the PO commits first, or it reads the inactive row and is refused), while a rename never queues a PO. Role removal and link create/update share the partner `NO KEY UPDATE`, so a role cannot vanish under a link being created for it. Set-default serialises per client on the client row (`NO KEY UPDATE` — it never queues that client's order creates, which take `KEY SHARE`); a leftover 23505 maps to `default-vendor-conflict`.
+**Why those modes.** The PO guard takes `FOR KEY SHARE` on the partner and the link. That conflicts only with `FOR UPDATE` — which a plain `UPDATE` of a non-key column does **not** take (it takes `NO KEY UPDATE`). So the status flip and a link's active/default flip lock `FOR UPDATE` explicitly: a deactivation and a PO create serialise (the PO commits first, or it reads the inactive row and is refused). An edit of non-key columns (name, addresses, contact) never queues a PO; a **code** change rewrites a unique-index column, which Postgres locks as `FOR UPDATE`, so it does queue behind (and block) an in-flight PO create — briefly, by design. Role removal and link create/update share the partner `NO KEY UPDATE`, so a role cannot vanish under a link being created for it. Set-default serialises per client on the client row (`NO KEY UPDATE` — it never queues that client's order creates, which take `KEY SHARE`); a leftover 23505 maps to `default-vendor-conflict`.
 
 **Pre-checks name the holder.** Code and GSTIN uniqueness, the triple and the client code are checked with a `SELECT` first (a 23505 cannot name who holds the value; the late 23505 maps to the same code without the name).
 
@@ -61,7 +61,7 @@ Hash discriminators: `arm: 'partner-create' | 'partner-update' | 'partner-status
 - `assertVendorLinkedInTx(tx, tenant, vendorId, clientId)` → `VendorSnapshotV1` — the PO guard (below).
 - `findDefaultVendorForClientInTx(tx, tenant, clientId)` → `{id, code, name} | null` — the active partner holding the vendor role whose active vendor link is the client's default.
 - `partnerNamesInTx` — the device snapshot's fallback name read.
-- `PartnersFacade.list / get`.
+- `PartnersFacade.list`.
 
 Architecture guard (`test/architecture.spec.ts`, "business partners are partners-module-owned"): only `src/modules/partners` writes either table (Drizzle or raw SQL, `vendors` included); siblings import only the facade, module or DTO; the command writes and never deletes; the PO command and the sweep go through the facade.
 
@@ -107,5 +107,5 @@ Rename in place (table, pkey, indexes, policy — ids and `created_at` survive, 
 ## Gotchas
 
 - **A plain `UPDATE` does not conflict with `FOR KEY SHARE`.** Any new command that flips something the PO guard reads (status, `active`, `is_default`) must lock `FOR UPDATE` first, or a PO commits against a partner deactivated under it.
-- **PAN follows the merged row strictly.** Changing a GSTIN while the stored PAN is the old one's is `400 pan-gstin-mismatch`; send `pan: null` (the web does, when the PAN field still shows the old derived value) to re-derive.
+- **PAN follows the GSTIN.** A PATCH with a new GSTIN and no PAN re-derives the PAN when the stored one was the old GSTIN's (characters 3–12); a PAN the request names that differs from the new GSTIN's is `400 pan-gstin-mismatch`.
 - **`createLinkedVendor`** (`test/support/linked-vendor.ts`) is the suites' vendor fixture — a PO needs an active vendor link to its client now, so a suite that creates a client after its vendor must `linkVendor` it.
