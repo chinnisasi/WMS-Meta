@@ -63,6 +63,7 @@ Thirteen modules, each owning its tables exclusively. **Siblings communicate onl
 | `clients` | the client dimension (AD-23): the `self` client per tenant, `client_id` on `skus`/`orders`/`purchase_orders`/`ledger_events` — 21-1 |
 | `catalog` | SKUs, batches, serials, UoM vocabulary |
 | `inventory` | **the ledger**, projections, reservations, ATP, reconciliation; (9-3c) the ledger's integrity record — the scheduled anchoring, the pre-0026 baseline, chain breaks and their acknowledgement, the anchors' WORM copies (`ledger_integrity_state`, `ledger_chain_breaks`, `ledger_anchor_worm_copies`, written only by three named inventory files) |
+| `partners` | the business partner master (story 1-3): `business_partners` (the renamed `vendors` — one row per GST registration, roles vendor / consignee / transporter) and `partner_client_links` (which client trades with which vendor or consignee; the client's default vendor). Read by inbound's PO guard and replenishment's default pick through `partners.facade.ts` (`modules/partners.md`) |
 | `inbound` | purchase orders, advance shipment notices (21-6 — receiving books against a PO, an ASN, or neither, in one `grn.submit`), receiving, GRNs, QC holds |
 | `putaway` | directed putaway, bin administration |
 | `outbound` | orders, waves, picklists, picks, pack, dispatch; the wave cutoff sweep (9-2b — `wave.cutoff_at_risk` once per planned wave per IST date inside 60 minutes of its cutoff) |

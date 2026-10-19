@@ -128,6 +128,14 @@ Two sources, both authoritative:
 - **GRN sequence exhaustion** should be a typed 409; `occurredAt` drift needs a bound decision *(epic-3 retro a14)*
 - **A closed PO whose receipts were retargeted to its successor shows nothing under "Receipts in the ledger"** *(9-3a code review FE6)* — since 21-9 a receipt against a closed PO with an open successor is booked against the successor (`poId` = the successor), so `GET …/inventory/events?poId=<closed PO>` lists only the receipts made before the close. 9-3a fixed the empty state's wording ("No receipt events for PO … yet."); the link itself still says nothing about the successor. Linking the successor from the closed PO's row, or filtering on the PO chain, would close it
 
+## partners (story 1-3)
+
+- **Consignee and transporter pickers** — the partner master holds them, but orders, e-way bills and gate-in keep their free-text fields until roadmap 2.3 (gate-in transporter), 4.1/4.2 (order consignee + several ship-to addresses) and 4.9 (B2B freight) add pickers *(1-3 decision 6)*
+- **A contact list and several ship-to addresses per partner** — one contact and two addresses sit on the row today *(1-3 decision 3, roadmap 4.2)*
+- **Portal reads of a client's own links** — `partner_client_links` already carries the 0041 client clause; no portal route reads it *(1-3 decision 8)*
+- **Not built, by decision:** lead time on a link, a vendor import, a GSTIN checksum check, a capability rename (`vendor.manage` guards the whole partner master) *(1-3 Never list)*
+- **PO list/detail carry the frozen snapshot only** — the web's PO vendor column reads `vendorSnapshot.name`; a pre-1-3 stored PO reply replays without it (optional on the DTO) *(1-3)*
+
 ## putaway
 
 - **`retireBin` has no serial-arm empty gate** *(epic-3 retro a4, 3-6 review deferrals #2/#31)*
