@@ -2,7 +2,7 @@
 title: '1.4 SKU master on the web — single SKU create, full edit, shelf life, multiple barcodes, case/pallet pack levels'
 type: 'feature'
 created: '2026-10-19'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '1598ef8b7b994d76f8f0fb705571bc1eeecaa018'  # wms-be; wms-fe: ae641880ab292c7f1da560cf6582080240b3a26a; wms-mobile: 3a04b50152c0a1df543c2cc0a3b8f0a71bff0600 (branches feat/1-4-sku-master-on-the-web)
 route: 'dispatch'
 review_loop_iteration: 0
@@ -221,13 +221,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` schema + 0080 + migration test -- barcode table, product client, shelf life, CHECKs, RLS, pre-flights -- single uniqueness authority
-- [ ] `wms-be` shared validators, catalog commands, controller, DTOs, audit -- create, packaging, edit guard and promote, product client, client correction, return-receipt lock -- the SKU master API
-- [ ] `wms-be` import + snapshot -- new columns, narrowed factor, client-scoped products, `packBarcodes` -- bulk onboarding and handheld feed
-- [ ] `wms-be` tests -- matrix, races, audit rows, isolation, architecture pins, existing suites, openapi
-- [ ] `wms-fe` generated client, create card, edit form, packaging panel, products client, error copy, import help + tests -- the web SKU master
-- [ ] `wms-mobile` snapshot parse, resolver tier and factor, receive/returns/pack factor, refusals, split, message helper + tests -- case and pallet scans
-- [ ] Meta docs (land last): `docs/design/modules/catalog.md`, `API-SURFACE.md`, mobile guide (scan path), `docs/repos/*/README.md`, PENDING (close the product-name entry and the "`uom_conversions.factor` nothing applies" entry; add 1.4b, stale-factor detection, bulk packaging import)
+- [x] `wms-be` schema + 0080 + migration test -- barcode table, product client, shelf life, CHECKs, RLS, pre-flights -- single uniqueness authority
+- [x] `wms-be` shared validators, catalog commands, controller, DTOs, audit -- create, packaging, edit guard and promote, product client, client correction, return-receipt lock -- the SKU master API
+- [x] `wms-be` import + snapshot -- new columns, narrowed factor, client-scoped products, `packBarcodes` -- bulk onboarding and handheld feed
+- [x] `wms-be` tests -- matrix, races, audit rows, isolation, architecture pins, existing suites, openapi
+- [x] `wms-fe` generated client, create card, edit form, packaging panel, products client, error copy, import help + tests -- the web SKU master
+- [x] `wms-mobile` snapshot parse, resolver tier and factor, receive/returns/pack factor, refusals, split, message helper + tests -- case and pallet scans
+- [x] Meta docs (land last): `docs/design/modules/catalog.md`, `API-SURFACE.md`, mobile guide (scan path), `docs/repos/*/README.md`, PENDING (close the product-name entry and the "`uom_conversions.factor` nothing applies" entry; add 1.4b, stale-factor detection, bulk packaging import)
 
 **Acceptance Criteria:**
 - Given an ops manager on Settings → Catalog, when they create a SKU with a case level of 12 and a case barcode, then the SKU lists with both and a fresh handheld snapshot carries the case barcode with factor 12.
@@ -238,6 +238,20 @@ context:
 - Given an existing database, when 0080 runs, then every SKU has exactly one primary `sku_barcodes` row equal to `skus.barcode`, every product has the client of its SKUs, and a pre-flight failure aborts listing every offender.
 
 ## Implementation Notes
+
+Implemented 2026-10-19 (uncommitted, all three repos on `feat/1-4-sku-master-on-the-web`).
+
+- **Readings taken where the spec was loose:**
+  - Import "a name not in that client creates it there" read as: the row error names the client and tells the user to create the product there — the import still never creates products (it has no axes to declare). The product `mixed-client` row error is gone.
+  - `CreateSkuDto` follows the spec literally: `hsnCode` and a nested `attributes` object (the PATCH keeps flat `hsn` and attribute fields).
+  - `products.client_id` has two writers: the correction and the product edit while empty (the spec's own rule); the architecture pin names both. `sku_barcodes.client_id`: correction only.
+  - `FOR SHARE` on SKU facts is taken in the return-receipt **posting** (`:921`) only; `openReturnsInTx` (`:588`) is the snapshot read and stays unlocked.
+  - The edit now locks the SKU row `FOR UPDATE` on every PATCH (product first when attaching), then replays again under the lock.
+  - On attach, `client-departed` is decided before `product-client-mismatch` (keeps the 1-2a pin meaningful).
+  - Decision 13 is also enforced in reverse (a new code equal to a client barcode → `barcode-is-code`) in create, import and correction.
+  - A pre-1.4 stored product snapshot replays with the product row's current `clientId` (so `ProductResponse.clientId` stays a required string).
+- **Re-pinned tests (old behaviour gone, new expectation asserted):** `clients.spec.ts` product pass (`mixed-client` → row error + `product-client-mismatch`); `adjustment-approval.spec.ts` flag flips with a pending adjustment now assert `409 sku-has-stock` and flip below the API to keep the approval parity guard pinned; `client-isolation.spec.ts` policy count 116 → 117.
+- **Verification:** wms-be full jest 99 suites / 2370 tests green, lint, typecheck, build; `db:generate` reports no changes; 0080 run against the dev DB inside a rolled-back transaction (192 primary rows, 0 products without a client). Both same-key race tests fail with the second replay removed (mutation-checked). wms-fe 1888 tests, lint, typecheck, build, capability mirror green. wms-mobile 705 tests and typecheck green.
 
 ## Spec Change Log
 
@@ -286,6 +300,31 @@ context:
 - D38 med (user question, 2026-10-19): a coverage walk found two web surfaces the spec missed — the client-correction dialog's messages for the new refusals, and the product client edit while empty. Both added; handheld scan-site coverage listed in the Code Map.
 
 Rejected: none.
+
+**Code review, 2026-10-19.** Three reviewers: blind hunter (BH1–BH13), edge-case hunter (EC1–EC11), verification gap (G1–G6). 30 findings, 22 entries after grouping. Verified by hand at the cited lines.
+
+- C1 high, patch (BH1, EC2): promoting a SKU's own case/pallet barcode to primary silently re-levels it to the base unit (`sku.command.ts` promote deletes the extra row whatever its uom), so a case scan then counts 1. Fix: refuse with 400 unless the extra row is base-level.
+- C2 med, patch (BH2, EC1): client correction checks moving barcodes against target codes but not moving codes against target `sku_barcodes`; `barcodeIsCode(codes[0].code, codes[0].code)` names nothing useful. Fix: check both directions, name the moving SKU.
+- C3 low, patch (BH3): `catalog.md` states barcode ≠ code as an invariant, but legacy rows were never surveyed (dev DB: 0). Fix: doc says "enforced on every write since 1.4".
+- C4 low, reject (BH4): no lost-update check on the packaging PUT. Same as every catalog PATCH and the kit PUT; two admins on one SKU is rare and a version precondition adds public surface.
+- C5 false (BH5): audit rows carry no before/after anywhere in the system (no details column); the after-state lives in the stored idempotency snapshot. Convention, not a defect.
+- C6 med, patch (BH6): the import maps a concurrent `sku_barcodes`/`skus` barcode 23505 to `duplicate-sku-code` naming row 1 (`import.command.ts:689`). Fix: map barcode indexes to `duplicate-barcode`.
+- C7 low, patch (BH7, EC4): `normalizeStoredProduct` returns `clientId: ''` when the product row is gone. Fix: 404.
+- C8 false (BH8): create without product/variant is decision 6 ("product attach stays on its existing route").
+- C9 low, patch (BH9): two `status: 400` decorators on product create — the later replaces the earlier in Swagger; the product PATCH 404 omits the unknown-client case. Fix: merge, document.
+- C10 low, reject (BH10): `UOM_OPTIONS` drift check is one-way; a backend unit addition is rare and visible.
+- C11 low, reject (BH11): the snapshot skip of a barcode with no level is unreachable — the PUT and import validate the level, and levels and barcodes are replaced together under the SKU lock.
+- C12 med, defer (BH12, EC5): a handheld's offline-queued receipt captured under the old flags replays after a flag flip. Pre-existing class (any master change vs the WAL); recorded in deferred-work.
+- C13 low, patch (BH13, EC9): the web create form rounds GST beyond two decimals silently. Fix: refuse.
+- C14 med, patch (EC3): a variantValues-only PATCH locks the product read before the SKU lock; a concurrent attach/detach leaves it holding the wrong product. Fix: after the SKU lock, a changed `productId` is 409 `conflict`.
+- C15 med, patch (EC6): while the clients list is loading or failed, the create cards hide the client field and every create in a multi-client tenant gets `client-required`. Fix: hold submit until clients are ready.
+- C16 low, patch (EC7): changing the base unit on the create card keeps barcode rows on the old/new base level. Fix: clear those rows' level.
+- C17 low, patch (EC8): duplicate level options in the packaging editor's barcode select. Fix: dedupe.
+- C18 med, patch (EC10): on the handheld, a pack scan matching several other clients is refused whole if any one match is serial/catch-weight. Fix: drop refused matches; refuse only when all are.
+- C19 low, reject (EC11): a tenant without a self client fails the assert rather than the pre-flight — still aborts whole, and every tenant has a self client since 21-2b.
+- C20 med, patch (G1, G2, G3, G4): untested: the return-receipt `FOR SHARE`, `barcode-is-code` in import and correction, pre-1.4 replays (SKU fields, product hash and `clientId`), the catch-weight arm of decision 7. Fix: tests.
+- C21 med, patch (G5): on the handheld `factor` is optional in `applyScanToDraft`/`addUnit`/`scanSkuUnit`; a screen dropping it type-checks and counts 1 (AC2). Fix: make it required.
+- C22 med, patch (G6): the web create card and the packaging key reuse/reset have no component tests. Fix: tests.
 
 ## Design Notes
 
