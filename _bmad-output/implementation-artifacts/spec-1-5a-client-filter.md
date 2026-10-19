@@ -2,7 +2,7 @@
 title: '1.5a Client filter — one client switcher filters every staff list, stock and stock history'
 type: 'feature'
 created: '2026-10-19'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '2dacebc06a43fd33a0db1af7fe2c097da5c87232'  # wms-be; wms-fe: a4fd560fae3a1652d28c6dc1788af5e604d7d225; wms-mobile: 3a208c070c2bb7f9c74a274a2d36db6af028db0e (unchanged by this story)
 route: 'dispatch'
 review_loop_iteration: 0
@@ -171,11 +171,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be` DTOs (wave-policies split), controllers passing `clientId`, predicates per list -- server-side client filter
-- [ ] `wms-be` 0081 indexes + schema + EXPLAIN test + openapi -- filtered lists stay fast
-- [ ] `wms-be` `test/client-filter.spec.ts` -- route table and matrix
-- [ ] `wms-fe` active-client store and hook, switcher, chip, hook arguments and scope stamps, create defaults, exemptions, tests -- the web filter
-- [ ] Meta docs (land last): `API-SURFACE.md` (`clientId` per route), `docs/design/frontend/SYSTEM-DESIGN.md` and `IMPLEMENTATION-GUIDE.md` (the switcher and the hook rule), `modules/clients.md`, `docs/repos/wms-be|wms-fe/README.md`, PENDING (close "No client filters on lists"; the CONCURRENTLY note; 1.5b)
+- [x] `wms-be` DTOs (wave-policies split), controllers passing `clientId`, predicates per list -- server-side client filter
+- [x] `wms-be` 0081 indexes + schema + EXPLAIN test + openapi -- filtered lists stay fast
+- [x] `wms-be` `test/client-filter.spec.ts` -- route table and matrix
+- [x] `wms-fe` active-client store and hook, switcher, chip, hook arguments and scope stamps, create defaults, exemptions, tests -- the web filter
+- [x] Meta docs (land last): `API-SURFACE.md` (`clientId` per route), `docs/design/frontend/SYSTEM-DESIGN.md` and `IMPLEMENTATION-GUIDE.md` (the switcher and the hook rule), `modules/clients.md`, `docs/repos/wms-be|wms-fe/README.md`, PENDING (close "No client filters on lists"; the CONCURRENTLY note; 1.5b)
 
 **Acceptance Criteria:**
 - Given a tenant with clients self and GlowCo, when an ops manager picks GlowCo, then the stock, stock history, PO, GRN, order, wave, return, invoice and catalog lists show only GlowCo's rows from page 1, each shows "Client: GlowCo", and "Show all clients" restores everything.
@@ -186,6 +186,11 @@ context:
 - Given a staff list called with an unknown client id it returns an empty page; with a malformed one, 400.
 
 ## Implementation Notes
+
+**Implemented 2026-10-19** (uncommitted, on `feat/1-5a-client-filter` in wms-be and wms-fe; meta docs in this branch).
+
+- **Backend.** Shared predicates `src/shared/db/client-filter.ts` (`skuOfClient`, `orderOfClient`, `anyOrderOfClient`); 27 filtered routes. Wave-policies → `WavePolicyListQuery` (`OrderListQuery` minus `clientId`). `skuCommand.list` already had a 4th positional (`productId`), so its option object is the 5th argument. Picklist lines and pack failures match through their own single order. Migration 0081: the six specified indexes plus `(tenant_id, client_id, created_at, id)` on `skus`, `products` and `return_authorizations` (code review — the catalog lists and the tenant-wide RMA list page on `(created_at, id)`). The GRN legacy arm became a separate keyset branch (`id = any(array(own union all legacy))`) because the single `OR … EXISTS` defeated the index. `getPutawayTasks` takes `{ clientId }`. `test/client-filter.spec.ts` (71 tests): a 28-entry route table (stock in both orders) asserting each filtered page equals exactly the client's rows of the unfiltered page, for both clients, plus unknown/foreign/malformed per route; every backend matrix row; `EXPLAIN` of the captured real orders, ledger, PO, GRN (both shapes) and RMA SQL uses a 0081 index; `limit=1` beyond-page-1 walks for each predicate shape. Mutation-checked on five predicates. Full suite 100 suites / 2448 tests green; lint, typecheck, build, `db:generate` clean.
+- **Web — deviations from the letter of the spec.** (1) Hooks take `ClientFilter = string | null | CLIENT_PENDING` (a symbol), not `string | null`: a hook must distinguish "clients still loading" from "All". (2) A bare `clientId` stamp replays the old cursor on All → GlowCo → All, so `useClientEpoch` adds a per-switch counter to every stamp and the table key (frontend guide §1.12). (3) No web PO create form exists on Inbound, and the return form has no client picker, so only order, ASN, SKU and product forms take the active-client default + hidden-by-filter note; the catalog import's picker keeps no default (21-2b decision 4). (4) The wave detail names each order's client from its first line's SKU (the wave response carries no per-order client). (5) Beyond spec: the reorder-override table lists only the active client's SKUs, and the client-invoices Prepare form defaults to the active client. **Code-review round:** one shared clients store for the switcher and every screen (`useSharedClients`), one `showClients` rule, the order and ASN forms pin their client on the first draft edit, form defaults derive at render, the Prepare key is bound to its client and month, and `useClientEpoch` treats pending → client as no switch (direct test plus real cursor-holding switch tests on variances and GRNs). `theme.test.ts` gained `afterAll(restoreGlobals)` (it leaked a fake `localStorage` into later files). 2049 tests, lint, typecheck, build, `check:capability-mirror` green; the generated client regenerates byte-identically from the final backend openapi.
 
 ## Spec Change Log
 
@@ -224,6 +229,27 @@ context:
 - D29 low (F17, F18): FE PR after BE merge; test storage hygiene. Written in.
 
 Rejected: none.
+
+**Code review, 2026-10-19.** Three reviewers: blind hunter (BH1–BH14), edge-case hunter (EC1–EC8), verification gap (G1–G3). 25 findings, 18 entries after grouping; verified by hand at the cited lines.
+
+- C1 med, patch (BH1): filtered SKU/product/kit lists page by `(created_at, id)` (`sku.command.ts:417`) with no client-led keyset index — the guide rule this story adds. Fix: `(tenant_id, client_id, created_at, id)` on `skus` and `products` in 0081.
+- C2 med, patch (BH2, EC8): `GET /returns` is tenant-wide without `warehouseId`; only the warehouse-led RMA index was added. Fix: add `(tenant_id, client_id, created_at, id)` on `return_authorizations`.
+- C3 med, patch (BH3, EC7): the GRN `OR … EXISTS` predicate and the PO/RMA indexes are never proven by EXPLAIN. Fix: EXPLAIN tests for PO, GRN (both arms) and RMA; restructure the GRN predicate if the plan ignores the index.
+- C4 med, patch (BH4): beyond-page-1 is tested only on orders; the `idsOf` comment claims more than it proves. Fix: a `limit`-bounded test per predicate shape (SKU, any-order, single order, jsonb, GRN legacy arm); correct the comment.
+- C5 low, reject (BH5): wave-policies still accepting ignored order fields is pre-existing; this story only refuses the new one.
+- C6 low, reject (BH6): the backorder-refusal `::text` match is the design's deliberate choice (a bad legacy value must not 500); ids are server-written lower-case uuids.
+- C7 low, patch (BH7): `getPutawayTasks(…, clientId?)` is positional against the story's own named-option rule. Fix: an options object.
+- C8 med, patch (BH8, EC4): the switcher and each screen read clients separately; a divergent read shows a client selected while the screen lists all with no chip; docs say one read. Fix: one shared clients store for the shell and screens; docs corrected.
+- C9 low, patch (BH9): single-client rule duplicated (`<= 1` vs `showClients`). Fix: one shared rule.
+- C10 low, reject (BH10): listbox ARIA copied from the existing warehouse switcher — pre-existing pattern, not this story's defect.
+- C11 low, patch (BH11, BH12): README says 22 wrappers (23 listed); PENDING residual omits placements and kits as API-only. Fix: docs.
+- C12 false (BH13): mixed rows showing the whole row, and an empty wave matching no client, are decision 4 and the Boundaries as written.
+- C13 low, reject (BH14): a stored client id left after session expiry holds no sensitive data; logout clears it.
+- C14 med, patch (EC1): the order form derives its client from the active one until picked; a switch mid-draft moves the client under the drafted lines. Fix: pin the default once the draft has lines, or route switcher changes through the existing confirm.
+- C15 med, patch (EC2): the client-invoice Prepare key survives a change of the derived client. Fix: reset the key when the client changes.
+- C16 low, reject (EC3): storage that throws on write behaves like the warehouse switcher (pre-existing pattern).
+- C17 med, patch (EC5, EC6): ASN and product create forms capture the default in a `useState` initializer, so it is lost when they mount while clients load. Fix: derive at render until picked.
+- C18 med, patch (G1, G2, G3): cursor reset after a switch is tested only on orders; the Prepare default is untested; a stale "KNOWN HOOK DEFECT" comment. Fix: a `useClientEpoch` test and real page-2 switch tests in the conflicts and inbound suites; a two-client Prepare test; drop the comment.
 
 ## Design Notes
 
