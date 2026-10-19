@@ -167,6 +167,12 @@ If a new rule means the device would otherwise have to guess, or queue-and-find-
 
 Never resolve a barcode or code with a bare `.find` over `snapshot.skus` — two clients may share both. Call `resolveSku` (`src/lib/sku-resolution.ts`) with the work's own SKU ids and the document's client, and branch on its `kind` (`work`, `client`, `other-clients`, `ambiguous`, `unknown`, `empty`). Treat an absent `sku.clientId` as in scope, and a snapshot without `clients` as legacy mode (no client in scope, nothing sent). A new optional request field must be sent **only when the snapshot proves the server knows it** — the server's `forbidNonWhitelisted` answers 400 to an unknown key, and the op is dropped.
 
+**Pack barcodes (story 1-4).** Each snapshot SKU carries `packBarcodes: [{barcode, uom, factor}]` (`parseCatalogSnapshot` defaults it to `[]` and drops entries with an empty barcode or a factor that is not a whole number ≥ 1). `matchValue` treats the primary barcode and the pack barcodes as **one barcode tier** — more than one distinct SKU at a resolution step is `ambiguous`, never "primary wins" — then the code; every match carries `factor` and `level`. Rules every flow follows:
+- **Receive, returns and pack add `factor` base units per scan**; the payload still carries base units only (the server never sees a pack). Receive's increment, switch and new-line branches all apply it, and a scan past `MAX_LINE_QTY` is a `rejected` result with the line unchanged (no clamp). Returns put the line's open quantity on the line and the rest on a flagged excess entry. Pack refuses the whole scan when it would pass the picked quantity.
+- **A serial-tracked or catch-weight SKU refuses a pack scan** (factor > 1) in the resolve layer, before any capture prompt or other-client question — each unit must be scanned or weighed.
+- **Pick and putaway** accept any of the SKU's barcodes as confirmation; the quantity is unchanged.
+- **Every pack-scan message comes from `packScanDetail(factor, level, uom)`** ("+12 (1 case of 12) — type a quantity to correct"): the factor is shown because a stale snapshot's factor cannot be detected server-side (PENDING); a mistaken scan is corrected by typing the quantity (no undo).
+
 ## 5. Writing a scan step
 
 ### The step machine

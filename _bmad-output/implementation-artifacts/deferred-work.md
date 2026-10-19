@@ -910,3 +910,7 @@
 - source_spec: none
   summary: 1.4b SKU deactivation — a SKU with history is set inactive, never deleted; an inactive SKU cannot go on new orders, POs, ASNs, kits or imports, and channel availability stops publishing it.
   evidence: Split from 1.4 (SKU master on the web) on 2026-10-19 at the user's choice — deactivation touches order create, PO, ASN, kit compose, import and channel sync, about as large as 1.4 itself (roadmap cross-cutting rule "master records deactivate, never delete").
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-sku-master-on-the-web.md`
+  summary: A handheld receipt or return queued offline under a SKU's old tracking flags replays after the flags change (1.4 decision 7 guards only server-side stock), so the replay is refused or books stock without the now-required batch/serial.
+  evidence: `skuStockHoldingsInTx` counts on-hand, pending over-receipts and pending positive adjustments only; nothing knows about a device's WAL. Same class as any master change racing the offline queue — settle with a replay fate for a flag mismatch or a flag version in the snapshot.

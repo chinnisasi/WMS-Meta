@@ -14,7 +14,8 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 |---|---|---|
 | `products` (`src/shared/db/schema.ts`, `drizzle/0032_product_variants.sql`) | **Grouping identity only (AD-19, 11.3)**: `name` + declared `axes` (a jsonb array of 1–3 short names). No UoM, no tracking flags, no stock concept — a SKU remains every ledger event's unit | `products_tenant_id_name_unique` (the `skus.code` precedent). **No delete command**; **`axes` are immutable while any SKU is attached** (409 `product-has-variants`). `product_id` on `skus` is a bare uuid, **no FK** — the repo convention, validated in the command transaction |
 | `skus` (`src/shared/db/schema.ts:272`) | Sellable units: code, name, base `uom`, GST bps, HSN, tracking flags, **static physical attributes (11.2)**, **variant identity (`product_id` + `variant_values`, 11.3)**, reorder defaults, barcode, **`client_id`** (21-1) | **Since 1-1 (0076): `skus_tenant_client_code_unique (tenant, client, code)` and `skus_tenant_client_barcode_unique (tenant, client, barcode)`** — two client brands may both own `TSHIRT-M` and sell one GTIN; plus the non-unique `skus_tenant_code_idx (tenant, code)` for code lookups without a client. `uom` is CHECK-constrained to the closed vocabulary (`skus_uom_check`, `drizzle/0027_uom_vocabulary.sql:351`). `reorder_point`/`reorder_qty` are `bigint` **milli-units**. `barcode` is NOT NULL — generated server-side as a uuidv7 when the file omits one. **`code` is immutable**; no create endpoint exists — SKUs enter through import only. `variant_values` pairs with `product_id` (both null or both set, the values a jsonb object) by the `skus_variant_values_pairing` CHECK (`0032`) |
-| `uom_conversions` (`schema.ts:310`) | `factor` base units per alternate `uom`, per SKU | `uom_conversions_sku_id_uom_unique`; `factor` is a positive `integer`; target `uom` CHECK-constrained to the same vocabulary |
+| `uom_conversions` (`schema.ts:310`) | `factor` base units per alternate `uom`, per SKU — **since 1-4 these rows ARE the SKU's pack levels** (box, case, pallet), edited by `PUT …/packaging` | `uom_conversions_sku_id_uom_unique`; `factor` an integer **2–1,000,000** (`uom_conversions_factor_check`, 0080); target `uom` CHECK-constrained to the same vocabulary and ≠ the base uom |
+| `sku_barcodes` (1-4, `drizzle/0080_sku_master.sql`) | **Every barcode of a SKU**, each naming its level: the base `uom` (the primary, or an extra base-level barcode) or one of the SKU's pack levels | **The one barcode-uniqueness authority**: `sku_barcodes_tenant_client_barcode_unique (tenant, client, barcode)`; one primary per SKU (partial unique `WHERE is_primary`), equal to `skus.barcode` at the base uom; `client_id` = the SKU's (only the client correction moves it — architecture pin); barcode rule and uom vocabulary CHECKs; RLS tenant + `app.client_id` |
 | `batches` (`schema.ts:344`) | Batch **identity** for batch-tracked SKUs: code, mfg/expiry dates, status | `batches_tenant_sku_code_unique`; `batches_status_check` ∈ {`active`,`blocked`} (`drizzle/0010_sharp_hardball.sql:71`). **No location or quantity column, by design** — those live in inventory's `batch_on_hand` |
 | `serials` (`schema.ts:378`) | Serial **identity**: serial number, status | `serials_tenant_sku_serial_unique`; `serials_status_check`. **No location column** — a serial's location is derived from its latest `ledger_events` row |
 | `kit_compositions` (`kit.store.ts` writes; `drizzle/0033_kit_compositions.sql`) | **Kit-ness (11.4, AD-19)**: one row per component of a kit SKU — `kit_sku_id` → `component_sku_id` × `qty` (per ONE kit, in the component's base-UoM milli-units). A kit **is** a SKU; kit-ness is the presence of rows, never a flag | `kit_compositions_tenant_kit_component_unique` (unique `(tenant, kit_sku_id, component_sku_id)`); `kit_compositions_qty_positive`; `kit_compositions_no_self` (row-local `kit_sku_id <> component_sku_id`) — all three hand-appended, migration-SQL-only. **No FKs** — bare uuids validated in the command transaction. **No delete command** (append-only philosophy) |
@@ -33,7 +34,8 @@ The module is small in code and large in blast radius: `uom.ts` decides how prec
 
 | Column | Type | Null | Guard | Meaning |
 |---|---|---|---|---|
-| `name` | text | NO | `unique (tenant, name)` | The honest handle import and the UI use to reference the product; duplicate → 409 `duplicate-product-name` |
+| `name` | text | NO | `unique (tenant, client, name)` since 1-4 (`products_tenant_client_name_unique`) | The honest handle import and the UI use to reference the product; duplicate in the client → 409 `duplicate-product-name` |
+| `client_id` | uuid | NO | — (backfilled by 0080 from the SKUs, else `self`); RLS client clause | 1-4: the product's client — every attached SKU shares it (attach of another client's SKU → 409 `product-client-mismatch`); movable by the product edit only while no SKU is attached (409 `product-has-skus`), else only by the SKU client correction |
 | `axes` | jsonb | NO | — | Array of 1–3 short axis names (`["size","colour"]`). **Presentation, not a normalised table** — the 11-6 matrix, 11-7 announcement and Epic 7 mapping all read the whole array. Element-wise immutable while attached |
 
 There is **no delete command** (the append-only philosophy) and no per-axis value table.
@@ -69,7 +71,8 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 | `hazard_class` | text | **YES** | `NULL` | `skus_hazard_class_check` (`0036`, migration-SQL-only — drizzle-orm 0.45 cannot model a CHECK) | One of `explosive, oxidizer, flammable, corrosive-acid, corrosive-base, toxic, gas` (12-2, FR-41) — or **null: null carries no rule** (a null-class SKU co-locates with anything, even an explosive's bin). The SKU side of the co-location pair set (`hazardClassesCompatible`, sorted-key `INCOMPATIBLE_PAIRS`) |
 | `batch_tracked` / `serial_tracked` | boolean | NO | `false` | — | **Both true is refused at pick** until story 14-1 |
 | `reorder_point` / `reorder_qty` | bigint `mode:'number'` | NO | `0` | — | **Milli-units** — UoM-denominated, so 10.1 scaled them. Policy thresholds, not stock |
-| `barcode` | text | NO | — | `unique (tenant, barcode)` | Collision → `409 duplicate-barcode` naming the conflicting SKU |
+| `barcode` | text | NO | — | `unique (tenant, client, barcode)` (kept as a backstop since 1-4) | The **primary** base-level barcode; always mirrored by an `is_primary` `sku_barcodes` row written in the same transaction (create, edit, import, correction). Collision → `409 duplicate-barcode` naming the holder SKU and level |
+| `shelf_life_days` | integer | **YES** | — | `skus_shelf_life_days_check` 1–3650 (0080) | 1-4: total shelf life in days from manufacture; roadmap 2.4 derives expiry from it. Not the client policy's `minShelfLifeDays` (minimum *remaining* life) |
 
 ### `uom_conversions`
 `sku_id` · `uom` text NOT NULL, guarded by **`uom_conversions_uom_check`** (`0027:352`) — a *separate* constraint from `skus_uom_check` (`0027:351`) with the same value list, so **widening one without the other is a live bug the shared naming hides** · `factor` **integer** NOT NULL. `unique (sku_id, uom)`.
@@ -136,7 +139,33 @@ One physical unit (a case) of a catch-weight SKU: `warehouse_id`, `sku_id`, `bat
 
 ## Flows
 
-### CSV import — the only creator of SKUs
+### The SKU master (story 1-4)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant Ctl as catalog.controller
+  participant Cmd as SkuCommand
+  participant PG as Postgres
+  Ops->>Ctl: POST /catalog/skus {code, name, uom, …, levels, barcodes, clientId?}
+  Ctl->>Cmd: create
+  Note over Cmd: shape → hash (clientId only when present) → sku.edit → replay<br/>→ client (import rule: client-required when >1) → client-departed<br/>→ typed rules (sku-master.ts) → code / barcode-is-code / barcodes free<br/>→ INSERT sku + primary row + levels + extras → sku_created → sku.created → key
+  Cmd-->>Ops: 201 {sku}
+  Ops->>Ctl: PUT /catalog/skus/:id/packaging {levels, barcodes}
+  Ctl->>Cmd: replacePackaging
+  Note over Cmd: hash (levels by uom, barcodes by (uom, barcode)) → sku.edit → replay<br/>→ SKU FOR UPDATE → replay again → validate → client-departed<br/>→ equal sets? store key, no audit (skus.packaging:unchanged)<br/>→ barcodes free → delete+insert → sku_edited → sku.packaging_replaced → key
+  Cmd-->>Ops: 200 {sku}
+```
+
+- **Shared rules** live in `src/modules/catalog/sku-master.ts`: the barcode rule (decision 12: trimmed, 1–64, printable ASCII `^[!-~]([ -~]*[!-~])?$`, no `;`), shelf life 1–3650, `validateLevels` (uom via `resolveUom`, ≠ base, no repeat, factor 2–1,000,000), `validateExtraBarcodes` (rule → ≠ primary → level = base uom or a declared level else 400 `barcode-level-unknown` → no repeat else 409 `duplicate-barcode`), `assertBarcodesFreeInTx` (reads `sku_barcodes` only; decision 13: a barcode equal to any SKU code of the client → 409 `barcode-is-code`), `writePrimaryBarcodeInTx`, `replacePackagingInTx`, `readPackagingInTx`. Create, the PUT, the edit and the import all call them; the CSV cell parsers stay import-only.
+- **Lock order: product → skus → sku_barcodes.** The edit now locks the product (attach / re-value) and then the SKU row `FOR UPDATE` on every edit, replays again under the lock, and decides every guard against the locked row.
+- **Decision 7 — tracking flags lock once stock exists.** Changing `batchTracked` / `serialTracked` / `catchWeightTracked` is 409 `sku-has-stock` while the SKU has on-hand ≠ 0 in any bin (system bins included), a pending over-receipt, or a pending positive adjustment (`skuStockHoldingsInTx`); the catch-weight live-unit guard runs first; flags sent unchanged never reach it. The return receipt reads its SKU facts `FOR SHARE` (`skuFactsInTx(…, { lock: 'share' })`) so a flip cannot interleave with a posting.
+- **Promotion.** A PATCH `barcode` equal to this SKU's own extra **base-level** barcode deletes the extra row and moves the value onto the primary row; a pack-level (case/pallet) barcode is refused `400 validation-failed` (promoting it would make a case scan count one unit).
+- **Replays of pre-1.4 stored SKU responses** (edit, correction) serve `shelfLifeDays ?? null`, `barcodes ?? []` (`normalizeStoredSku`); a pre-1.4 product snapshot replays its row's current client.
+- **Device snapshot.** `getSkuSummariesInTx` adds `packBarcodes: [{barcode, uom, factor}]` — every non-primary row, factor 1 at the base uom else the level's factor — by one batched query on the caller's transaction. The server never applies a factor: documents and the ledger stay in base units; the handheld multiplies (mobile guide §4). A stale factor on a handheld is shown in its message, not detected (PENDING).
+
+### CSV import — the only creator of SKUs (until 1-4)
 
 ```mermaid
 sequenceDiagram
@@ -164,7 +193,7 @@ sequenceDiagram
   Note over Cmd: reprocesses ONLY the prior run's failures
 ```
 
-There is no `POST /skus`. `code` and `uom` are immutable once written — a SKU's UoM is baked into every milli-unit quantity already stored against it, so changing it would silently reinterpret history.
+Since 1-4 there is also `POST /catalog/skus` (above). `code` and `uom` are immutable once written — a SKU's UoM is baked into every milli-unit quantity already stored against it, so changing it would silently reinterpret history.
 
 ### Products and variants (11.3)
 
@@ -443,8 +472,12 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | `variant_values` pairs with `product_id` (both null, or both set with the values a jsonb object) | `skus_variant_values_pairing` CHECK (`0032`) — the command enforces the stronger coverage + duplicate rules in-transaction |
 | A product's axes cannot change while variants are attached | `ProductCommand.edit`'s attach check — 409 `product-has-variants` |
 | Two SKUs of one product never carry identical values | The duplicate-variant check in both write paths (edit 409; import row error), keyed by the sorted-keys fingerprint |
-| Import references products, never creates them | The resolution pass row-errors an unknown product name |
-| Product names are unique per tenant | `products_tenant_id_name_unique` + the command pre-check |
+| Import references products, never creates them | The resolution pass row-errors a product name unknown **in the run's client** (1-4: the 21-2b `mixed-client` product row error is gone) |
+| Product names are unique per client (1-4) | `products_tenant_client_name_unique` + the command pre-checks (create, edit, correction) |
+| Every SKU has exactly one primary `sku_barcodes` row equal to `skus.barcode` (1-4) | `sku_barcodes_primary_unique` + every `skus.barcode` writer calls `writePrimaryBarcodeInTx` in its transaction; 0080's assert for existing rows |
+| A barcode is unique in its client at every level (1-4) | `sku_barcodes_tenant_client_barcode_unique` + `assertBarcodesFreeInTx` |
+| A barcode equals no SKU code of its client — **enforced on every write since 1.4** (create, edit, PUT, import, correction — `barcode-is-code`); pre-1.4 rows are not surveyed | the write paths only, no constraint |
+| Tracking flags never change while the SKU has stock or pending stock (1-4) | `sku-has-stock` under the SKU row lock |
 | Kit-ness is derived, never stored — a kit **is** a SKU with composition rows | Every "is a kit" question is a `getKitSkuIdsInTx` SELECT; no flag column exists to drift from the rows (11.4) |
 | A kit never holds independent stock (FR-38) | 409 `kit-cannot-hold-stock` at all three +stock writers (GRN submit, `stock.adjust`, over-receipt **approve**); the create-side twin `kit-sku-holds-stock` refuses creating a kit on stock or a live reservation; the GRN-vs-kit-create race is closed by matching id-ordered sku-row `.for('update')` locks on both sides |
 | The BOM is flat — one SELECT resolves any composition | `assertComponentsAreNotKits` 409 `kit-component-is-kit`; no recursion anywhere |
@@ -458,7 +491,8 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | Type | Emitted by | Payload |
 |---|---|---|
 | `catalog.imported` | `ImportCommand.execute` | `{importId, mode, committedRows, failedRows, skippedRows}` — counts only, never rows or errors |
-| `catalog.sku_edited` | `SkuCommand.edit` | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
+| `catalog.sku_created` | `SkuCommand.create` (1-4) | `{skuId, code, clientId}` |
+| `catalog.sku_edited` | `SkuCommand.edit`; **also `SkuCommand.replacePackaging` (1-4)** | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
 | `catalog.product_created` | `ProductCommand.create` (11.3) | `{productId, name, axes}` |
 | `catalog.product_edited` | `ProductCommand.edit` (11.3) | `{productId, name, axes}` |
 | `catalog.kit_created` | `KitCommand.create` (11.4); **also `ImportCommand`'s kit resolution pass (11.6)** — one per composition the import created, via the same `kitEventPayload` builder | The kit snapshot (kit sku + the full component list) — base units, the command's convention |
@@ -478,7 +512,7 @@ Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the 
 
 **`conversionRows` is index-aligned, not id-joined.** `:298-306` maps `insertable.flatMap((row, i) => … skuRows[i]!.id)`. It is correct only because `skuRows` is built from `insertable` in order at `:271`. Any filtering, sorting or partial retry between those two points silently attaches conversions to the wrong SKU.
 
-**`uom_conversions.factor` is stored and echoed but never applied.** Nothing in the system does arithmetic with it (`../PENDING.md` → catalog). Do not assume a quantity has been converted through it anywhere.
+**`uom_conversions.factor` is applied only on the handheld (1-4).** The snapshot's `packBarcodes` carries it and the device multiplies a pack scan into base units before anything is sent; no server operation converts through it, and documents and the ledger stay in base units.
 
 **`uomPrecision` ships unconsumed on the device.** The catalog snapshot carries it so a handheld can refuse a too-precise scan offline before queueing. Until the mobile story lands, a too-precise dead-zone scan queues and is refused on replay — the exact behaviour the field exists to prevent. `../PENDING.md` flags this as a **live gap**, not a deferred nicety.
 
