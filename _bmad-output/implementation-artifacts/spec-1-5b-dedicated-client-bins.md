@@ -2,7 +2,7 @@
 title: '1.5b Dedicated client bins — a bin dedicated to one client refuses other clients'' stock in putaway, merge and transfers'
 type: 'feature'
 created: '2026-10-20'
-status: 'in-review'
+status: 'done'
 baseline_commit: '0c3962606e1468de4248189761530a653ac7ceb6'  # wms-be; wms-fe: 235701e631a5da64a4d20981fdaf9fcff2e18230; wms-mobile: 3a208c070c2bb7f9c74a274a2d36db6af028db0e
 route: 'dispatch'
 review_loop_iteration: 0
