@@ -2,7 +2,7 @@
 title: '1.2b Client receiving policy — over-receipt tolerance, QC on receipt, expiry required, minimum remaining shelf life'
 type: 'feature'
 created: '2026-10-19'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '5dc9a33a0e364a26151b683d48fdafe9929669c6'  # wms-be; wms-fe: 1eefa7a735accacfae7dd7081dcdb8600e6002e2; wms-mobile: d6cac227b4e4f9439c773efb3d7fa31b2ffeb515 (branches feat/1-2b-client-receiving-policy)
 route: 'dispatch'
 review_loop_iteration: 0
@@ -247,15 +247,15 @@ wms-mobile:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] wms-be migration 0078 + schema -- policy, `tolerance_qty`, `qc_holds` kind/columns/CHECK/index -- `db:verify` and `db:generate` clean.
-- [ ] wms-be clients surface (command, facade, controller, DTO, audit pin) -- the policy.
-- [ ] wms-be catalog `fillNullExpiry` -- expiry on batches.
-- [ ] wms-be receiving + qc + sync-report + notifications -- refusals, two rows, waiver apply, tolerance, receipt holds, release-receipt.
-- [ ] wms-be putaway + kpis + PO/ASN openQty clamp -- held stock is not work.
-- [ ] wms-be `test/client-receiving-policy.spec.ts` -- every I/O row; the old-op hash golden; the 0078 index (manual + receipt hold on one scope; second manual still 409; excursion path); audit pins; the shared golden cases.
-- [ ] wms-fe panel, wrappers, reasons, QC list, review queue + tests (`clients-card.test.tsx`: owner edit, read-only non-owner, `self`, field errors, percent↔bps; `review-queue` tests for each code and Accept anyway) -- web.
-- [ ] wms-mobile expiry capture, warnings, notice, replay words + tests (every code; QC counts; legacy snapshot; IST edge; shared goldens) -- handheld.
-- [ ] meta docs -- `clients.md`, `inbound.md` (receipt holds, tolerance, two rows), `putaway.md`, `catalog.md` (fill rule), `reporting.md` (dock-to-stock), `API-SURFACE.md`, `PENDING.md` (close 1.2b; add the deferrals below), `IMPLEMENTATION-GUIDE.md` §7f (receipt holds subtract), `docs/repos/*/README.md`, `mobile/IMPLEMENTATION-GUIDE.md` (replay codes), `production-readiness.md` (2.4, 4.3).
+- [x] wms-be migration 0078 + schema -- policy, `tolerance_qty`, `qc_holds` kind/columns/CHECK/index -- `db:verify` and `db:generate` clean.
+- [x] wms-be clients surface (command, facade, controller, DTO, audit pin) -- the policy.
+- [x] wms-be catalog `fillNullExpiry` -- expiry on batches.
+- [x] wms-be receiving + qc + sync-report + notifications -- refusals, two rows, waiver apply, tolerance, receipt holds, release-receipt.
+- [x] wms-be putaway + kpis + PO/ASN openQty clamp -- held stock is not work.
+- [x] wms-be `test/client-receiving-policy.spec.ts` -- every I/O row; the old-op hash golden; the 0078 index (manual + receipt hold on one scope; second manual still 409; excursion path); audit pins; the shared golden cases.
+- [x] wms-fe panel, wrappers, reasons, QC list, review queue + tests (`clients-card.test.tsx`: owner edit, read-only non-owner, `self`, field errors, percent↔bps; `review-queue` tests for each code and Accept anyway) -- web.
+- [x] wms-mobile expiry capture, warnings, notice, replay words + tests (every code; QC counts; legacy snapshot; IST edge; shared goldens) -- handheld.
+- [x] meta docs -- `clients.md`, `inbound.md` (receipt holds, tolerance, two rows), `putaway.md`, `catalog.md` (fill rule), `reporting.md` (dock-to-stock), `API-SURFACE.md`, `PENDING.md` (close 1.2b; add the deferrals below), `IMPLEMENTATION-GUIDE.md` §7f (receipt holds subtract), `docs/repos/*/README.md`, `mobile/IMPLEMENTATION-GUIDE.md` (replay codes), `production-readiness.md` (2.4, 4.3).
 
 **PENDING entries to add:** QC fail disposition (2.4); serial / catch-weight not QC-held; device clock skew on remaining life; tolerance across carry-forward applies to the remainder; a client portal view of its policy.
 
@@ -281,6 +281,25 @@ wms-mobile:
 - wms-mobile: `bun run test`, `bun run typecheck`, `bun run lint`.
 
 ## Implementation Notes
+
+Decisions taken while implementing (each within the frozen intent; none changes a rule):
+
+- **Refusal entries stay byte-identical for the client codes.** The new optional `index` / `batchCode` / `expiryDate` / `minShelfLifeDays` (and the review payload's `batchCode` / `expiryDate` / `minShelfLifeDays` / `remainingDays`) ride ONLY the five expiry codes' entries, so a `client-departed` / `sku-client-mismatch` entry — and every receipt of a default-policy client — is unchanged (AC 1). A client-only `grn.lines-refused` row keeps its pre-1-2b `problemDetail` byte for byte; a mixed row appends one sentence.
+- **Tolerance reads the matched line's SKU client's policy** — the document's client by construction (a line whose SKU differs from its document line books unmatched, so no tolerance applies to it).
+- **`RefusedReceiptDto.reviewOpId` became optional**: a receipt whose every line is `shelf-life-short` raises only the shelf-life row. A stored pre-1-2b snapshot always carries it.
+- **No query on the default path**: the batch read for the expiry rules runs only when a line carries an expiry or a line's client requires one.
+- **Post-ensure race**: a batch whose resolved expiry differs from the one the receipt judged its lines against refuses every line of that batch `batch-expiry-mismatch` (the merged lines too), never a 409.
+- **Notification keying**: the `qc-receipt` entry is keyed by the PLACEMENT — the GRN for a receipt, the over-receipt for an approved excess — so an approval hold raises its own entry instead of being swallowed by an already-resolved receipt entry. `qc_hold.receipt_cleared` resolves a placement when none of its holds is open. A receipt hold's per-hold `qc_hold.released` carries `kind: 'receipt'` and the `qc-hold` source ignores it (no tombstones).
+- **Release-receipt with nothing open** answers `409 qc-hold-released` (the existing code), storing no key.
+- **`releaseHold` refactor**: its movement core moved verbatim into `releaseHoldCoreInTx` (shared with `releaseReceiptHolds`); the audit row is still written by each caller, the per-hold outbox event by the core.
+- **The waiver audit** `goods_receipt.shelf_life_waived` is written whenever a waived re-run records a GRN (actor the reviewer); the note rides the resolved outcome (`outcome.note`) — `audit_events` has no payload column.
+- **The holds list's held quantity and batch** come through `InventoryFacade.qcHeldTotalsInTx` and `CatalogFacade.batchCodesByIdsInTx` (no raw ledger read in inbound). Putaway's and the KPI's subtraction read `qc_holds` ⋈ `ledger_events` directly (the `approvedExcessByLine` precedent).
+- **The policy 400 carries a structured `field` member** (`extensions.field`) so the web maps it to its input without reading prose; a DTO-level 400 (a non-integer) carries none and the web falls back to the detail.
+- **`expectAuditRow` gained `alongside`** — a receipt placed on holds writes `goods_receipt.submitted` AND `qc_hold.receipt_placed` under one key (and an approval, `over_receipt.approved` + `qc_hold.receipt_placed`); the helper still demands exactly the named rows.
+- **Tests re-pinned on purpose (each says so in place):** `test/receiving.spec.ts` / `test/asn.spec.ts` (`openQty` clamped at 0 — it was −20 / −10), `test/return-receipts.spec.ts` (the per-type decision rule names `grn.shelf-life-refused`), `test/notifications.spec.ts` (the eleventh source; the Ops Manager sees `qc-receipt`), `test/per-client-sku.spec.ts` (the snapshot's `clients[]` carry `receivingPolicy`).
+- **Handheld**: the confirm-time shelf-life warning takes two presses ("Confirm anyway") because the receive screen leaves as soon as the op queues — never a block (decision 6). The expiry field shows only when the snapshot carries `receivingPolicy` (an older server's `forbidNonWhitelisted` would 400 an unknown `expiryDate`).
+
+**Roadmap target for decision 7 (post-review, 2026-10-19).** Decision 7 says the QC-fail disposition goes to roadmap 2.4. The roadmap already has **2.8 QC on receipt**, which owns inspection pass/fail and partial reject → return to vendor, and 1-2b has now shipped 2.8's auto-holds. So the meta docs file the deferral under **2.8**, renamed "QC inspection outcome", and 2.4 carries no QC work. The intent is unchanged; only the roadmap row it points to differs.
 
 ## Spec Change Log
 
@@ -315,3 +334,29 @@ wms-mobile:
 | — | `expiry_required` without a minimum books expired goods (backend) | low | Expired refused whenever expiry required |
 | — | Device tolerance math has no shared proof (product) | low | Shared golden cases |
 | — | Client-surface ACs/tests missing (product) | low | Added to Tasks |
+
+### Code review — 2026-10-19 (3 layers: blind 12, edge-case 8, verification-gap 6; 26 raw → 19 after dedup)
+
+| # | Finding (layers) | Verdict | Route |
+|---|---|---|---|
+| C1 | Handheld tolerance split derives received from the now-clamped `openQty`; tells the operator "books now" for units the server pends; test fixture still sends the old negative shape (blind, edge, gap) | high — verified `draft.ts:1176-1188`; the snapshot already carries `receivedQty` | patch |
+| C2 | Waiver hash includes `byUserId` + `note`; a retried Accept (other reviewer or edited note) after a committed re-run answers 422 forever (blind, edge) | medium — verified `receiving.command.ts:554`, `sync-report.command.ts:1367` | patch: hash `shelfLifeWaived: true` only |
+| C3 | Every receivable line refused by the post-ensure race still writes an empty GRN header (blind, edge, gap) | medium — verified `receiving.command.ts:845` runs before `:1034-1058` | patch: take the all-refused arm |
+| C4 | Two last receipt holds released concurrently: neither sees the other closed; `receipt_cleared` never emitted, notification open forever (edge) | medium — verified `qc.command.ts:970-1015` (no lock before the open check, READ COMMITTED) | patch: lock the GRN row first |
+| C5 | Hot inbound reads join `ledger_events` on `reference_doc->>'holdId'` with no index (blind) | medium — verified: no holdId index in `drizzle/`; every other reference key has one (0069) | patch: partial expression index in 0078 + `?` predicate in the queries (§9) |
+| C6 | Web "(over-received)" callout can no longer render — clamped `openQty` (gap) | medium — verified `over-receipt.ts:19-22` | patch: `receivedQty > ordered` |
+| C7 | Expiry year 0000/0001 → `istMidnightOf` year 0 → Postgres error 500 (edge) | low — verified `time.ts:45`; reachable by a handheld typo | patch: year window 2000–2199, server 400 + device normalizer |
+| C8 | `expiry-before-mfg` ignores an existing batch's mfg date; the fill can write expiry < mfg (edge) | low — verified rule (2) at `:2328` runs before the batch read | patch |
+| C9 | A tracked line with no batch code is refused `expiry-required` instead of the existing 400 (edge) | low — verified `:2369` | patch: skip expiry rules when batchCode is null |
+| C10 | Accept anyway resolves `applied` even when the re-run refuses every line again (blind) | medium — the outcome snapshot carries it; the web does not show it | patch: web shows the re-run's refused lines after Apply |
+| C11 | Handheld accepts only ISO dates; Indian labels print DD/MM/YYYY and MM/YYYY — day/month swaps (blind) | medium | patch: accept DD/MM/YYYY and MM/YYYY, echo the parsed date |
+| C12 | Note rules unpinned: 501-char note, Discard with note, no-note resolve hash golden (gap) | medium (gap, pre-verified) | patch: tests |
+| C13 | `untrackedSkuCount` kit exclusion unpinned (gap) | low (gap, pre-verified) | patch: kit in the fixture |
+| C14 | Stale "openQty goes negative" comments (gap) | low | patch |
+| C15 | Concurrent-fill race arm untested (blind, gap) | medium (gap) | defer: needs a deterministic interleave harness |
+| C16 | No link from a waived re-run's GRN to the original receipt (blind) | low | defer |
+| C17 | Policy change audited without values; batch expiry fill unaudited (blind) | low — `audit_events` has no payload (1-2a B7) | defer |
+| C18 | GS1 AI(17) expiry not parsed from barcodes (blind) | low | defer (labels 2.10 / scan work) |
+| — | Unparseable expiry blocks confirm (blind) | false — specified in the frozen Boundaries ("A non-empty but unparseable entry blocks confirm") | reject |
+| — | Policy and untracked count read in separate transactions; batchTracked toggled off escapes the policy (blind) | low — cosmetic skew; the toggle is catalog (1.4) | reject |
+| — | QC holds card resolves bin codes of the active warehouse for a GRN of another (edge) | low — notifications are per warehouse; unlikely in use, fix adds a branch | reject |

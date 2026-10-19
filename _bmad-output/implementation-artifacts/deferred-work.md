@@ -893,3 +893,16 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2a-client-master-record.md`
   summary: Client contact audit rows (`client.contact_added/edited/removed`) name the client but not the contact or what changed, so a removed contact leaves no record of who it was.
   evidence: 1-2a code review B7; `audit_events` carries no payload today — a contact-history or audit-detail story.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2b-client-receiving-policy.md`
+  summary: The post-ensure `batch-expiry-mismatch` arm (another receipt filled a batch's null expiry first) has no test — two concurrent receipts filling the same batch with different dates.
+  evidence: 1-2b code review C15; needs a deterministic two-transaction interleave the suite has no harness for.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2b-client-receiving-policy.md`
+  summary: A GRN booked by "Accept anyway" (the shelf-life waiver re-run) names neither the original receipt nor is it marked as a waived re-run; tracing it needs the rejected_ops payload.
+  evidence: 1-2b code review C16; the audit row references only the review op id.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2b-client-receiving-policy.md`
+  summary: A receiving-policy change is audited without its before/after values, and a receipt's fill of a batch's null expiry writes no audit row or event — tolerance and shelf-life terms are contract terms a 3PL may need to prove later.
+  evidence: 1-2b code review C17; `audit_events` carries no payload (same root as 1-2a B7).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2b-client-receiving-policy.md`
+  summary: The handheld does not read expiry from a GS1-128 / DataMatrix barcode (AI 17); operators type it.
+  evidence: 1-2b code review C18; belongs with labels (2.10) or a GS1 scan-parsing story.
