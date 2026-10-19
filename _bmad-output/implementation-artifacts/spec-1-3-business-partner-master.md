@@ -2,7 +2,7 @@
 title: '1.3 Business partner master — vendors, consignees, transporters; client links; PO vendor must be linked'
 type: 'feature'
 created: '2026-10-19'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: 'd3119bd9b54c5a84021792d60f9a16626237e62f'  # wms-be; wms-fe: 99579bf9fef9eefb3409e18c627358df2dbb387d; wms-mobile: df2ef8b66e73f1e5a4889b572131530857f78e1e (branches feat/1-3-business-partner-master)
 route: 'dispatch'
 review_loop_iteration: 0
@@ -275,13 +275,13 @@ A 3PL needs one master record per real company. Each client then chooses which o
 ## Tasks & Acceptance
 
 **Execution**
-- [ ] `wms-be` schema + 0079 + migration test: rename in place, links, backfills, probe, RLS, CHECKs. Existing references must not break.
-- [ ] `wms-be` partners module + controller + audit/arch wiring: the commands, locks and routes above.
-- [ ] `wms-be` po.command / inbound facade + DTOs / sweep / receiving snapshot: the guard, snapshot, per-client default and `vendorName`.
-- [ ] `wms-be` tests + helper + seed: the matrix, a same-key race per lock-taking command, deactivate-vs-PO and set-default races, `expectAuditRow` for every action.
-- [ ] `wms-fe` client wrappers, Partners tab, picker, PO column, audit labels + tests.
-- [ ] `wms-mobile` api, draft helpers, two cards + tests.
-- [ ] Meta docs (landing last):
+- [x] `wms-be` schema + 0079 + migration test: rename in place, links, backfills, probe, RLS, CHECKs. Existing references must not break.
+- [x] `wms-be` partners module + controller + audit/arch wiring: the commands, locks and routes above.
+- [x] `wms-be` po.command / inbound facade + DTOs / sweep / receiving snapshot: the guard, snapshot, per-client default and `vendorName`.
+- [x] `wms-be` tests + helper + seed: the matrix, a same-key race per lock-taking command, deactivate-vs-PO and set-default races, `expectAuditRow` for every action.
+- [x] `wms-fe` client wrappers, Partners tab, picker, PO column, audit labels + tests.
+- [x] `wms-mobile` api, draft helpers, two cards + tests.
+- [x] Meta docs (landing last):
   - new `docs/design/modules/partners.md`;
   - `inbound.md` (vendors section, guard order at :327);
   - `replenishment.md:231`;
@@ -302,6 +302,21 @@ A 3PL needs one master record per real company. Each client then chooses which o
 - Given a handheld with a cached snapshot from before this change, when a PO card renders, then it renders without a vendor name. A fresh snapshot shows the name, and the screen reader reads it out.
 
 ## Implementation Notes
+
+- **Commits (branch `feat/1-3-business-partner-master`):**
+  - wms-be: `c9c8045` (feature), `2c9d346` (sweep test from the matrix audit), `4f241ac` (review fixes)
+  - wms-fe: `3ada953`, `d30e9d9`
+  - wms-mobile: `8d589fe`
+- **Beyond the Code Map:**
+  - The registered-address rule moved to `src/shared/primitives/registered-address.ts`, shared by clients and partners. The clients' 400 title is unchanged.
+  - `lockClientInTx` gained an optional lock-mode argument. Its default keeps every existing caller's behaviour.
+  - The inbox card's spoken label now matches the receive card's ("Receive against …").
+- **Matrix audit:** one row, "Deactivate the default partner", was covered only indirectly. A direct test was added in `test/replenishment.spec.ts` (`2c9d346`).
+- **Final verification after the review fixes:**
+  - wms-be: lint, typecheck and build pass; all 97 suites (2,337 tests) pass. On a fresh database the migrations apply and the schema round-trip check passes, and `db:generate` reports "No schema changes".
+  - wms-fe: `api:generate`, lint, typecheck, the capability mirror check and build pass; 1,864 tests pass.
+  - wms-mobile: 672 tests pass; typecheck passes.
+- **Not done:** the demo seed was updated but not run, and the local `wms` dev database is still at 0078.
 
 ## Spec Change Log
 
@@ -341,6 +356,32 @@ A 3PL needs one master record per real company. Each client then chooses which o
 - D30 low (E18): `created_at` is preserved by the rename in place, and the status/reason CHECK was added.
 - D31 low (E20): `vendor.created` is emitted only when a partner is created with the vendor role; adding the role later does not emit it.
 - Rejected: none.
+
+**Code review, 2026-10-19.** Three layers: blind (B1–B15), edge-case (E1–E9), verification-gap (V1–V4 plus one other finding).
+
+- C1 medium (E1, B9): `updateLink` keys the departed-client check on the request flags, not on the real transition. Setting a default on a departed client's active link skips the check, so the departed client gets a default. Sending `active:true` to an already-active link is wrongly refused. **Patch:** decide "reactivating or setting default" after the lock, and refuse a departed client on those transitions only.
+- C2 medium (E5): the Links panel resolves its partner from the current list page. After a change the list resets to page one, so a partner on a later page keeps showing its old links. **Patch:** the panel takes the PartnerDto the mutation returns.
+- C3 medium (E3): PATCHing a GSTIN without a PAN, when the stored PAN was derived from the old GSTIN, returns 400 `pan-gstin-mismatch`. This contradicts "derived when absent". **Patch:** re-derive the PAN when it was the old GSTIN's.
+- C4 low (E2): re-deactivating with no reason silently clears the stored reason and audits `partner.updated`. **Patch:** a missing reason on the same status keeps the stored one.
+- C5 low (B8): `updateStatus` validates after taking the FOR UPDATE lock, so a malformed request holds up PO creates, and an unknown partner with a bad body answers 404 instead of 400. **Patch:** validate before the lock.
+- C6 low (E8, B7, V-other): moving `assertRegisteredAddress` changed the clients' 400 title from "Invalid registered address" to "Invalid address". **Patch:** keep the clients' title.
+- C7 low (E7): the facade comment says a partner edit never queues behind a PO's KEY SHARE, but a code rename updates a unique-key column and does queue. **Patch:** correct the comment.
+- C8 low (E6): a failed code-parse alert stays up after later successful link changes. **Patch:** clear it on the next action.
+- C9 low (B1): `PartnersFacade.get()` has no caller and no route. **Patch:** delete it.
+- C10 false (B14): the seed already links Vistara to GLOWCO as GLOWCO's default (`scripts/seed-demo.ts:1082`, the step "GlowCo trades with Vistara"). No change made.
+- C11 medium (V1): no test where create-with-default replaces an existing default. **Patch:** add the test.
+- C12 medium (V2): no test that the audit filter still accepts the retired `vendor` target. **Patch:** add trail and export cases.
+- C13 medium (V3): the web PO vendor column (the frozen name, or "—") has no assertion. **Patch:** add one.
+- C14 medium (V4): no test for 409 `partner-inactive` on set-default or reactivate of an inactive partner's link. **Patch:** add one.
+- C15 medium (B15): no test that one client's set-default leaves another client's default on the same partner alone. **Patch:** add one.
+- R1 low, rejected (E4, B5): the `?? ''` fallbacks for `clientId` and `vendorName`. Neither case is reachable: SKUs are never deleted, and the migration probe guarantees every PO has a snapshot. Making the DTO nullable would widen the contract.
+- R2 low, rejected (E9, B13): the inbox card's spoken label now matches the receive screen's. This was deliberate, keeps one label helper, and nothing depends on the old wording.
+- R3 low, rejected (B2): replacing a default writes one audit row, on the link that became default, not one per link touched. Per-link rows would add complexity, and the actor and time are already recorded.
+- R4 rejected (B3): a migration notice for dropped defaults. Decision 10 accepted this behaviour.
+- R5 rejected (B4): `vendor_snapshot` NOT NULL. The spec makes it nullable on purpose (D14); the fix would be a spec edit.
+- R6 low, rejected (B6): the `vendor.created` outbox payload lost `isDefault`. Nothing in the code consumes that event.
+- R7 rejected (B10): departure leaves links untouched, by design (D17). A departed client cannot take new POs anyway.
+- R8 low, rejected (B12): `role=transporter&clientId=` returns empty, which is correct, harmless, and would need extra validation to refuse.
 
 ## Design Notes
 
