@@ -268,6 +268,15 @@ A paged hook (`useAuditTrail`, `lib/use-audit-trail.ts`) holds the requested cur
 - the table is keyed on the filter tuple **and** the epoch — `` key={`${auditFilterKey(applied)}#${trail.epoch}`} `` — so a filter change or a Retry remounts it with an empty stack;
 - the requested cursor is stamped with the scope (tenant + filter key, the `useQcHolds` pattern), so a stale cursor under a new filter reads as page 1, and the result is filtered at render on the same stamp (§1.5). The filter key must include **every** filter the request sends (`targetId` was missing — FE4).
 
+### 1.12 The client filter — an explicit argument, an epoch in every stamp (1-5a)
+
+- **A list hook takes the filter as an argument** — `clientFilter: ClientFilter` (`string | null | CLIENT_PENDING`, `lib/active-client.ts`). The screen calls `useActiveClient()` **once** and passes `clientFilterOf(active)` down; a hook never reads storage itself, so a write-side screen can pass `null` and stay unfiltered. `CLIENT_PENDING` (a symbol, so no id can be mistaken for it) means "do not fetch, render loading".
+- **The filter joins every scope stamp** — the requested-cursor stamp, the result stamp, the render-time stale check, the effect deps — **and the `<DataTable key>`**. Stamp with `clientFilterKey(…)` **plus `useClientEpoch`** (`lib/use-client-epoch.ts`), a counter that moves on each switch: a bare `clientId` stamp matches again on the way back (All → GlowCo → All would replay the page-2 cursor the table no longer offers).
+- **Send it only when set** — `clientQuery(id)` in the `lib/api/client.ts` wrappers; `null` sends no key.
+- **Exempt by passing `null`, and say so** — drills (`clientFilterForDrill`: a drill equals its tile, §1.6), write-side screens (wave generate, the pack pipeline and manifest builder, the QC-hold form), lookups and pickers (`useSkuMap`, `useVendorMap`, `useKits`, …) and partners. A filtered page's unfiltered section renders `AllClientsNote`.
+- **Create forms default to the active client at render, never in a `useState` initializer** (`picked ?? defaultFormClientId(...)` — an initializer captures nothing while clients load), **pin it on the first draft edit** (the order and ASN forms' `pinClient` — a switch mid-draft must never move the client under drafted lines), and on success for another client say `hiddenByClientFilterNote` ("Created for X — hidden by the client filter").
+- **A keyed action whose target derives from the active client binds its key to that target** — the client-invoice Prepare keeps `{key, clientId, month}` and mints afresh when either changes, or a Prepare for B would replay A's key.
+
 ---
 
 ## 2. Writing a mutation
