@@ -906,3 +906,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2b-client-receiving-policy.md`
   summary: The handheld does not read expiry from a GS1-128 / DataMatrix barcode (AI 17); operators type it.
   evidence: 1-2b code review C18; belongs with labels (2.10) or a GS1 scan-parsing story.
+
+- source_spec: none
+  summary: 1.4b SKU deactivation — a SKU with history is set inactive, never deleted; an inactive SKU cannot go on new orders, POs, ASNs, kits or imports, and channel availability stops publishing it.
+  evidence: Split from 1.4 (SKU master on the web) on 2026-10-19 at the user's choice — deactivation touches order create, PO, ASN, kit compose, import and channel sync, about as large as 1.4 itself (roadmap cross-cutting rule "master records deactivate, never delete").
