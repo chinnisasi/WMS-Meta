@@ -914,3 +914,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-sku-master-on-the-web.md`
   summary: A handheld receipt or return queued offline under a SKU's old tracking flags replays after the flags change (1.4 decision 7 guards only server-side stock), so the replay is refused or books stock without the now-required batch/serial.
   evidence: `skuStockHoldingsInTx` counts on-hand, pending over-receipts and pending positive adjustments only; nothing knows about a device's WAL. Same class as any master change racing the offline queue — settle with a replay fate for a flag mismatch or a flag version in the snapshot.
+
+- source_spec: none
+  summary: 1.5b dedicated client bins — a bin can be dedicated to one client, and putaway, moves and merge refuse to place another client's stock in it (web bin admin + handheld refusals).
+  evidence: Split from roadmap row 1.5 by the user on 2026-10-19 ("Split, filter first"); 1.5a ships the client filter on every list and the stock/ledger reads first.
