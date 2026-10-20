@@ -2,7 +2,7 @@
 title: '1.4b SKU deactivation — an inactive SKU takes no new inbound, kits or listings, and sells down what is left'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '25a3ba12c78bb1d70469a814f4c9e55187e5b296'  # wms-be; wms-fe: 1d5e6124e9ce048fc016e4c4dab386e1216168bc; wms-mobile: cdb97773e0a61a6c8a36bb38d72205019553e460
 route: 'dispatch'
 review_loop_iteration: 0
@@ -222,14 +222,14 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0082_sku_status.sql` + schema + meta -- columns, CHECKs, assert, vocabulary pin -- decision source
-- [ ] `wms-be src/modules/catalog/{sku.command,catalog.controller,catalog.dto,catalog.facade,portal-skus}.ts` -- status route, response fields, list filter, `assertSkusTakeWorkInTx`, snapshot and portal `status` -- one guard everyone calls
-- [ ] `wms-be src/modules/inbound/{po,asn,asn-import}.command.ts`, `catalog/{kit,import}.command.ts`, `channels/{channels.command,channels.publish,channels.ingest.command,channels.errors}.ts` -- guard calls at the decision-13 position, decision-9 diffs against stored state, zero publish, ingest 422 arm -- decisions 1, 3, 8, 9, 12, 13
-- [ ] `wms-be src/modules/outbound/order.command.ts` -- phase-1 status read, phase-2.5 inactive-short arm, phase-3 `FOR KEY SHARE` re-check of status and kit-ness -- decision 1 + the PENDING kit race
-- [ ] `wms-be src/modules/inbound/receiving.command.ts`, `tenancy/{sync-report.command,client-wind-down}.ts`, `replenishment/replenishment.sweep.ts`, `openapi/openapi.json` -- `grn.inactive-sku-received` row; inactive sweep arm that dismisses the draft; OpenAPI export -- decisions 2, 7
-- [ ] `wms-be test/` -- every I/O row; architecture `SKU_TAKES_WORK_CALLERS`; audit pins; replay of a pre-1.4b SKU response; channel ingest refusal with no redelivery loop; the deactivate-vs-PO-create lock race (the partners race-test pattern) -- proof
-- [ ] `wms-fe` -- regenerate types; SKU table status column, filter, deactivate/reactivate; picker filtering with keep-sets; `sku-inactive` in each reason switch; review-queue Acknowledge; unit tests for the label helper, the picker filters and the reasons -- decisions 1–3
-- [ ] `wms-mobile` -- snapshot parse default, `CatalogSku.status`, receive-scan warning, tests (legacy snapshot, inactive blind and unmatched scans) -- decision 2
+- [x] `wms-be drizzle/0082_sku_status.sql` + schema + meta -- columns, CHECKs, assert, vocabulary pin -- decision source
+- [x] `wms-be src/modules/catalog/{sku.command,catalog.controller,catalog.dto,catalog.facade,portal-skus}.ts` -- status route, response fields, list filter, `assertSkusTakeWorkInTx`, snapshot and portal `status` -- one guard everyone calls
+- [x] `wms-be src/modules/inbound/{po,asn,asn-import}.command.ts`, `catalog/{kit,import}.command.ts`, `channels/{channels.command,channels.publish,channels.ingest.command,channels.errors}.ts` -- guard calls at the decision-13 position, decision-9 diffs against stored state, zero publish, ingest 422 arm -- decisions 1, 3, 8, 9, 12, 13
+- [x] `wms-be src/modules/outbound/order.command.ts` -- phase-1 status read, phase-2.5 inactive-short arm, phase-3 `FOR KEY SHARE` re-check of status and kit-ness -- decision 1 + the PENDING kit race
+- [x] `wms-be src/modules/inbound/receiving.command.ts`, `tenancy/{sync-report.command,client-wind-down}.ts`, `replenishment/replenishment.sweep.ts`, `openapi/openapi.json` -- `grn.inactive-sku-received` row; inactive sweep arm that dismisses the draft; OpenAPI export -- decisions 2, 7
+- [x] `wms-be test/` -- every I/O row; architecture `SKU_TAKES_WORK_CALLERS`; audit pins; replay of a pre-1.4b SKU response; channel ingest refusal with no redelivery loop; the deactivate-vs-PO-create lock race (the partners race-test pattern) -- proof
+- [x] `wms-fe` -- regenerate types; SKU table status column, filter, deactivate/reactivate; picker filtering with keep-sets; `sku-inactive` in each reason switch; review-queue Acknowledge; unit tests for the label helper, the picker filters and the reasons -- decisions 1–3
+- [x] `wms-mobile` -- snapshot parse default, `CatalogSku.status`, receive-scan warning, tests (legacy snapshot, inactive blind and unmatched scans) -- decision 2
 - [ ] meta `docs/design/modules/catalog.md`, `API-SURFACE.md`, `PENDING.md` (close 1.4b; narrow the kit-race entry; add "backorders of an inactive SKU are not re-planned"), `docs/repos/wms-{be,fe}/README.md` -- the design docs stay current -- CLAUDE.md
 
 **Acceptance Criteria:**
@@ -237,6 +237,69 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - Given an inactive SKU with stock, when the channel sync ticks, then the outbox message carries 0 for that SKU at every warehouse; after reactivation, the next tick carries the real quantity.
 - Given an inactive SKU, when a reviewer acknowledges its `grn.inactive-sku-received` row, then the row is resolved and no stock moves.
 - Given a handheld holding a pre-1.4b snapshot, when it parses it, then every SKU reads as active.
+
+## Implementation Notes
+
+- One commit per repo plus review-round commits on `feat/1-4b-sku-deactivation`: wms-be `1b35771` (feature), `16e2281` (full mixed-receipt test), `27e8a93` (code-review tests); wms-fe `491c179` (feature), `c17f45d` (code-review tests + suggested-PO copy); wms-mobile `3d020c7`.
+- Order phase 3 also refuses when a kit **component** has become a kit, not only a plain line's SKU (a stricter reading of the became-a-kit re-check).
+- The status DTO caps `reason` at 2,000 UTF-16 units only to bound the body; the 500-code-point rule is the command's (decision 14).
+- The order-entry label is "{code} {name} — inactive, sells existing stock only" (the existing option text, extended).
+- The real-route lock-race test runs the PO create **after** the parked PATCH commits: a second `KEY SHARE` is compatible with the holder's, so a concurrent create cannot queue behind the parked `FOR UPDATE`. The test fails with `.for('update')` removed from `updateStatus`.
+
+## Spec Change Log
+
+## Review Triage Log
+
+**Design review, 2026-10-20.** Three reviewers: backend (B1–B11), edge cases (E1–E12), web and handheld (F1–F13). 36 raw findings, 24 after merging duplicates. All are patched above, and none needed a human decision; each follows from decisions 1–4 or a precedent. Re-checked by hand: there is no pre-existing order error for a SKU that became a kit (`order.command.ts:520-560`), and the sync polls a full snapshot every tick, so zero needs no trigger (`jobs.module.ts:665-690`). *(This log was missing from the design commit #182: the section heading had been omitted, so the insertion matched nothing. Restored here.)*
+
+- D1 high (E3, F1): the order-entry picker contradicted sell-down. Decision 10 keeps inactive SKUs there with a label.
+- D2 high (E1, F2, B1): the mapping PUT replaces the whole set, so the guard would lock the connection. Decision 9: only added pairs are guarded; the stored set is read under the lock.
+- D3 high (E2, B2): amend can re-point a kept line. Decision 9 judges by SKU against stored lines; a raised quantity is refused.
+- D4 high (E4, B3): the catalog import's `kit_components` pass was a missed caller. Added.
+- D5 med (E5, B5): the backorder arm mislabelled the refusal, metered and counted it, and did not stop redelivery. Decision 12: a typed 422.
+- D6 med (B6): phase 3 cannot use a throwing guard. Added `lockSkuStatusesInTx` in id order; the outer catch releases grants.
+- D7 med (B7): the kit-race fix does not cover zero-grant lines. The PENDING entry is narrowed, not closed.
+- D8 med (B8): kit shortfall numbers were misleading. The detail names codes only.
+- D9 med (E6): existing backorders are stranded. Panel copy plus a PENDING entry (decision 11).
+- D10 med (E7): buffers keep holding units. Decision 11: untouched, explained in the panel.
+- D11 med (E8, B10): the review row's lines, id, payload, snapshot field and shelf-life re-run were unstated. Specified.
+- D12 med (E9): a suggested-PO draft outlives deactivation. The sweep dismisses it (decision 7).
+- D13 med (B4): PO close carry. Decision 5: allowed as a continuation.
+- D14 med (F8): the review queue would render nothing, and its "refused / discarded" words were wrong. Summary arm, badge, guidance and words specified.
+- D15 med (F9): the handheld warning had no place to surface and missed other-client accepts. Optional `warning` on the `'sku'` result.
+- D16 med (F10): legacy-seal pins would break. Named.
+- D17 med (F11, B10): OpenAPI export, the import-code enum and the op-type enum were missing. Added.
+- D18 med (F4, F5, F3): wrong or missing reason switches (`skuMasterReason` → `skuStatusReason`; `setMappingsReason`; the suggested-PO 409 short-circuit; the wrong picker line). Fixed.
+- D19 med (F6): the partners deactivate uses `DeactivatePanel`, not `ConfirmRow`. Fixed; added the wrapper and `notifyCatalogChanged`.
+- D20 med (F7): the status filter needs cursor scoping. Added.
+- D21 low (E10, B9): `sku.updated` would be a near-synonym of `sku.edited`; the route order and discriminator differed from the precedent. Fixed.
+- D22 low (E11): reason trimming and clearing. Decision 14.
+- D23 low (E12): error precedence differed between PO and order. Decision 13.
+- D24 low (F12, F13, B11): portal filters on the server; inactive markers on surprising surfaces; kit PUT reads the full composition; the retry path is one change.
+
+**Code review, 2026-10-20.** Three layers: blind hunter (H1–H11), edge-case hunter (C1–C6), verification gap (V1–V5). 22 findings: 5 patched, 2 deferred, 15 rejected. No loopback: no finding traced to the frozen intent or to a spec gap.
+
+- V1 medium, patch: the lock-race test took `FOR UPDATE` by raw SQL, so removing `updateStatus`'s lock would pass. Re-driven through the real status route.
+- V2 / H4 medium, patch: no test for suggested-PO submit refusal. Added.
+- V4 medium, patch: only the PO-line arm proved "document line stays unflagged". ASN-line twin added.
+- V5 medium, patch: web inactive behaviour tested only at helper level. Component cases added for ASN create/amend and the flagged review card.
+- H3 low, patch (copy only): `submitSuggestedPoReason` said "dismiss it", but no draft-dismiss action exists. Reworded. The silent sweep dismissal itself is decision 7's design: a system action on machine-made drafts, with no actor or resolver columns on `suggested_pos`.
+- V3 medium, defer: the `setChannelMappings` seed arm has no test. It is internal with no route (deferred-work).
+- C3 medium, defer: a kit composition replaced (PUT) between order phase 1 and phase 3 commits holds on stale components. Pre-existing; 1-4b re-checks only became-a-kit (deferred-work).
+- H1 low, reject: ASN import tags rows by code. Codes resolve within the group's client, and a mixed-client group already fails, so a collision only adds a label to a failed group.
+- H2 low, reject: the seed arm's untrimmed key. Internal and test-only callers.
+- H5 low, reject: device "on the document" vs server "unmatched". These diverge only when `resolveLineRefs` misses an open line (the existing PENDING gap). The duplicate `warning` field is harmless.
+- H6 low, reject: no UI to change the reason. Decision 14 allows it through the API; deactivate/reactivate covers the user path.
+- H7 low, reject: no PO-line marker. The spec named markers for mappings, suggested-PO cards and ASN detail only.
+- H8 low, reject: kit PUT on an inactive kit SKU. Decisions 8–9 guard only new components; editing a kit is not new kit-ness.
+- H9 low, reject: CHECKs added without `NOT VALID`. `skus` is small, and the `ADD COLUMN` already holds `ACCESS EXCLUSIVE` for the same moment.
+- H10 low, reject: "extensions.skuCodes" wording. The wire spreads extensions top-level and the web's `problemExtensions` gathers them; it is the house OpenAPI phrasing.
+- H11 false: the generic `catalog.sku_edited` event and tick-based pickup are the spec's design (outbox bullet, decision 3).
+- C1 maybe-false (low if true), reject: an over-receipt pending on an inactive SKU. Over-receipts arise only on document lines, which are unflagged by decision 2.
+- C2 low, reject: a draft whose SKU has reorder point 0 is never reached by the sweep. A draft exists only from a breach, which needs a point above 0.
+- C4 false: `assertSkusTakeWorkInTx` throws only with at least one code, so the catch always tags a row.
+- C5 low, reject: re-typing a stored inactive row's ref is a new pair, refused by decision 9 and reported by `setMappingsReason`.
+- C6 low, reject: a reason over 2,000 UTF-16 units before trimming is refused at the edge. Negligible.
 
 ## Design Notes
 

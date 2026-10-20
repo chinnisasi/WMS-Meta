@@ -73,6 +73,8 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 | `reorder_point` / `reorder_qty` | bigint `mode:'number'` | NO | `0` | — | **Milli-units** — UoM-denominated, so 10.1 scaled them. Policy thresholds, not stock |
 | `barcode` | text | NO | — | `unique (tenant, client, barcode)` (kept as a backstop since 1-4) | The **primary** base-level barcode; always mirrored by an `is_primary` `sku_barcodes` row written in the same transaction (create, edit, import, correction). Collision → `409 duplicate-barcode` naming the holder SKU and level |
 | `shelf_life_days` | integer | **YES** | — | `skus_shelf_life_days_check` 1–3650 (0080) | 1-4: total shelf life in days from manufacture; roadmap 2.4 derives expiry from it. Not the client policy's `minShelfLifeDays` (minimum *remaining* life) |
+| `status` | text | NO | `'active'` | `skus_status_check` (`active`,`inactive`, 0082; `SKU_STATUSES`) | **1-4b:** `inactive` = no new inbound, kits or channel mappings; sells down only what stock covers in full; publishes 0. Every existing document, list and stock read still shows it. Master records deactivate, never delete |
+| `inactive_reason` | text | **YES** | — | `skus_inactive_reason_pairing` (NULL unless inactive), `skus_inactive_reason_length` (1–500, 0082) | 1-4b: why it was deactivated — trimmed by the command, blank = absent; replaced by a new reason, cleared only by reactivating |
 
 ### `uom_conversions`
 `sku_id` · `uom` text NOT NULL, guarded by **`uom_conversions_uom_check`** (`0027:352`) — a *separate* constraint from `skus_uom_check` (`0027:351`) with the same value list, so **widening one without the other is a live bug the shared naming hides** · `factor` **integer** NOT NULL. `unique (sku_id, uom)`.
@@ -129,6 +131,10 @@ One physical unit (a case) of a catch-weight SKU: `warehouse_id`, `sku_id`, `bat
 | `portalSkus(tenantId, clientId, {cursor?, limit?})` (21-7b) | One client's **non-kit** SKUs as `Page<{skuId, skuCode, skuName, baseUom, uomPrecision}>` (portal vocabulary, as on `portal/stock`; nothing else of the row), keyset `(code, id)` with its own codec (`portal-skus.ts`; a bad cursor 400 `invalid-cursor`), limit 1–100. The 21-7 portal-read pattern: `withTenantTransaction(…, { clientId })` AND an explicit `s.client_id = $client`; kits excluded by `not exists` on `kit_compositions` (a kit can never be received, so the announce form never offers one) | `GET portal/skus` — the portal's announce form (drains up to 20 pages) |
 | `getSkuHsnByIdsInTx(tx, tenantId, skuIds)` (8-2a; **by id since 1-1** — it was `getSkuHsnByCodesInTx`, and a code no longer names one SKU) | SKU id → the SKU's CURRENT `hsn` (absent when unknown), in the caller's tx | Invoicing's HSN summary — the hint beside a frozen blank/malformed-HSN line; the line's order line → SKU comes from `OutboundFacade.orderLineSkuIdsInTx` |
 | `getSkusByCodesInTx(tx, tenantId, codes)` (ASN import) | **code → every SKU holding it** (`SkuByCode[]`, one per client, since 1-1): id, client, base unit + precision, kit-ness | The ASN import, which resolves each row within its ASN's client |
+| `assertSkusTakeWorkInTx(tx, tenantId, skuIds)` (1-4b, file-level, `sku-status.ts`) | Locks the SKU rows `FOR KEY SHARE` in id order; 409 `sku-inactive` (`extensions.skuCodes`) naming every inactive one; an unknown id is ignored (the caller's 404 ran first) | PO create (+ suggested-PO submit) and amend, ASN create / announce / amend, the ASN import (row error), kit create and PUT, the mapping PUT and seed arm — at decision 13's position: SKU 404 → client checks → `sku-inactive` → anything later (vendor, kit guards …). Architecture list `SKU_TAKES_WORK_CALLERS` |
+| `skusGainingInbound(stored, requested)` (1-4b, pure) | The SKUs a replacement line set ADDS inbound for — a SKU the stored lines lack, or whose requested total exceeds its stored total (decision 9; a re-pointed kept line raises its new SKU's total) | PO amend, ASN amend → `assertSkusTakeWorkInTx` |
+| `lockSkuStatusesInTx(tx, tenantId, skuIds)` (1-4b, file-level) | `Map<id, {code, status, isKit}>` under `FOR KEY SHARE` in id order — kit-ness read under the lock that conflicts with kit create's `FOR UPDATE` | Order create's phase 3 (pinned) |
+| `skuStatuses(tenantId, skuIds)` (1-4b) | id → status in its own transaction | The channel publish (`computePublishedScopes`), once per cycle |
 | `getSegregationMatrix(tenantId)` (12-7) | `{classes, incompatible}` — the 12-2 hazard matrix fully expanded from `hazard.ts` (explosive's universal rule enumerated incl. the self-pair; sorted keys; no tx — a pure code read) | `GET …/catalog/segregation-matrix` (ungated; the FE matrix card is its only consumer) |
 
 **`uom.ts` file-level functions** are imported directly by anything that needs the vocabulary: `resolveUom`, `uomPrecision`, `isFractionalUom`, `serialTrackedFractionalUomDetail`, `unknownUomDetail`, plus the `UOMS` tuple (consumed by `catalog.dto.ts` for the OpenAPI enum).
@@ -164,6 +170,34 @@ sequenceDiagram
 - **Promotion.** A PATCH `barcode` equal to this SKU's own extra **base-level** barcode deletes the extra row and moves the value onto the primary row; a pack-level (case/pallet) barcode is refused `400 validation-failed` (promoting it would make a case scan count one unit).
 - **Replays of pre-1.4 stored SKU responses** (edit, correction) serve `shelfLifeDays ?? null`, `barcodes ?? []` (`normalizeStoredSku`); a pre-1.4 product snapshot replays its row's current client.
 - **Device snapshot.** `getSkuSummariesInTx` adds `packBarcodes: [{barcode, uom, factor}]` — every non-primary row, factor 1 at the base uom else the level's factor — by one batched query on the caller's transaction. The server never applies a factor: documents and the ledger stay in base units; the handheld multiplies (mobile guide §4). A stale factor on a handheld is shown in its message, not detected (PENDING).
+
+### SKU deactivation (story 1-4b)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant Cmd as SkuCommand.updateStatus
+  participant G as assertSkusTakeWorkInTx
+  participant W as PO / ASN / kit / mapping writer
+  participant O as order create
+  participant P as channel publish
+  Ops->>Cmd: PATCH /catalog/skus/:id/status {status, reason?}
+  Note over Cmd: hash (command: 'sku.status') → sku.edit → replay → shape<br/>→ SKU FOR UPDATE → replay again → no-op? (skus.status:unchanged)<br/>→ UPDATE → catalog.sku_edited → sku.deactivated | reactivated | edited → key
+  W->>G: new SKUs (decision 9: judged against the stored lines / pairs / composition)
+  G-->>W: FOR KEY SHARE — 409 sku-inactive when any is inactive
+  O->>O: phase 2.5: an inactive line short of its demand → release every grant, 409 sku-inactive
+  O->>O: phase 3: lockSkuStatusesInTx (KEY SHARE) — re-check status + kit-ness
+  P->>P: inactive mapped SKU → visibleMilli 0 at every warehouse, no ATP read
+```
+
+- **Allowed whatever stock or open work exists** (decision 1). An inactive SKU keeps receiving against existing PO/ASN lines, picks, packs, moves, counts, adjustments, QC, returns, edits, packaging edits, reorder-policy edits and PO close with carried lines.
+- **The status command** copies the partners `updateStatus`: the shape checks run after the replay lookup and before the lock; `reason` with `active` is 400; the limit is 500 code points (the DTO caps 2000 UTF-16 units only to bound the body). The lock is an explicit `FOR UPDATE` — a plain `UPDATE` takes `NO KEY UPDATE`, which does not conflict with the guard's `FOR KEY SHARE` (the partners gotcha).
+- **"New" is judged against stored state** (decision 9): amend → `skusGainingInbound` (a raise is new inbound, a lowering is not); kit PUT → components not in the full stored composition; mapping PUT / seed arm → `(externalRef, skuId)` pairs not in the stored set, read under the connection lock before the delete. The catalog import's kit pass decides on the rows it already holds `FOR UPDATE` (row error `sku-inactive`).
+- **Order sell-down** (outbound): phase 1's SKU loader returns code and status; phase 2.5 refuses (whatever the backorder policy, before the policy arm) an inactive line — or a kit line whose kit SKU or any component is inactive — that did not reserve in full; phase 3 re-reads status and kit-ness locked and refuses the same way, or `409 order-catalog-changed` when a line's SKU became a kit. Ingest maps `sku-inactive` to a typed 422 metered `validation-failed` (no `ingest_backorder_refusals` row).
+- **Receiving** books a blind or unmatched inactive line and raises one `grn.inactive-sku-received` review row per receipt (`inactiveSkuGrnLinesOpId`, payload `{grnId, grnCode, lines:[{skuId, skuCode, qty, uom}]}`, Discard only — the web's Acknowledge); the GRN snapshot carries `inactiveSkuReviewOpId` only when raised.
+- **Replenishment** treats an inactive SKU like a departed client's (no breach, an open one recovered) and dismisses its standing draft; the expiry scan is unchanged.
+- **Reads**: `SkuResponse` carries `status` / `inactiveReason` (`normalizeStoredSku` serves `?? 'active'` / `?? null`); `GET …/catalog/skus?status=` filters, absent lists every SKU; the device snapshot's SKUs carry `status`; `portal/skus` leaves inactive SKUs out.
 
 ### CSV import — the only creator of SKUs (until 1-4)
 
@@ -482,6 +516,8 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | A kit never holds independent stock (FR-38) | 409 `kit-cannot-hold-stock` at all three +stock writers (GRN submit, `stock.adjust`, over-receipt **approve**); the create-side twin `kit-sku-holds-stock` refuses creating a kit on stock or a live reservation; the GRN-vs-kit-create race is closed by matching id-ordered sku-row `.for('update')` locks on both sides |
 | The BOM is flat — one SELECT resolves any composition | `assertComponentsAreNotKits` 409 `kit-component-is-kit`; no recursion anywhere |
 | Concurrent mutual compositions cannot both commit | `lockSkus` takes `.for('update')` on kit + component sku rows in id order — the loser re-reads committed state and refuses |
+| An inactive SKU takes no new inbound, kit composition or channel mapping (1-4b) | `assertSkusTakeWorkInTx` at every caller (architecture `SKU_TAKES_WORK_CALLERS`); the status flip locks `FOR UPDATE`, so a deactivation and a work-creating write serialise |
+| An inactive SKU never backorders (1-4b) | Order create phase 2.5 + phase 3 refusal (`inactiveShortRefusal`) |
 | Catalog tables are catalog-exclusive | `test/architecture.spec.ts` bans writes outside the module; siblings use `CatalogFacade` |
 
 ---
@@ -492,7 +528,7 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 |---|---|---|
 | `catalog.imported` | `ImportCommand.execute` | `{importId, mode, committedRows, failedRows, skippedRows}` — counts only, never rows or errors |
 | `catalog.sku_created` | `SkuCommand.create` (1-4) | `{skuId, code, clientId}` |
-| `catalog.sku_edited` | `SkuCommand.edit`; **also `SkuCommand.replacePackaging` (1-4)** | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
+| `catalog.sku_edited` | `SkuCommand.edit`; **also `SkuCommand.replacePackaging` (1-4)** and **`SkuCommand.updateStatus` (1-4b)** | `{skuId, code}` — also the variant attach/detach event (no separate event type; nothing below the catalog learns what a variant is) |
 | `catalog.product_created` | `ProductCommand.create` (11.3) | `{productId, name, axes}` |
 | `catalog.product_edited` | `ProductCommand.edit` (11.3) | `{productId, name, axes}` |
 | `catalog.kit_created` | `KitCommand.create` (11.4); **also `ImportCommand`'s kit resolution pass (11.6)** — one per composition the import created, via the same `kitEventPayload` builder | The kit snapshot (kit sku + the full component list) — base units, the command's convention |
@@ -505,6 +541,8 @@ Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the 
 ---
 
 ## Gotchas
+
+**A takes-work guard must be fed what is NEW, not the whole request (1-4b).** Every write path the inactive guard covers is a replacement (amend lines, a mapping set, a kit composition): guarding the whole request locks users out of editing anything that keeps an inactive SKU, and guarding only id-less lines misses a kept line re-pointed to an inactive SKU. Judge against the stored state (`skusGainingInbound`, the stored pair set, the full stored composition — the kit PUT's old `.limit(1)` probe was not enough).
 
 **The file is parsed before the capability is checked.** `import.command.ts:166-169` runs the size cap and the full CSV/XLSX parse *before* the transaction opens at `:178` and therefore before `assertPermission` at `:184`. A caller without `catalog.import` can drive a 5 MB parse and learn `file-unreadable` / `unsupported-file-type` / `import-too-large` outcomes. This inverts the guide's "authority before validation" rule, which exists precisely so an unauthorized caller learns nothing from error messages. Moving the parse inside the transaction is the fix; it is not recorded in `../PENDING.md`.
 
