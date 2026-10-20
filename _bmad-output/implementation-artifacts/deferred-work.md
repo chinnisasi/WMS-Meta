@@ -938,3 +938,7 @@
 - source_spec: none
   summary: SDS document per SKU (upload, view, download) — moves to the file-storage story alongside roadmap 2.5 damage photos.
   evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). wms-be has no general object storage yet (only the ledger-anchor WORM adapter and Postgres-held audit exports, PENDING), and 2.5 needs the same S3 upload path.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6c-drug-and-fssai-licences.md`
+  summary: 1-6d licence enforcement. A per-tenant "Enforce licences" switch (off by default, owner-only, showing 1-6c's coverage gaps before it is turned on). When it is on, a `grn.submit` line not covered by a valid client licence AND site licence on the receipt's IST date is refused per line (`licence-not-covered`, review row `grn.licence-refused`, Apply with an audited waiver `goods_receipt.licence_waived` per the 1-2b shelf-life precedent), and order create (web, channel, portal) is refused with 409 `licence-not-covered`; kits are checked through their components.
+  evidence: Split from 1-6c by the user on 2026-10-20: the spec was ~3,200 tokens and enforcement is separately shippable. User decisions carried over: block on expired or missing licences; opt-in per tenant; dispatch, transfers, ASN, PO and returns are not blocked.
