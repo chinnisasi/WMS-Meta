@@ -1,10 +1,10 @@
 # Compliance module
 
-> Temperature excursions (FR-44): an operator records a °C reading against a bin, every affected (sku, bin) scope is quarantined through the ordinary QC-hold semantics, and the excursion itself is a registered zero-delta ledger event — so cold-chain custody is reconstructible from the ledger alone (FR-45). Story 12-6 adds the FR-45 reader: the cold-chain trace, reconstructed from `ledger_events` alone. Story **1-6c** adds the **drug and FSSAI licences**: the statutory licences held by a client brand or by a site, the coverage gaps wherever drug or food goods are, and an expiry warning from 60 days out (§Drug and FSSAI licences).
+> Temperature excursions (FR-44): an operator records a °C reading against a bin, every affected (sku, bin) scope is quarantined through the ordinary QC-hold semantics, and the excursion itself is a registered zero-delta ledger event — so cold-chain custody is reconstructible from the ledger alone (FR-45). Story 12-6 adds the FR-45 reader: the cold-chain trace, reconstructed from `ledger_events` alone. Story **1-6c** adds the **drug and FSSAI licences**: the statutory licences held by a client brand or by a site, the coverage gaps wherever drug or food goods are, and an expiry warning from 60 days out (§Drug and FSSAI licences). Story **1-6d** adds **licence enforcement**: an opt-in per-tenant switch that, while on, holds an uncovered drug or food receipt line in a waivable review row and refuses an uncovered order (§Licence enforcement).
 
 All paths below are relative to `workspace/core/backend/wms-be`. Story 12-5 activated this module (an empty spine placeholder before it); story 12-6 added the read side.
 
-Files: `src/modules/compliance/{compliance.module,excursion.command,excursion.facade,cold-chain.facade,licence.command,licence.facade}.ts` + the API surface `src/api/{compliance.controller,compliance.dto,licences.controller,licences.dto}.ts`; the licence rule set is the shared primitive `src/shared/primitives/licence.ts` (1-6c).
+Files: `src/modules/compliance/{compliance.module,excursion.command,excursion.facade,cold-chain.facade,licence.command,licence.facade}.ts` + the API surface `src/api/{compliance.controller,compliance.dto,licences.controller,licences.dto}.ts`; the licence rule set is the shared primitive `src/shared/primitives/licence.ts` (1-6c). **1-6d:** `licence-enforcement.ts` (free functions — the clock, the switch read, the coverage check, the order 409), `licence-coverage.ts` (the coverage-gaps read, in the caller's transaction) and `licence-policy.command.ts` (the switch).
 
 ---
 
@@ -16,15 +16,16 @@ One table, module-exclusive:
 | --- | --- | --- |
 | `temperature_excursions` (`drizzle/0038_temperature_excursions.sql`) | One row per recorded excursion: origin `bin_id`, `reading_c` numeric(6,2), `note` (nullable), `hold_ids uuid[]` (the QC holds this excursion created — links the queue item to its holds without touching `qc_holds`), `status` `open|resolved`, `recorded_by`, `occurred_at` (business time — the operator's reading instant), `resolved_by`/`resolved_at`. | `temperature_excursions_status_check` (`open|resolved`) and the fail-closed RLS policy live **only in the migration SQL** (the 0008 hand-append pattern — schema.ts deliberately carries neither; the snapshot's `isRLSEnabled: false` is why the next `db:generate` must not re-emit them). `tenantTimestamps` for the keyset cursor. |
 
+| `licence_policies` (`drizzle/0085_licence_policies.sql`, 1-6d) | One row per tenant: `enforce` (boolean, NOT NULL), `updated_by`. A **missing row means off** — the `expiry_alert_policies` precedent | `licence_policies_tenant_unique (tenant_id)`; RLS the plain tenant arm (migration only; proved as `wms_rls_probe` in `test/licence-enforcement.spec.ts`). 0085's probe refuses a second row per tenant and a NULL `enforce` by name. Written only by `LicencePolicyCommand` |
 | `licences` (`drizzle/0084_licences.sql`, 1-6c) | One row per statutory licence: `client_id` (nullable — the holding brand), `warehouse_id` (nullable — a site licence's site, or a client licence's premises), `kind`, `number`, `valid_from`/`valid_until` (IST `date`s, nullable), `note`, `status` `active\|withdrawn`, and the sweep's state `upcoming_warned_on`, `expired_warned_on`, `open_warning_id` | CHECKs only in the migration: `licences_kind_check` (the seven kinds), `licences_holder_check` (a client or a site), `licences_fssai_number_check` (14 digits; registration `2…`, state/central `1…`), `licences_drug_number_check` (normalised `^[A-Z0-9 /.-]{1,50}$`), `licences_validity_order`, `licences_valid_until_required` (FSSAI and NDPS), `licences_status_check`, `licences_note_length` (1–200, trimmed). The SQL-only **family unique** `licences_family_number_unique (tenant_id, CASE WHEN kind LIKE 'fssai-%' THEN 'fssai' ELSE kind END, number) WHERE status = 'active'`. RLS: the tenant arm plus the 0041 `app.client_id` clause on `client_id` (a site licence — null client — is invisible to a portal stamp; proved as `wms_rls_probe` in `test/client-isolation.spec.ts`). Never deleted; kind, client and site fixed after the add |
 
-The module writes **no other table** (1-6c's sweep and commands write only `licences`, plus outbox and audit). The quarantine is inbound's `qc_holds` (written through `QcFacade.holdScopeInTx`, never directly); the ledger events are inventory's (written through `appendLedgerEventInTx`). The bin's on-hand sweep reads through `InventoryFacade.onHandInBinInTx`.
+The module writes **no other table** (1-6c's sweep and commands write only `licences`, 1-6d's switch only `licence_policies`, plus outbox and audit). The quarantine is inbound's `qc_holds` (written through `QcFacade.holdScopeInTx`, never directly); the ledger events are inventory's (written through `appendLedgerEventInTx`). The bin's on-hand sweep reads through `InventoryFacade.onHandInBinInTx`.
 
 Not owned but read — **1-6c** reads `clients`, `warehouses`, `skus`, `stock_on_hand`, `purchase_orders`/`purchase_order_lines` and `advance_shipment_notices`/`asn_lines` directly (the 12-5 shared-substrate precedent): tenancy imports this module (the sync-report apply arm), so importing the catalog, inventory-read or tenancy modules would cycle. The holder checks use the clients module's file-level seam (`assertClientInTenantInTx`, `assertClientTakesWorkInTx`) and tenancy's `assertWarehouseInTenant` — functions, no Nest module import. Also: `bins` (origin bin, with a `.for('update')` lock — serialized against hold, merge and retire), `skus` (serial/catch-weight pre-flight), `warehouses`, `qc_holds` (only through the facade: `openHoldsForBinsInTx` for the skip arm), `idempotency_keys`, `outbox_messages`, `audit_events`.
 
 ## Public seam
 
-`ExcursionFacade` (`src/modules/compliance/excursion.facade.ts`) — `recordExcursion`, `resolveExcursion`, `listExcursions`. `LicenceFacade` (1-6c, `licence.facade.ts`) — `addLicence` / `editLicence` / `withdrawLicence` (through `LicenceCommand`), `listLicences(tenantId, filters, istToday?)`, `coverageGaps(tenantId, istToday?)` and `sweepExpiry(tenantId, istToday)`; exported for the api shell's `LicencesController` and the jobs shell's `LicenceExpiryWorker`. `ColdChainFacade` (`src/modules/compliance/cold-chain.facade.ts`) — `getOrderColdChainTrace` (the FR-45 read, no capability gate — reads are never gated). The compliance module is a **consumer** of inventory's facade (ledger + sweep), inbound's facade (the hold core) and outbound's facade (order identity — `OutboundModule` imported 12-6; it exports only its facade and imports nothing back, so no cycle); compliance is imported by the api shell, tenancy (5-6, the sync-report apply arm) and — 1-6c — the jobs shell (`LicenceExpiryWorker`, through `LicenceFacade`).
+`ExcursionFacade` (`src/modules/compliance/excursion.facade.ts`) — `recordExcursion`, `resolveExcursion`, `listExcursions`. `LicenceFacade` (1-6c, `licence.facade.ts`) — `addLicence` / `editLicence` / `withdrawLicence` (through `LicenceCommand`), `listLicences(tenantId, filters, istToday?)`, `coverageGaps(tenantId, istToday?)` and `sweepExpiry(tenantId, istToday)`; **1-6d** adds `getLicencePolicy(tenantId)` / `setLicencePolicy` (through `LicencePolicyCommand`); exported for the api shell's `LicencesController` and the jobs shell's `LicenceExpiryWorker`. `ColdChainFacade` (`src/modules/compliance/cold-chain.facade.ts`) — `getOrderColdChainTrace` (the FR-45 read, no capability gate — reads are never gated). The compliance module is a **consumer** of inventory's facade (ledger + sweep), inbound's facade (the hold core) and outbound's facade (order identity — `OutboundModule` imported 12-6; it exports only its facade and imports nothing back, so no cycle); compliance is imported by the api shell, tenancy (5-6, the sync-report apply arm) and — 1-6c — the jobs shell (`LicenceExpiryWorker`, through `LicenceFacade`).
 
 ## Flows
 
@@ -229,6 +230,39 @@ sequenceDiagram
 
 `LICENCE_EXPIRY_POLL_MS` gates the worker (unset/0 = off); suites drive `sweepExpiry` with an injected date and `tick(today)` once. Each warning has its own id because a notification row is unique per `(source_type, source_id)` and a re-raise is a no-op: one id per licence would swallow the expired warning and never resolve.
 
+## Licence enforcement (story 1-6d)
+
+**Opt-in per tenant (decision 1).** `GET …/licence-policy` answers `{enforce, gapCount}` to any staff session (a portal token is 403). `PUT …/licence-policy {enforce, acknowledgeGaps?}` is owner-only (`licences.manage`). Off by default; turning it off is always allowed; the 1-6c warnings work either way.
+
+**The switch (`LicencePolicyCommand.set`, decision 12).** Hash `{tenantId, enforce}` — `acknowledgeGaps` is a precondition, never hashed → `licences.manage` → replay → the row `FOR UPDATE` (null when none) → replay again → **unchanged** (the state already in force, a missing row reading off) → a declared no-op that stores the key (`licencePolicy.put:unchanged` in `AUDIT_NO_OP_ARMS`, no audit) → turning **on** with `gapCount > 0` and no `acknowledgeGaps: true` → **409 `licence-gaps-unacknowledged`** (problem member `gapCount`) → upsert (two first-ever PUTs racing: the tenant unique index lets one win, the other answers 409 `conflict`) → audit `licence.enforcement_changed` (target `licence_policy`) → key. `gapCount` is `coverageGapsInTx(…, licenceToday()).gaps.length` — the same unit as the gaps list, and a **lower bound** on what enforcement refuses ("known gaps"): a blind receipt or a backordered order of goods with no stock or open document anywhere is refused without having been a gap.
+
+**One coverage check (decision 8).** `licence-enforcement.ts` holds free functions over the caller's transaction, importing only `drizzle-orm` and `shared/` (pinned in `test/architecture.spec.ts`): receiving and orders import them directly — never the compliance Nest module, which forward-references inbound and outbound and is imported by tenancy, so a module import back would cycle.
+
+- `licenceEnforcedInTx(tx, tenantId)` — the switch (missing row = off).
+- `licenceCoverageInTx(tx, {tenantId, warehouseId, date, parties})` — each party is `{clientId, systemOwned, skuCode, needs}`; returns the uncovered `{skuCode, clientId, need, holder}` sorted by SKU code, client, need (vocabulary order), client holder before site. 1-6c's rule unchanged: a client licence for the site or for none **and** a site licence, each valid on `date`; `self` needs the site licence only. Licences are read **without a lock** (PENDING).
+- `licenceNotCovered(uncovered, siteCode)` — the order's 409 (`detail` entries `SKU — needs <licence> (client | site "<code>")`, sorted, joined `; `; `extensions.skuCodes`).
+- `licenceClock` / `licenceToday` moved here (re-exported by `licence.command.ts` — the same object, so a test assigning either moves both); `licenceFacts` moved to `shared/primitives/licence.ts` beside `LICENCE_NEED_NAME` and `missingLicencePhrase`.
+
+**Where it bites.** A goods-receipt line (inbound §The licence phase — a per-line refusal `licence-not-covered` into the waivable `grn.licence-refused` row, Apply owner-only with a note, audited `goods_receipt.licence_waived`) and order create (outbound — 409 `licence-not-covered`, checked in phase 1 and re-checked in phase 3; the channel ingest maps it to a typed 422). **Not** dispatch of accepted orders, transfers, ASNs, POs or returns (PENDING).
+
+```mermaid
+sequenceDiagram
+    participant Rc as receiving.command (grn.submit)
+    participant E as licence-enforcement (fns)
+    participant Tn as tenancy (review rows)
+    participant Own as Owner (web)
+    Rc->>Rc: departed / mismatch / expiry refusals, then kit, catch-weight, precision (whole-op)
+    alt no licenceWaiver and some receivable line needs a licence
+        Rc->>E: licenceEnforcedInTx
+        Rc->>E: licenceCoverageInTx(site, istDateOf(occurredAt), one party per SKU)
+        E-->>Rc: uncovered → each such line refused licence-not-covered {missing[]}
+    end
+    Rc->>Tn: grn.licence-refused (op id salted :grn-licence-refused; waivers.shelfLife when re-run under one)
+    Own->>Tn: resolve apply + note (review.decide AND licences.manage)
+    Tn->>Rc: re-run those lines with licenceWaiver (+ the stored shelf-life waiver), key = the row's op id
+    Rc->>Rc: books; audit goods_receipt.licence_waived (actor the owner)
+```
+
 ## Invariants
 
 - **The ledger is the excursion's record (AD-11/FR-45).** One zero-delta `excursion.recorded` event per affected scope; both bin arms null (the zero-quantity envelope rule), `skuId` never null (hence one event per scope), batch/serial arms registry-closed. The relocation itself is the `qc.held` movements' work — the excursion event is the compliance fact, not a stock movement.
@@ -238,12 +272,15 @@ sequenceDiagram
 - **Manual capture only (UX-DR30).** No threshold model, sensor ingestion or auto-detection — an operator-captured reading against a bin; no handling-unit arm (Epic 15), no unit conversion (°C only).
 - **A licence is never deleted (1-6c).** Withdraw is the only end; kind, client and site never change after the add; a number is unique per family among active licences only (the SQL-only family index).
 - **One warning per term, its own entry (1-6c).** The warned dates are the sweep's state; a fresh `warningId` per raise is the entry's `source_id`; the open one is always resolved before another opens (the expired raise clears the upcoming; a renewing edit and a withdraw clear theirs).
+- **One rule, two users (1-6d).** Enforcement calls 1-6c's predicates through `licenceCoverageInTx`; it never restates the rule. A receipt is judged on its own IST date (`occurredAt`), an order on ONE IST date captured at the start of the command and used in both phases.
 - **The coverage read and the badge use the server's IST date (1-6c)** — never the browser's (`asOfDate` on both reads).
 - **The trace reads the ledger only (12-6).** The cold-chain reconstruction reads `ledger_events` (through inventory's facade — the only ledger door) and `bins` directly (the 12-5 shared-substrate precedent); it never reads `temperature_excursions` rows or projections. Excursion correlation is dwell-window based from the events alone, because the excursion arm carries no batch/serial (one event per affected (sku, bin) scope).
 
 ## Events
 
 **1-6c — licences.** Outbox: `licence.expiry_upcoming`, `licence.expired` (the `licence-expiry` panel source's two raises) and `licence.expiry_warning_cleared` (`outcome` ∈ `LICENCE_WARNING_OUTCOMES` = `renewed | withdrawn | expired`), pinned to the notifications module's literals by `test/notifications.spec.ts`. Audit: `licence.added`, `licence.edited`, `licence.withdrawn` (keyed, target `licence`) and the sweep's `licence.expiry_upcoming_raised` / `licence.expired_raised` (system actor, no key).
+
+**1-6d — enforcement.** Audit: `licence.enforcement_changed` (keyed, target `licence_policy`, actor the owner; an unchanged PUT writes none). No outbox event (the switch changes no notification). The receipt's `goods_receipt.licence_waived` is inbound's.
 
 
 Ledger: `excursion.recorded` (registered in `ledger-registry.ts`, `sinceVersion: 1`, reference kind `excursion`, batch/serial arms closed). Outbox: `excursion.recorded` (payload carries `affectedSkus` = every affected scope, `holdIds` = the holds created) and `excursion.resolved` (from resolve). Audit: `excursion.recorded` (reference = the idempotency key) and `excursion.resolved` (reference = the excursion's idempotency key).

@@ -297,7 +297,7 @@ Two sources, both authoritative:
 
 *(1-6c records the licences, shows the coverage gaps and warns before expiry; these are its known-not-done.)*
 
-- **Blocking uncovered work is story 1-6d** — receipts, orders and putaway at a site proceed whatever the gaps read; 1-6d enforces per receipt and per order at a site (the same (client, site) scope the gaps use) *(spec "Never"; deferred-work)*
+- ~~**Blocking uncovered work is story 1-6d**~~ — **landed in 1-6d** (opt-in per tenant): an uncovered receipt line goes to `grn.licence-refused`, an uncovered order is refused 409 `licence-not-covered`. What 1-6d left is below *(spec "Never"; deferred-work)*
 - **No unscheduled (OTC), homoeopathic or AYUSH licence forms** — the kinds are the four drug forms (20B, 21B, 20G, NDPS) and the three FSSAI tiers; a SKU carrying none of 1-6a's schedules needs no drug licence *(design review D21)*
 - **Whether Schedule X also needs 20B/21B** — decision 1 maps X to `drug-20g` alone; if the regulator's reading is that a 20G holder also needs the retail/wholesale form, X gains a second need in `SCHEDULE_NEED` *(design review D21)*
 - **Brands sharing one licence** — a licence has one client holder; two brands under one group licence need two rows (each with the same number would collide on the family index — only one may be active). A shared-holder model is a later decision
@@ -308,6 +308,17 @@ Two sources, both authoritative:
 - **No licence documents** — the scanned licence certificate waits for the file-storage story with 2.5 (damage photos), and nothing prints a licence number on a GRN, invoice or challan yet
 - **Epic 18 (controlled & licensed goods)** extends THIS `licences` table and its master rather than adding its own licence admin
 - **The successor rule is per (client, site, need)** — a head-office licence is not treated as the successor of an expiring premises licence of the same client (or vice versa), so the owner is warned although the coverage read shows no gap. Widening the rule to "the coverage still holds on `validUntil + 1`" is a small follow-up
+
+### licence enforcement (1-6d)
+
+*(1-6d added the per-tenant switch, the receipt's licence phase with its waivable review row, and the order refusal; these are its known-not-done.)*
+
+- **Licences are read without a lock** — a receipt or an order reads the licences committed when it reads them (the 1-2b receiving-policy stance); a withdraw or an edit racing a receipt or an order is not serialised against it, so one of them can be judged against the licence a moment before it changed *(spec decision 8)*
+- **The receipt date is the device's clock** — a receipt is judged on `istDateOf(occurredAt)` (the 1-2b shelf-life precedent), so a late replay of a scan made while the licence was valid books, and a device whose clock runs fast or slow is judged on the wrong day. Nothing bounds `occurredAt` against server time *(design review D7)*
+- **No scan-time warning on the handheld** — the device snapshot carries no licence facts, so the operator learns of a refusal only from the settled `grn.submit` note ("in licence review"); a scan-time warning needs the coverage in the snapshot *(spec decision 6)*
+- **Dispatch, transfers, ASNs, POs and returns are not enforced** — only receipt lines and order create are; an accepted order dispatches whatever the licences read later, a transfer can move drug or food goods into an unlicensed site, and an ASN or PO for uncovered goods is accepted (the gaps read shows it) *(spec "Never")*
+- **Refused channel ingests are not listed for operators** — an uncovered channel order answers a typed 422 `licence-not-covered`, metered `validation-failed` and deliberately not retried (the merchant resends once the licence is fixed), but no operator surface lists the refused orders; the integration-calls meter is the only trace *(design review D10)*
+- **`gapCount` is a lower bound** — the switch's acknowledgement counts the coverage-gaps read (stock, open PO lines, open ASNs); a blind receipt, or an order of goods with no stock or open document anywhere, is refused without having been a gap, hence the "known gaps" copy *(design review D9)*
 
 ## invoicing
 

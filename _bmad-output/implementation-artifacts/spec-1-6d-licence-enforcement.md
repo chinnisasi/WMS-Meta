@@ -2,7 +2,7 @@
 title: '1-6d licence enforcement — opt-in blocking of uncovered drug and food receipts and orders'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_commit: 'd45de08847b9b80f0da69b5e0c9f72b3958732f0'  # wms-be; wms-fe: 028440719443f873c39b21a8417fb587a91d5bfc; wms-mobile: f81fd3adc208dc4f472c1738d5e7ff0f140e9f28
 route: 'dispatch'
 review_loop_iteration: 0
@@ -228,15 +228,15 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0085_licence_policies.sql` + schema + meta -- the policy table, RLS, probe -- decision 7
-- [ ] `wms-be compliance/licence-enforcement.ts` (free functions) + the policy command and routes in `licences.controller.ts` -- the switch, the coverage check -- decisions 1, 7, 8
-- [ ] `wms-be inbound/receiving.command.ts`, `receiving.dto.ts` -- the licence phase, the review row, the waiver -- decisions 3, 9
-- [ ] `wms-be tenancy/sync-report.command.ts`, `client-wind-down.ts`, `rejected-ops.dto.ts` -- the review type, the owner-only Apply -- decisions 3, 11
-- [ ] `wms-be outbound/order.command.ts`, `channels/channels.ingest.command.ts`, `channels.errors.ts` -- the order gate, the ingest mapping -- decisions 4, 10
-- [ ] `wms-be test/licence-enforcement.spec.ts` + the pins + `openapi.json` -- every matrix row
-- [ ] `wms-fe` the switch section, the review-queue generalisation, the order reason, regenerated types, tests
-- [ ] `wms-mobile` the settled-note licence arm (+ test)
-- [ ] meta `docs/design/modules/{compliance,inbound,outbound,channels,tenancy}.md`, `docs/design/{frontend,mobile}/IMPLEMENTATION-GUIDE.md` (the review queue; the named licence phrase at mobile `:135`), `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-be/README.md`, `docs/repos/wms-fe/README.md:53`, `docs/repos/wms-mobile/README.md:89`
+- [x] `wms-be drizzle/0085_licence_policies.sql` + schema + meta -- the policy table, RLS, probe -- decision 7
+- [x] `wms-be compliance/licence-enforcement.ts` (free functions) + the policy command and routes in `licences.controller.ts` -- the switch, the coverage check -- decisions 1, 7, 8
+- [x] `wms-be inbound/receiving.command.ts`, `receiving.dto.ts` -- the licence phase, the review row, the waiver -- decisions 3, 9
+- [x] `wms-be tenancy/sync-report.command.ts`, `client-wind-down.ts`, `rejected-ops.dto.ts` -- the review type, the owner-only Apply -- decisions 3, 11
+- [x] `wms-be outbound/order.command.ts`, `channels/channels.ingest.command.ts`, `channels.errors.ts` -- the order gate, the ingest mapping -- decisions 4, 10
+- [x] `wms-be test/licence-enforcement.spec.ts` + the pins + `openapi.json` -- every matrix row
+- [x] `wms-fe` the switch section, the review-queue generalisation, the order reason, regenerated types, tests
+- [x] `wms-mobile` the settled-note licence arm (+ test)
+- [x] meta `docs/design/modules/{compliance,inbound,outbound,channels,tenancy}.md`, `docs/design/{frontend,mobile}/IMPLEMENTATION-GUIDE.md` (the review queue; the named licence phrase at mobile `:135`), `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-be/README.md`, `docs/repos/wms-fe/README.md:53`, `docs/repos/wms-mobile/README.md:89`
   - PENDING entries: licence reads unlocked; device-clock trust; the scan-time warning; dispatch, transfer and returns gaps; refused channel ingests not listed for operators
 
 **Acceptance Criteria:**
@@ -244,6 +244,17 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - Given enforcement on and a site lacking FSSAI, when a handheld receipt of rice and t-shirts syncs, then the t-shirts are booked, the rice is held in `grn.licence-refused`, the device note says so, and an owner's Apply with a note books the rice.
 
 ## Implementation Notes
+
+Implemented 2026-10-20 against this spec. Choices the spec left open, or where the code differs from its wording:
+
+- **`coverageGapsInTx` lives in `compliance/licence-coverage.ts`.** The policy command counts gaps. If it imported `licence.facade.ts`, which injects the policy command, the two files would import each other. The facade re-exports the types and the function.
+- **`licenceClock` / `licenceToday` moved to `licence-enforcement.ts`.** `licence.command.ts` re-exports the same object, so tests that assign `licenceClock.now` keep working. The order create captures its one IST date from this clock.
+- **The licence row's payload has no `clientId` for the first refused line.** In that payload `clientId` means the blind receipt's named client, and Apply carries it through. Putting another client there would turn a PO receipt's Apply into a 400. Instead, the row's client is shown through `clientLabel` (the first refused line's), and each entry in `refusals[]` carries its own `skuClientId`.
+- **A line with several missing needs** gets one `needs …` phrase per need, joined with `; `.
+- **`LockedSkuStatus`** gains `foodCategory` and `drugSchedules`. These come from the same locked read that phase 3 re-checks.
+- **Two first-ever PUTs that race** would both insert a row. The tenant unique index refuses the second, and it answers 409 `conflict`.
+- **The licence note label** is the spec's exact text, `Why accept goods without a valid licence?`, without the shelf-life label's "(required)".
+- **Departed meanwhile** is staged with a direct status update in the test. The open licence row blocks a departure through the API (the wind-down rule).
 
 ## Spec Change Log
 
