@@ -293,6 +293,22 @@ Two sources, both authoritative:
 - **The excursion↔hold linkage lives only in `temperature_excursions.hold_ids`** — ledger `qc.held` events carry reference kind `qc-hold` (holdId + fromBinId) with no excursion id, so a ledger-only reconstruction correlates excursions to holds by bin + timestamp, not by id. 12-6's cold-chain reporting consumes the excursion events (its own reference kind), which is unambiguous; if a later story needs hold-level attribution, the column is the join
 - **CI's migration drift guard does not pin `temperature_excursions_status_check`** — `verify.ts` round-trips only app_metadata (tenancy) fields; the status CHECK and RLS live in hand-appended SQL only, so a regenerated migration could silently drop them *(12-5 defer, deferred-work.md)*. The same guard cannot see hand-emitted expression indexes: 0039's `ledger_events_order_ref_idx` is in the live DB but in no drizzle snapshot, so a future hand-edited migration could drop or reshape it with nothing failing *(12-6 defer, same entry family)*
 
+### drug and FSSAI licences (1-6c)
+
+*(1-6c records the licences, shows the coverage gaps and warns before expiry; these are its known-not-done.)*
+
+- **Blocking uncovered work is story 1-6d** — receipts, orders and putaway at a site proceed whatever the gaps read; 1-6d enforces per receipt and per order at a site (the same (client, site) scope the gaps use) *(spec "Never"; deferred-work)*
+- **No unscheduled (OTC), homoeopathic or AYUSH licence forms** — the kinds are the four drug forms (20B, 21B, 20G, NDPS) and the three FSSAI tiers; a SKU carrying none of 1-6a's schedules needs no drug licence *(design review D21)*
+- **Whether Schedule X also needs 20B/21B** — decision 1 maps X to `drug-20g` alone; if the regulator's reading is that a 20G holder also needs the retail/wholesale form, X gains a second need in `SCHEDULE_NEED` *(design review D21)*
+- **Brands sharing one licence** — a licence has one client holder; two brands under one group licence need two rows (each with the same number would collide on the family index — only one may be active). A shared-holder model is a later decision
+- **A departed client's open upcoming warning stays open until expiry** — the sweep raises nothing for a departed client's licences and resolves an entry raised before the departure only once `validUntil` passes (`expired`), or on a renewal or withdraw
+- **No dashboard tile** for the gaps or the expiring licences — the Compliance → Licences tab and the owner's panel entries are the surfaces
+- **No email or push** for an expiry — the panel entry only (5.1's email service, then 5.2's client notifications, could add both)
+- **No portal view** — a client cannot see its own licences or gaps (staff-only reads; the RLS clause is in place for when it can)
+- **No licence documents** — the scanned licence certificate waits for the file-storage story with 2.5 (damage photos), and nothing prints a licence number on a GRN, invoice or challan yet
+- **Epic 18 (controlled & licensed goods)** extends THIS `licences` table and its master rather than adding its own licence admin
+- **The successor rule is per (client, site, need)** — a head-office licence is not treated as the successor of an expiring premises licence of the same client (or vice versa), so the owner is warned although the coverage read shows no gap. Widening the rule to "the coverage still holds on `validUntil + 1`" is a small follow-up
+
 ## invoicing
 
 *(8-1 built the GST invoice core; 8-1b's regulatory pass froze issued invoices, moved numbering to one series per supplier GSTIN, and stored a rupee round-off — closing the in-place re-derive, per-tenant numbering, `payAble` casing and paise-exact payable rows. Entries below are what remains known-not-done.)*

@@ -1,6 +1,6 @@
 # Notifications module
 
-> The web notification panel (story 9-2, UX-DR12/UX-DR25, FR-22): one bell for what is actionable, routed to who can act, resolving itself when the source clears. The module owns a **projection**: six modules' outbox events raise and resolve entries, a member sees only the sources it holds the capability to act on, and the bell shows a dot (never a count) when an open entry surfaced since the member last opened the panel. Story **9-2b** adds the **mobile pushes**: a second subscriber queues `push_deliveries` rows for the handhelds that can act, and a worker sends them through the `PushGateway` port (§Mobile pushes). Story **9-3b** adds the first **per-user audience**: a finished audit export is addressed to its requester alone (§The per-user audience). Story **9-3c** adds the tenth source, `ledger-chain-break` — the owner's severity-1 ledger alert (§The ledger chain break).
+> The web notification panel (story 9-2, UX-DR12/UX-DR25, FR-22): one bell for what is actionable, routed to who can act, resolving itself when the source clears. The module owns a **projection**: six modules' outbox events raise and resolve entries, a member sees only the sources it holds the capability to act on, and the bell shows a dot (never a count) when an open entry surfaced since the member last opened the panel. Story **9-2b** adds the **mobile pushes**: a second subscriber queues `push_deliveries` rows for the handhelds that can act, and a worker sends them through the `PushGateway` port (§Mobile pushes). Story **9-3b** adds the first **per-user audience**: a finished audit export is addressed to its requester alone (§The per-user audience). Story **9-3c** adds the tenth source, `ledger-chain-break` — the owner's severity-1 ledger alert (§The ledger chain break). Story **1-2b** adds `qc-receipt`; story **1-6c** adds the twelfth, `licence-expiry` — a drug or FSSAI licence nearing or past its expiry (§The licence expiry).
 
 Source: `workspace/core/backend/wms-be/src/modules/notifications/`. Every `file:line` below is relative to `wms-be/`. Read [`../IMPLEMENTATION-GUIDE.md`](../IMPLEMENTATION-GUIDE.md) first; the subscriber follows `invoicing/eway.delivery.ts`.
 
@@ -72,6 +72,7 @@ Each source is one raise event and its resolve event(s). The event type strings 
 | `qc-hold` | `qc_hold.placed` (inbound) | `qc_hold.released` → `released` | `holdId` | `qc.manage` | `{skuId, reason}` | `/inbound` |
 | `channel-sync` | **`channel.sync.degraded`** (channels, new) | **`channel.sync.recovered`** (new) → its `reason`: `recovered` \| `disconnected` | `episodeId` | `channel.manage` | `{connectionId}` | `/channels` |
 | `audit-export` (9-3b) | `audit_export.ready` **or** `audit_export.failed` (tenancy's runner — one raise per export, the finish is conditional) | `audit_export.expired` → `expired` | `exportId` | `audit.view` **and only the requester** (`recipient_user_id = requestedBy`) | `{status: 'ready', rowCount}` \| `{status: 'failed', reason}` | `/reports#audit-exports` (both) |
+| `licence-expiry` (1-6c) | `licence.expiry_upcoming` **or** `licence.expired` (compliance's expiry sweep — each raise a fresh `warningId`) | `licence.expiry_warning_cleared` → its `outcome`: `renewed` \| `withdrawn` \| `expired` | `warningId` | `licences.manage` (owner-only) | `{licenceId, kind, number, holder, holderName, siteCode?, validUntil, state}` | `/compliance?tab=licences` (both) |
 | `ledger-chain-break` (9-3c) | `ledger.chain_broken` (inventory's ONE break recorder — once per break, never per check run) | `ledger.chain_break_acknowledged` → `acknowledged` | `breakId` | `ledger.acknowledge` (owner-only) | `{kind, firstSeq, reason, detectedBy}` | `/reports#ledger-integrity` (both) |
 
 - **Routing is `SOURCE_AUDIENCE`** (`notification-sources.ts:461`): the capability the source's **resolving command** enforces. Since 9-3b its value type also admits `{capability, recipient: true}` — §The per-user audience. The payloads' `notifyRole` hints are ignored — they disagree with who can act (the stock adjustment's hint is `owner`, which is right; the breach's is `ops_manager`, but the owner holds `replenishment.manage` too). With today's matrix: the owner sees all nine capability-routed sources (9-3c's `ledger-chain-break` included — plus, 9-3b, its OWN audit exports); the ops manager six (not `stock-adjustment`, not `count-variance`); operator, accountant and client none.
@@ -104,6 +105,18 @@ The owner's severity-1 ledger alert (AD-16): one entry per break, raised by inve
 - **Never pushed:** not in `APPROVAL_PUSH_SOURCES` nor the enqueue's subscriptions; `test/ledger-integrity.spec.ts` pins that a raised entry queued no `push_deliveries` row. The error log stays loud (`SEVERITY-1`).
 - **The literals:** `LEDGER_CHAIN_BROKEN_EVENT_TYPE`, `LEDGER_CHAIN_BREAK_ACKNOWLEDGED_EVENT_TYPE`, `CHAIN_BREAK_KINDS`, `CHAIN_BREAK_DETECTORS` (`notification-sources.ts`) repeat inventory's constants (AD-6) and are pinned equal by `test/ledger-integrity.spec.ts`.
 - **The summary** is built key by key (`reason` bounded 1–500 chars like every summary text; `firstSeq` a positive integer). The web reads "Ledger chain broken at #N — <warehouse>" (a `worm` break: "WORM copy mismatch at #N — <warehouse>") under the category "Ledger integrity".
+
+---
+
+## The licence expiry (story 1-6c)
+
+The compliance sweep warns once per term: **upcoming** from 60 days before a licence's `validUntil` (IST dates), and **expired** the day after it. Each raise mints a fresh `warningId` — the entry's `source_id` — because a notification row is unique per `(tenant, source_type, source_id)` and a re-raise is a no-op: one id per licence would have swallowed the expired warning and never resolved (design review D1). The open entry is resolved by `licence.expiry_warning_cleared`: `renewed` (an edit moved `validUntil` out of the warned state), `withdrawn`, or `expired` (the expired raise closes the open upcoming entry first).
+
+- **Audience:** `SOURCE_AUDIENCE['licence-expiry'] = {capability: 'licences.manage'}` — owner-only. Capability-routed, no recipient. **Never pushed** (not in `APPROVAL_PUSH_SOURCES` nor the enqueue's subscriptions); `test/licences.spec.ts` pins that a raised entry queued no `push_deliveries` row.
+- **Two raises, one source:** `licence.expiry_upcoming` is the `raise`, `licence.expired` the `moreRaises` arm (the 9-3b `SourceSpec.moreRaises` shape); each decoder requires the payload's `state` to equal its event's.
+- **The summary** is built key by key: `kind` from `LICENCE_KINDS` (the shared primitive — not a sibling's internals), `holder` `client | site`, `holderName` and `number` bounded like every summary text, `validUntil` a real `YYYY-MM-DD`, `siteCode` only when the payload carries one; the warehouse from `warehouseId` (a site licence's site or a client's premises; null for a head-office licence).
+- **The literals:** `LICENCE_EXPIRY_UPCOMING_EVENT_TYPE`, `LICENCE_EXPIRED_EVENT_TYPE`, `LICENCE_WARNING_CLEARED_EVENT_TYPE` repeat compliance's constants (AD-6) and are pinned equal, with `SOURCE_RESOLUTIONS['licence-expiry']` to `LICENCE_WARNING_OUTCOMES`, by `test/notifications.spec.ts`.
+- **The web** reads "Licence expiring" / "Licence expired" — `Form 20G MH/PUN/20G-1 — Acme Foods at WH-PUN · valid until 31 Dec 2026` — and links Compliance → Licences.
 
 ---
 
@@ -343,7 +356,7 @@ On the three approval raises, two subscribers run: the 9-2 projection and the pu
 | One entry per source occurrence | the unique `(tenant_id, source_type, source_id)`; the upserts' `WHERE` arms |
 | A late raise never reopens a settled entry | the tombstone + `ON CONFLICT … WHERE summary IS NULL` (fill keeps `resolved_at`) |
 | A tombstone is always resolved; a raised row carries both instants; `resolved_at` ⇔ `resolution` | `notifications_shape_check` (probed in 0067) |
-| `source_type` is the nine (eight 9-2 sources + 9-3b's `audit-export`), in TS and SQL alike | `notifications_source_type_check` + the vocabulary pin in `test/notifications.spec.ts` |
+| `source_type` is the twelve (eight 9-2 sources, 9-3b's `audit-export`, 9-3c's `ledger-chain-break`, 1-2b's `qc-receipt`, 1-6c's `licence-expiry` — widened by drop and re-add in 0084), in TS and SQL alike | `notifications_source_type_check` + the vocabulary pin in `test/notifications.spec.ts` |
 | A per-user entry is served only to its recipient, and only a per-user source has one (9-3b) | `notifications_recipient_check` (both directions, probed in 0070); `addressedTo` in `list` and `status`; the tombstone and both raise paths write the recipient |
 | A resolution is one its emitter can send, and the panel stores no other | `SOURCE_RESOLUTIONS` derived or pinned; an off-list resolve is malformed and acked |
 | A member sees only what it can act on | `visibleSourceTypes` over `ROLE_CAPABILITIES`, re-read per request in the transaction |
@@ -370,6 +383,7 @@ Produced: none. Consumed (all through the relay and the routed `EVENT_BUS`):
 | `qc_hold.placed` / `qc_hold.released` | inbound | `holdId`, `warehouseId?`; raise: `skuId`, `reason` |
 | `channel.sync.degraded` (9-2) / `channel.sync.recovered` (9-2) | channels | `episodeId`, `connectionId`; resolve: `reason` |
 | `audit_export.ready` / `audit_export.failed` / `audit_export.expired` (9-3b) | tenancy (the export runner) | `exportId`, `requestedBy` (the recipient); ready: `rowCount`; failed: `reason` |
+| `licence.expiry_upcoming` / `licence.expired` / `licence.expiry_warning_cleared` (1-6c) | compliance (`LicenceFacade.sweepExpiry`; the clear also from `LicenceCommand.edit` / `.withdraw`) | `warningId`, `warehouseId`; raise: `licenceId`, `kind`, `number`, `holder`, `holderName`, `siteCode?`, `validUntil`, `state`; resolve: `outcome` |
 | `ledger.chain_broken` / `ledger.chain_break_acknowledged` (9-3c) | inventory (`recordChainBreak` / `LedgerBreakCommand`) | `breakId`, `warehouseId`; raise: `kind`, `firstSeq`, `reason`, `detectedBy` (a `ledger.chain_broken` committed before 9-3c carries no `breakId` — malformed, logged and acked) |
 
 Every other payload field is ignored. Events committed **before 9-2 deployed** are never re-read (see the gotchas).

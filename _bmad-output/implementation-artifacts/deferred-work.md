@@ -932,7 +932,7 @@
   evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). It depends on 1-6a's attributes and changes placement refusals, so it ships on its own after 1-6a.
 
 - source_spec: none
-  summary: 1.6c drug and FSSAI licences on the client and the warehouse, with expiry warnings.
+  summary: ~~1.6c drug and FSSAI licences on the client and the warehouse, with expiry warnings.~~ **DONE 2026-10-20 by story 1-6c** (`spec-1-6c-drug-and-fssai-licences.md`) — client and site licences, coverage gaps, 60-day expiry warnings; enforcement split to 1-6d.
   evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). Independent of the SKU attributes; its own master data and alert path.
 
 - source_spec: none
@@ -942,3 +942,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-6c-drug-and-fssai-licences.md`
   summary: 1-6d licence enforcement. A per-tenant "Enforce licences" switch (off by default, owner-only, showing 1-6c's coverage gaps before it is turned on). When it is on, a `grn.submit` line not covered by a valid client licence AND site licence on the receipt's IST date is refused per line (`licence-not-covered`, review row `grn.licence-refused`, Apply with an audited waiver `goods_receipt.licence_waived` per the 1-2b shelf-life precedent), and order create (web, channel, portal) is refused with 409 `licence-not-covered`; kits are checked through their components.
   evidence: Split from 1-6c by the user on 2026-10-20: the spec was ~3,200 tokens and enforcement is separately shippable. User decisions carried over: block on expired or missing licences; opt-in per tenant; dispatch, transfers, ASN, PO and returns are not blocked.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6c-drug-and-fssai-licences.md`
+  summary: Licence coverage gaps ignore drug/food goods arriving at a site by stock transfer (5-1) or on an open return authorization (13-x); only stock on hand and open PO/ASN lines count.
+  evidence: 1-6c code review H5. Decision 2 names stock and open PO/ASN only; a transfer into an unlicensed site shows no gap until the stock lands.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6c-drug-and-fssai-licences.md`
+  summary: Licence edits keep no history — a changed number or validity date overwrites the row, and `licence.edited` carries only the target id.
+  evidence: 1-6c code review H7. `audit_events` has no details column (pre-existing audit design); 1-6d enforcement and Epic 18 registers will want a before/after record (a `licence_revisions` table or audit payloads).
