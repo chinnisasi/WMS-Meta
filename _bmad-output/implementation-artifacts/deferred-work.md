@@ -918,3 +918,11 @@
 - source_spec: none
   summary: 1.5b dedicated client bins — a bin can be dedicated to one client, and putaway, moves and merge refuse to place another client's stock in it (web bin admin + handheld refusals).
   evidence: Split from roadmap row 1.5 by the user on 2026-10-19 ("Split, filter first"); 1.5a ships the client filter on every list and the stock/ledger reads first.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4b-sku-deactivation.md`
+  summary: The `setChannelMappings` seed arm's inactive-SKU guard (new pairs refused, stored pairs kept) has no test.
+  evidence: 1-4b code review V3. The HTTP `PUT …/mappings` arm is covered in `sku-deactivation.spec.ts`; the seed arm has no route today. Add the test if a route ever reaches it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4b-sku-deactivation.md`
+  summary: A kit's composition replaced (kit PUT) between order-create phase 1 and phase 3 lets the order commit holds on the stale components; phase 3 re-checks only "became a kit".
+  evidence: 1-4b code review C3. Pre-existing (the explosion plan is read in phase 1). The fix would compare the locked composition in phase 3 against `explosions` and answer `order-catalog-changed`.
