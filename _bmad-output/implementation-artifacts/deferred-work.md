@@ -928,7 +928,7 @@
   evidence: 1-4b code review C3. Pre-existing (the explosion plan is read in phase 1). The fix would compare the locked composition in phase 3 against `explosions` and answer `order-catalog-changed`.
 
 - source_spec: none
-  summary: 1.6b segregation matrix extended to food, allergens and chemicals — putaway, moves and merge refuse incompatible food/allergen/chemical neighbours, using 1-6a's per-SKU goods-type fields.
+  summary: ~~1.6b segregation matrix extended to food, allergens and chemicals — putaway, moves and merge refuse incompatible food/allergen/chemical neighbours, using 1-6a's per-SKU goods-type fields.~~ **DONE 2026-10-20 by story 1-6b** (`spec-1-6b-goods-type-segregation.md`) — six rules over a SKU segregation profile in every co-location gate.
   evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). It depends on 1-6a's attributes and changes placement refusals, so it ships on its own after 1-6a.
 
 - source_spec: none

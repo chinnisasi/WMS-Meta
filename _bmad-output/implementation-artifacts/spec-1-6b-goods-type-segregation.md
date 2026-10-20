@@ -2,7 +2,7 @@
 title: '1-6b goods-type segregation — the matrix extended to food, allergens, drugs and chemicals'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '8b71f1d015077c9651d33176a78675769ddb224c'  # wms-be; wms-fe: 05209991212593b180919df3d405032d2dfa04bc; wms-mobile: f81fd3adc208dc4f472c1738d5e7ff0f140e9f28
 route: 'dispatch'
 review_loop_iteration: 0
@@ -267,13 +267,13 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be src/shared/primitives/segregation.ts` (+ spec) -- profile, `EMPTY_PROFILE_SQL`, hazard set, `goodsConflict`, `conflictKeys`, rules, templates -- the one rule set
-- [ ] `wms-be putaway/{putaway.command,putaway.facade}.ts` -- profile reads, the sku-id aggregate plus the keyed profile read, placement gate -- suggestion + placement
-- [ ] `wms-be tenancy/bin.command.ts`, `inventory/inventory.facade.ts` -- merge + transfer receive gates, the empty-profile skip, titles -- every gated writer
-- [ ] `wms-be catalog/{sku.command,catalog.facade,catalog.controller,catalog.dto}.ts`, `api/{putaway,movements}.controller.ts`, `tenancy/tenancy.controller.ts` -- the `conflictKeys` edit guard, `rules`, API text -- decisions 2, 3, 6
-- [ ] `wms-be scripts/segregation-conflicts.ts` -- the listing over the TS predicate -- decision 5
-- [ ] `wms-be test/*` + `openapi/openapi.json` -- the matrix rows, the script e2e, the SQL pin, the export -- proof
-- [ ] `wms-fe` regenerated types; matrix card rules + copy; merge refusal case; edit fallback copy; tests -- decision 6
+- [x] `wms-be src/shared/primitives/segregation.ts` (+ spec) -- profile, `EMPTY_PROFILE_SQL`, hazard set, `goodsConflict`, `conflictKeys`, rules, templates -- the one rule set
+- [x] `wms-be putaway/{putaway.command,putaway.facade}.ts` -- profile reads, the sku-id aggregate plus the keyed profile read, placement gate -- suggestion + placement
+- [x] `wms-be tenancy/bin.command.ts`, `inventory/inventory.facade.ts` -- merge + transfer receive gates, the empty-profile skip, titles -- every gated writer
+- [x] `wms-be catalog/{sku.command,catalog.facade,catalog.controller,catalog.dto}.ts`, `api/{putaway,movements}.controller.ts`, `tenancy/tenancy.controller.ts` -- the `conflictKeys` edit guard, `rules`, API text -- decisions 2, 3, 6
+- [x] `wms-be scripts/segregation-conflicts.ts` -- the listing over the TS predicate -- decision 5
+- [x] `wms-be test/*` + `openapi/openapi.json` -- the matrix rows, the script e2e, the SQL pin, the export -- proof
+- [x] `wms-fe` regenerated types; matrix card rules + copy; merge refusal case; edit fallback copy; tests -- decision 6
 - [ ] meta `docs/design/modules/{catalog,putaway,tenancy,inventory}.md`, `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-{be,fe,mobile}/README.md` -- per Boundaries
 
 **Acceptance Criteria:**
@@ -283,6 +283,15 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - Given a seeded DB with two mixed bins, when `scripts/segregation-conflicts.ts` runs, then it lists exactly those two bins and the rule for each.
 
 ## Implementation Notes
+
+Choices the spec left to the implementer (2026-10-20):
+
+- **`EMPTY_PROFILE_SQL`** is a drizzle `SQL` fragment over the `skus` columns (true for a NON-empty profile, as the Boundaries define it); `SEGREGATION_PROFILE_COLUMNS` + `profileOf` are the select/map pair every read uses. `SkuPhysicalAttributes` extends `SegregationProfile`, so the task list's SKU row still passes straight to `candidateFitsSku`.
+- **The `binCandidatesInTx` aggregate** is `jsonb_agg(distinct sku_id) filter (where quantity > 0 and EMPTY_PROFILE_SQL)`; the profiles come from `skuProfilesInTx` (one keyed read). The single-bin and grouped occupant reads group by `skus.id` (the primary key) so the array columns ride along.
+- **Naming the new conflict on edit:** `newGoodsConflict(next, stored, binmate)` walks the rules in `goodsConflict`'s order and returns the first conflict whose key is not among the stored keys — null exactly when the `conflictKeys` subset holds. So the 409 names the rule the edit newly fires, not an older one already present. The edit guard's title follows decision 2 (12-2's for the two hazard rules, the shared goods title otherwise), keyed on the first newly conflicting binmate's rule.
+- **Detail templates:** `conflictFacts` returns each side's parenthetical plus `verdict` / `pairVerdict`; each gate composes its own frame (placement and transfer use `goodsConflictDetail`, merge and landing-vs-landing their existing frames). The hazard-pair placement detail is byte-identical to 12-2's when no subsidiary is involved (unit-pinned).
+- **The script** lists storage bins only (system bins are staging and are skipped), discovers tenants on `DATABASE_AUTH_URL` (falling back to `DATABASE_URL`), prints one line (or one JSON object with `--json`) per conflicting pair, and exits 0 / 1 (mixed bins found) / 2. The e2e spawns it against the suite database.
+- **Web:** the rules render as an `<ol aria-label="Segregation rules">` keyed on `code`; the merge refusal case returns `detail` with its own copy as fallback.
 
 ## Spec Change Log
 
@@ -321,6 +330,25 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - D25 low (E14): subsidiary and order tests. Named in the primitive's tests.
 - D26 low (F6): merge refusal rendered by the default branch. Explicit case plus a test.
 - D27 low (F7, F8): the edit fallback says "hazard class"; the `rules` shape was open. Generic copy; `rules` required, `code` a plain string.
+
+**Code review, 2026-10-20.** Three layers: blind hunter (H1–H12), edge-case hunter (C1–C7), verification gap (V1, V2). 21 findings, 16 after grouping: 9 patched, 7 rejected. No loopback: no finding traced to the frozen intent or to a spec gap. Re-checked by hand: `ProblemException` puts `title` on the wire (`problem.exception.ts:18`), contrary to the implementation report; the old factories have no production caller; `skuProfilesInTx` binds one parameter per id.
+
+- V1 / H5 / V2 / C6 medium, patch: the transfer landing-vs-landing arm (two SKUs into one bin) had no test, built its problem inline, and moved "(FR-41)" mid-sentence in 12-2's hazard-pair detail. Fix: route it through the shared factory, keep 12-2's detail byte-identical, add a two-line transfer e2e.
+- C1 / C2 medium, patch: the script reports a false all-clear (exit 0) when no tenant is visible or `--tenant` names an unknown tenant. Fix: exit 2 in both cases.
+- C5 medium, patch: `skuProfilesInTx` passes one bind parameter per id, so it breaks past about 65k distinct stocked SKUs. Fix: pass a single array parameter.
+- H9 medium, patch: no e2e for a DG-only edit deriving a conflicting hazard, for a QC-hold origin conflict, or for an edit to an empty profile. Fix: three e2e cases.
+- H4 low, patch: `newGoodsConflict` (the guard's real call) had no unit test, while `conflictKeysSubset` was used only by the spec. Fix: an equivalence test; delete the helper.
+- C7 low, patch: `segregationConflict` and `segregationStateConflict` are orphaned, kept alive only by their own spec. Fix: delete them.
+- H1 low, patch: the comment claims a missing id cannot happen in one transaction; the transaction is READ COMMITTED. Fix: correct the comment (the placement gate re-checks under the bin lock).
+- H6 low, patch: the merge comment says `stock.adjust` is the only writer that can create a mixed source bin; that is stale now that 1-6b is not retroactive and other bypasses are named. Fix: correct the comment. Merging a legacy mix pairs nothing new, since the target's occupants are checked.
+- H12 low, patch: the FE merge-refusal test merges into a tank, which the bulk-asset gate refuses first. Fix: use an ordinary target.
+- C3 low, reject: a bare positional argument is ignored. Unlikely in use, and the fix adds a branch.
+- C4 / H10 low, reject: the card has no `rules ?? []`. `rules` is required, and backend-first ordering means the web never meets a server without it.
+- H2 low, reject: `EMPTY_PROFILE_SQL` is named for what it excludes, which reads inverted. The name is the spec's own; the doc comment states the meaning.
+- H3 low, reject: hazard-era helper names (`occupantHazardClassesInTx` …) now return profiles. A rename is churn across three modules with no defect.
+- H7 low, reject: refusals carry the rule only in the detail and title, not as a field. A new problem-body field is public surface the intent did not ask for; decision 9 names the rule in the detail.
+- H8 low, reject: the edit 409's title follows the first newly fired rule, so a DG-driven refusal can be titled "Hazard class …". Cosmetic; the web shows the detail.
+- H11 low, reject: the script's exact-empty stderr assertion, exit 1 meaning "found", the per-bin O(n²) pairing, and listing suspended tenants. All acceptable for a manual operator tool; PENDING records that it is manual.
 
 ## Design Notes
 
