@@ -926,3 +926,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4b-sku-deactivation.md`
   summary: A kit's composition replaced (kit PUT) between order-create phase 1 and phase 3 lets the order commit holds on the stale components; phase 3 re-checks only "became a kit".
   evidence: 1-4b code review C3. Pre-existing (the explosion plan is read in phase 1). The fix would compare the locked composition in phase 3 against `explosions` and answer `order-catalog-changed`.
+
+- source_spec: none
+  summary: 1.6b segregation matrix extended to food, allergens and chemicals — putaway, moves and merge refuse incompatible food/allergen/chemical neighbours, using 1-6a's per-SKU goods-type fields.
+  evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). It depends on 1-6a's attributes and changes placement refusals, so it ships on its own after 1-6a.
+
+- source_spec: none
+  summary: 1.6c drug and FSSAI licences on the client and the warehouse, with expiry warnings.
+  evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). Independent of the SKU attributes; its own master data and alert path.
+
+- source_spec: none
+  summary: SDS document per SKU (upload, view, download) — moves to the file-storage story alongside roadmap 2.5 damage photos.
+  evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). wms-be has no general object storage yet (only the ledger-anchor WORM adapter and Postgres-held audit exports, PENDING), and 2.5 needs the same S3 upload path.
