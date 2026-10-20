@@ -2,7 +2,7 @@
 title: '1-6d licence enforcement — opt-in blocking of uncovered drug and food receipts and orders'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: 'd45de08847b9b80f0da69b5e0c9f72b3958732f0'  # wms-be; wms-fe: 028440719443f873c39b21a8417fb587a91d5bfc; wms-mobile: f81fd3adc208dc4f472c1738d5e7ff0f140e9f28
 route: 'dispatch'
 review_loop_iteration: 0
@@ -45,9 +45,9 @@ context:
 **Decisions (agent):**
 7. **Policy row.** `licence_policies` (`tenant_id` unique, `enforce`, `updated_by`, `updated_at`) follows the `expiry_alert_policies` precedent. A missing row means off.
    - `GET …/licence-policy` returns `{enforce, gapCount}`. It is open to staff; a portal session gets 403.
-   - `PUT …/licence-policy {enforce, acknowledgeGaps?}` requires `licences.manage`.
-     - Turning on with gaps and without `acknowledgeGaps: true` → 409 `licence-gaps-unacknowledged`, with `gapCount` in the problem extensions.
-     - Audit `licence.enforcement_changed`, target type `licence_policy`.
+   - `PUT …/licence-policy {enforce, acknowledgedGapCount?}` requires `licences.manage`.
+     - Turning on while the live gap count exceeds `acknowledgedGapCount` (absent = 0) → 409 `licence-gaps-unacknowledged`, with `gapCount` in the problem extensions. *(Amended by the user at code review, 2026-10-20: the boolean `acknowledgeGaps` became the count the owner saw.)*
+     - Audit `licence.enforcement_enabled` or `licence.enforcement_disabled`, target type `licence_policy`. *(Amended by the user at code review, 2026-10-20: one `licence.enforcement_changed` could not tell on from off.)*
      - An unchanged PUT is a no-op that stores its key.
 8. **One coverage check.** `licenceCoverageInTx(tx, {tenantId, warehouseId, date, parties: {clientId, systemOwned, skuCode, needs}[]})` is an exported free function in compliance, built on 1-6c's primitives. It returns the uncovered `{skuCode, clientId, need, holder}` items, in a stable order.
    - `licenceEnforcedInTx(tx, tenantId)` reads the switch.
@@ -228,15 +228,15 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0085_licence_policies.sql` + schema + meta -- the policy table, RLS, probe -- decision 7
-- [ ] `wms-be compliance/licence-enforcement.ts` (free functions) + the policy command and routes in `licences.controller.ts` -- the switch, the coverage check -- decisions 1, 7, 8
-- [ ] `wms-be inbound/receiving.command.ts`, `receiving.dto.ts` -- the licence phase, the review row, the waiver -- decisions 3, 9
-- [ ] `wms-be tenancy/sync-report.command.ts`, `client-wind-down.ts`, `rejected-ops.dto.ts` -- the review type, the owner-only Apply -- decisions 3, 11
-- [ ] `wms-be outbound/order.command.ts`, `channels/channels.ingest.command.ts`, `channels.errors.ts` -- the order gate, the ingest mapping -- decisions 4, 10
-- [ ] `wms-be test/licence-enforcement.spec.ts` + the pins + `openapi.json` -- every matrix row
-- [ ] `wms-fe` the switch section, the review-queue generalisation, the order reason, regenerated types, tests
-- [ ] `wms-mobile` the settled-note licence arm (+ test)
-- [ ] meta `docs/design/modules/{compliance,inbound,outbound,channels,tenancy}.md`, `docs/design/{frontend,mobile}/IMPLEMENTATION-GUIDE.md` (the review queue; the named licence phrase at mobile `:135`), `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-be/README.md`, `docs/repos/wms-fe/README.md:53`, `docs/repos/wms-mobile/README.md:89`
+- [x] `wms-be drizzle/0085_licence_policies.sql` + schema + meta -- the policy table, RLS, probe -- decision 7
+- [x] `wms-be compliance/licence-enforcement.ts` (free functions) + the policy command and routes in `licences.controller.ts` -- the switch, the coverage check -- decisions 1, 7, 8
+- [x] `wms-be inbound/receiving.command.ts`, `receiving.dto.ts` -- the licence phase, the review row, the waiver -- decisions 3, 9
+- [x] `wms-be tenancy/sync-report.command.ts`, `client-wind-down.ts`, `rejected-ops.dto.ts` -- the review type, the owner-only Apply -- decisions 3, 11
+- [x] `wms-be outbound/order.command.ts`, `channels/channels.ingest.command.ts`, `channels.errors.ts` -- the order gate, the ingest mapping -- decisions 4, 10
+- [x] `wms-be test/licence-enforcement.spec.ts` + the pins + `openapi.json` -- every matrix row
+- [x] `wms-fe` the switch section, the review-queue generalisation, the order reason, regenerated types, tests
+- [x] `wms-mobile` the settled-note licence arm (+ test)
+- [x] meta `docs/design/modules/{compliance,inbound,outbound,channels,tenancy}.md`, `docs/design/{frontend,mobile}/IMPLEMENTATION-GUIDE.md` (the review queue; the named licence phrase at mobile `:135`), `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-be/README.md`, `docs/repos/wms-fe/README.md:53`, `docs/repos/wms-mobile/README.md:89`
   - PENDING entries: licence reads unlocked; device-clock trust; the scan-time warning; dispatch, transfer and returns gaps; refused channel ingests not listed for operators
 
 **Acceptance Criteria:**
@@ -244,6 +244,17 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - Given enforcement on and a site lacking FSSAI, when a handheld receipt of rice and t-shirts syncs, then the t-shirts are booked, the rice is held in `grn.licence-refused`, the device note says so, and an owner's Apply with a note books the rice.
 
 ## Implementation Notes
+
+Implemented 2026-10-20 against this spec. Choices the spec left open, or where the code differs from its wording:
+
+- **`coverageGapsInTx` lives in `compliance/licence-coverage.ts`.** The policy command counts gaps. If it imported `licence.facade.ts`, which injects the policy command, the two files would import each other. The facade re-exports the types and the function.
+- **`licenceClock` / `licenceToday` moved to `licence-enforcement.ts`.** `licence.command.ts` re-exports the same object, so tests that assign `licenceClock.now` keep working. The order create captures its one IST date from this clock.
+- **The licence row's payload has no `clientId` for the first refused line.** In that payload `clientId` means the blind receipt's named client, and Apply carries it through. Putting another client there would turn a PO receipt's Apply into a 400. Instead, the row's client is shown through `clientLabel` (the first refused line's), and each entry in `refusals[]` carries its own `skuClientId`.
+- **A line with several missing needs** gets one `needs …` phrase per need, joined with `; `.
+- **`LockedSkuStatus`** gains `foodCategory` and `drugSchedules`. These come from the same locked read that phase 3 re-checks.
+- **Two first-ever PUTs that race** would both insert a row. The tenant unique index refuses the second, and it answers 409 `conflict`.
+- **The licence note label** is the spec's exact text, `Why accept goods without a valid licence?`, without the shelf-life label's "(required)".
+- **Departed meanwhile** is staged with a direct status update in the test. The open licence row blocks a departure through the API (the wind-down rule).
 
 ## Spec Change Log
 
@@ -275,6 +286,26 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - D22 low (F8): docs missing from the task. Fix: added.
 - D23 low (F9): the 409 detail format. Fix: the `; ` separator and a fallback.
 - D24 info (B: idempotency, imports, grant release, ingest, `op_type` with no CHECK): verified correct, no change.
+
+**Code review, 2026-10-20.** Three layers: blind hunter (H1–H12), edge-case hunter (C1–C5), verification gap (V1–V3). 20 findings, 17 after merging duplicates: 11 patched (two after the user amended decision 7), 6 rejected, no defer. No loopback: the two frozen-decision findings were put to the user, who amended decision 7 in place. The rest had a fix inside the intent.
+
+- H1 medium, patch (user amendment): `licence.enforcement_changed` could not tell on from off, since `audit_events` has no details column. Fix: two actions, `_enabled` and `_disabled`.
+- H2 / C2 medium, patch (user amendment): the boolean `acknowledgeGaps` goes stale between the read and the PUT. Fix: `acknowledgedGapCount`, refused when the live count is higher.
+- H7 medium, patch: a carried shelf-life waiver wrote a second `shelf_life_waived` row under the original owner, on a different receipt. Fix: a carried waiver is not re-audited; e2e with two owners.
+- V1 / H5 medium, patch: the `settlingIndexes` remap had no test with a refused line ahead of a settling one. Fix: a PO receipt e2e, plus a race case where feasible.
+- V2 medium, patch: a self-client order under enforcement was untested. Fix: e2e.
+- H4 medium, patch: an ops manager's 403 showed capability jargon. Fix: a worded 403, pinned on both sides.
+- H11 low, patch: the review card could not name the site to fix. Fix: `siteCode` on the stored `missing` entries.
+- H9 low, patch: the web need-word map was keyed by `string`. Fix: keyed on the generated union; mobile wording aligned.
+- H10 low, patch: the PUT ran the gap scan under the lock even when turning off. Fix: only on off → on.
+- H8 low, patch: three reusable patterns were missing from `IMPLEMENTATION-GUIDE.md` (CLAUDE.md "keep them current"). Fix: added.
+- H12 low, patch: a mid-file import and a dead facade re-export. Fix: tidied.
+- H3 low, patch (docs): the switch is read at replay but licences are judged at the scan date, so an offline scan made while the switch was off is refused if it is replayed after switch-on. Fix: PENDING.
+- C1 low, reject (to PENDING): the phase-3 re-read is `FOR KEY SHARE`, so an attribute edit committing after it is not seen. The window is the same as the 1-4b status lock; recorded.
+- H6 / V3 low, reject (to PENDING): the concurrent first-PUT `conflict` arm is untested. The unique index already prevents a second row.
+- C3 low, reject: a licence-waived re-run could raise a shelf-life row whose Apply re-checks the licence. That costs at most one more owner decision, not a loop, and needs a client policy change in between.
+- C4 low, reject: a licence-waived re-run that refuses everything for another reason writes no `licence_waived` row. Correct: nothing was waived into stock, and the row's outcome records the decision.
+- C5 low, reject: the waiver is audited even when the licence was fixed in between. The audit records the owner's decision, which is true.
 
 ## Design Notes
 
