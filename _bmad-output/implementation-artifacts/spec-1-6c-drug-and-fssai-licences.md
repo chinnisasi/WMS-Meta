@@ -2,7 +2,7 @@
 title: '1-6c drug and FSSAI licences — client and site licences, coverage gaps, expiry warnings'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: 'f5f0c3a2f5a1b15b179ad9a8481b6c96cd46244f'  # wms-be; wms-fe: 733fc17af1796604c7a27b4204f416c53130aa1e; wms-mobile: f81fd3adc208dc4f472c1738d5e7ff0f140e9f28
 route: 'dispatch'
 review_loop_iteration: 0
@@ -249,13 +249,13 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be drizzle/0084_licences.sql` + schema + meta -- the table, CHECKs, family unique, RLS and its probe arm, the source widening -- decisions 5–7
-- [ ] `wms-be src/shared/primitives/licence.ts` (+ spec) -- kinds, needs, numbers, validity, coverage, warning state -- decisions 1–3, 6, 7
-- [ ] `wms-be src/modules/compliance/{licence.command,licence.facade}.ts`, module export, `src/api/licences.controller.ts` + DTOs, permissions, audit vocabulary -- master, coverage, sweep -- decisions 2, 4, 5, 8–11
-- [ ] `wms-be jobs/jobs.module.ts`, `notifications/notification-sources.ts`, `api/notifications.dto.ts` -- the worker, the source with resolutions -- decisions 3, 8
-- [ ] `wms-be test/licences.spec.ts`, `test/notifications.spec.ts`, `openapi/openapi.json` -- every matrix row, the pins, the export
-- [ ] `wms-fe` the compliance Licences tab, `lib/licences.ts` + hook (+ tests), the notification entry, the audit label, the capability mirror, regenerated types
-- [ ] meta `docs/design/modules/compliance.md` (licences: owns, seam, flows as sequence diagrams, invariants), `notifications.md`, `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-be/README.md` §Interface Contract, `docs/repos/wms-fe/README.md` §Interface Contract
+- [x] `wms-be drizzle/0084_licences.sql` + schema + meta -- the table, CHECKs, family unique, RLS and its probe arm, the source widening -- decisions 5–7
+- [x] `wms-be src/shared/primitives/licence.ts` (+ spec) -- kinds, needs, numbers, validity, coverage, warning state -- decisions 1–3, 6, 7
+- [x] `wms-be src/modules/compliance/{licence.command,licence.facade}.ts`, module export, `src/api/licences.controller.ts` + DTOs, permissions, audit vocabulary -- master, coverage, sweep -- decisions 2, 4, 5, 8–11
+- [x] `wms-be jobs/jobs.module.ts`, `notifications/notification-sources.ts`, `api/notifications.dto.ts` -- the worker, the source with resolutions -- decisions 3, 8
+- [x] `wms-be test/licences.spec.ts`, `test/notifications.spec.ts`, `openapi/openapi.json` -- every matrix row, the pins, the export
+- [x] `wms-fe` the compliance Licences tab, `lib/licences.ts` + hook (+ tests), the notification entry, the audit label, the capability mirror, regenerated types
+- [x] meta `docs/design/modules/compliance.md` (licences: owns, seam, flows as sequence diagrams, invariants), `notifications.md`, `API-SURFACE.md`, `PENDING.md`, `docs/repos/wms-be/README.md` §Interface Contract, `docs/repos/wms-fe/README.md` §Interface Contract
   - PENDING entries: OTC/homoeopathic/AYUSH forms; whether Schedule X also needs 20B/21B; brands sharing one licence; a departed client's open warning; the dashboard tile; email/push; the portal view; documents; the 1-6d pointer; Epic 18 (controlled & licensed goods) extends this `licences` table rather than adding its own licence admin.
 
 **Acceptance Criteria:**
@@ -264,6 +264,20 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - Given any receipt, order or other existing flow, when it runs, then its behaviour and responses are unchanged.
 
 ## Implementation Notes
+
+Implemented 2026-10-20 against this spec (wms-be, wms-fe, meta docs; no handheld change). Where the build departs from or sharpens the text above:
+
+- **Idempotency key reuse is `422 idempotency-key-reuse`**, the house code (`idempotencyKeyReuse()`), not 409 as the Boundaries list says; the OpenAPI documents 422 beside `409 conflict` (a concurrent same key).
+- **The RLS site-row proof runs as `wms_rls_probe` in `test/client-isolation.spec.ts`**, not in 0084's `DO $$` probe: the migrator is a superuser and bypasses RLS. 0084's probe covers every CHECK, the family index and the source-type widening, each refusal by its named constraint. The policy count pin moved 117 → 118.
+- **The add's holder checks:** `assertClientInTenantInTx` (404) → `self` (400) → `assertWarehouseInTenant` (404) → `assertClientTakesWorkInTx` (`FOR KEY SHARE`, departed → 409 `client-departed`) → replay again. The "lock" for an add is that client gate; a site licence locks nothing (the family index and the key settle a duplicate).
+- **Edit and withdraw lock the licence row `FOR UPDATE`** and replay again under it; a same-key withdraw race is pinned (parked waiters, one effect, one key, mutation-checked by deleting the second replay).
+- **`licenceClock`** (`licence.command.ts`, the §7c mutable clock) is the "today" of the edit's warning comparison and of every read's `asOfDate`. The worker's `tick(today?)` takes the date for the suites.
+- **The family-unique index is SQL-only** (an expression index, the 0078 precedent), so `db:generate` stays clean.
+- **Coverage:** the goods (stock `quantity > 0`, an open PO with an open line, an ASN `announced | partially_received`) are filtered to drug or food SKUs in SQL; needs and coverage are decided in TS by the primitive (`needsOf`, `clientLicenceCovers`, `siteLicenceCovers`), so the rule exists once. Gaps are ordered per site: the site's gaps, then each client's, needs in vocabulary order.
+- **Sweep detail:** an expired raise on a term never warned upcoming (the worker was off) also stamps `upcoming_warned_on`, so the row leaves the due set. The successor rule is per (client, site, need) as decided; a head-office licence is not treated as the successor of a premises one (PENDING).
+- **E2E dates** are relative to the real IST date + 12 days, so "added today" is never a historical record whatever day the suite runs.
+- **Web:** the gaps and the table share one hook (`useLicences`, both reads in parallel); the tab renders `AllClientsNote` (licences are never filtered by client).
+
 
 ## Spec Change Log
 
@@ -304,6 +318,27 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - D29 low (F13): the mirror anchors and the CI ordering. Fix: corrected; noted in Verification.
 - D30 low (F14): the contract sections. Fix: named.
 - D31 low (E5 note): a site holding only a registration is covered, since any tier covers; the user's decision 1 stands.
+
+**Code review, 2026-10-20.** Three layers: blind hunter (H1–H14), edge-case hunter (C1–C9), verification gap (V1–V5). 28 findings, 19 after merging duplicates: 8 patched, 2 deferred, 9 rejected. No loopback: decision 9 settled only when a warning is *raised*; the skip handling is a direct fix inside that intent. Re-checked by hand: `purchase_order_lines` has `received_qty` and `ordered_qty` beside its `status` (`schema.ts:2249–2253`), so status alone does not mean "goods to come".
+
+- V5 / H1 / H2 / C1 / C2 / C3 high, patch: a skipped due row (successor, departed client, historical) never resolves an open warning and never leaves the due set. The owner's entry stays open forever, and the tenant is re-swept every tick. Fix: skips suppress only raising. A successor clears the open warning (`renewed`). Expiry supersedes an open upcoming warning (`expired`). Skipped rows are stamped warned with no raise. Three e2e cases.
+- H3 / C4 medium, patch: an edit that moves `validUntil` into the past resolves the warning as `renewed`. Fix: the outcome follows the implied state; e2e added.
+- C9 medium, patch: a fully received line on an open PO keeps raising gaps. Fix: `received_qty < ordered_qty`.
+- V1 medium, patch: the expired step was driven through the facade, not the worker, so a worker filter that drops expired-only rows would go unnoticed. Fix: drive it through `worker.tick`.
+- V2 / H4 medium, patch: no test renews an expired-warned licence. Fix: e2e added.
+- V3 / H6 medium, patch: the coverage arm for open PO lines was never exercised. Fix: "Gaps: open PO" e2e.
+- V4 / H11 medium, patch: the web Edit → Save path was untested. Fix: a component test for the PATCH body, the key and the disabled fields.
+- C5 low, patch: the worker hard-codes 60. Fix: use the constant.
+- H12 low, patch: the README poll value contradicts `.env.example`. Fix: made consistent.
+- H5 low, defer: goods arriving by transfer, and returns, are not in the coverage set. Decision 2 names stock and open PO/ASN only. Deferred-work entry.
+- H7 low, defer: licence edits keep no before/after history, because `audit_events` has no details column. Pre-existing audit design. Deferred-work entry.
+- H8 / C7 low, reject: the 500-row list cap is silent. Reaching it is unlikely, and a `truncated` flag is new public surface.
+- H9 low, reject: the coverage read is unbounded. It is catalog-scale and read on tab open; nothing shows it is slow.
+- H10 / C8 low, reject: the list and coverage reads can straddle IST midnight. The badges come from the list's own `asOfDate`; a mismatch lasts one refresh.
+- H13 low, reject: FSSAI numbers typed in grouped form are refused. Decision 7 collapses spaces; the error names the 14-digit rule.
+- H14 low, reject: the notification links to the tab, not to the row. Cosmetic.
+- C6 low, reject: a punctuation-only drug number is accepted. Unlikely in use, and the fix touches the CHECK, the probe and the web mirror.
+- H8b (the agent's report) false: "two expiring licences of one kind silence each other". A successor must be valid on `validUntil + 1`, so the later-expiring licence still warns and the earlier one is muted only while the later one covers it.
 
 ## Design Notes
 

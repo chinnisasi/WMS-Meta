@@ -1,10 +1,10 @@
 # Compliance module
 
-> Temperature excursions (FR-44): an operator records a °C reading against a bin, every affected (sku, bin) scope is quarantined through the ordinary QC-hold semantics, and the excursion itself is a registered zero-delta ledger event — so cold-chain custody is reconstructible from the ledger alone (FR-45). Story 12-6 adds the FR-45 reader: the cold-chain trace, reconstructed from `ledger_events` alone.
+> Temperature excursions (FR-44): an operator records a °C reading against a bin, every affected (sku, bin) scope is quarantined through the ordinary QC-hold semantics, and the excursion itself is a registered zero-delta ledger event — so cold-chain custody is reconstructible from the ledger alone (FR-45). Story 12-6 adds the FR-45 reader: the cold-chain trace, reconstructed from `ledger_events` alone. Story **1-6c** adds the **drug and FSSAI licences**: the statutory licences held by a client brand or by a site, the coverage gaps wherever drug or food goods are, and an expiry warning from 60 days out (§Drug and FSSAI licences).
 
 All paths below are relative to `workspace/core/backend/wms-be`. Story 12-5 activated this module (an empty spine placeholder before it); story 12-6 added the read side.
 
-Files: `src/modules/compliance/{compliance.module,excursion.command,excursion.facade,cold-chain.facade}.ts` + the API surface `src/api/{compliance.controller,compliance.dto}.ts`.
+Files: `src/modules/compliance/{compliance.module,excursion.command,excursion.facade,cold-chain.facade,licence.command,licence.facade}.ts` + the API surface `src/api/{compliance.controller,compliance.dto,licences.controller,licences.dto}.ts`; the licence rule set is the shared primitive `src/shared/primitives/licence.ts` (1-6c).
 
 ---
 
@@ -16,13 +16,15 @@ One table, module-exclusive:
 | --- | --- | --- |
 | `temperature_excursions` (`drizzle/0038_temperature_excursions.sql`) | One row per recorded excursion: origin `bin_id`, `reading_c` numeric(6,2), `note` (nullable), `hold_ids uuid[]` (the QC holds this excursion created — links the queue item to its holds without touching `qc_holds`), `status` `open|resolved`, `recorded_by`, `occurred_at` (business time — the operator's reading instant), `resolved_by`/`resolved_at`. | `temperature_excursions_status_check` (`open|resolved`) and the fail-closed RLS policy live **only in the migration SQL** (the 0008 hand-append pattern — schema.ts deliberately carries neither; the snapshot's `isRLSEnabled: false` is why the next `db:generate` must not re-emit them). `tenantTimestamps` for the keyset cursor. |
 
-The module writes **no other table**. The quarantine is inbound's `qc_holds` (written through `QcFacade.holdScopeInTx`, never directly); the ledger events are inventory's (written through `appendLedgerEventInTx`). The bin's on-hand sweep reads through `InventoryFacade.onHandInBinInTx`.
+| `licences` (`drizzle/0084_licences.sql`, 1-6c) | One row per statutory licence: `client_id` (nullable — the holding brand), `warehouse_id` (nullable — a site licence's site, or a client licence's premises), `kind`, `number`, `valid_from`/`valid_until` (IST `date`s, nullable), `note`, `status` `active\|withdrawn`, and the sweep's state `upcoming_warned_on`, `expired_warned_on`, `open_warning_id` | CHECKs only in the migration: `licences_kind_check` (the seven kinds), `licences_holder_check` (a client or a site), `licences_fssai_number_check` (14 digits; registration `2…`, state/central `1…`), `licences_drug_number_check` (normalised `^[A-Z0-9 /.-]{1,50}$`), `licences_validity_order`, `licences_valid_until_required` (FSSAI and NDPS), `licences_status_check`, `licences_note_length` (1–200, trimmed). The SQL-only **family unique** `licences_family_number_unique (tenant_id, CASE WHEN kind LIKE 'fssai-%' THEN 'fssai' ELSE kind END, number) WHERE status = 'active'`. RLS: the tenant arm plus the 0041 `app.client_id` clause on `client_id` (a site licence — null client — is invisible to a portal stamp; proved as `wms_rls_probe` in `test/client-isolation.spec.ts`). Never deleted; kind, client and site fixed after the add |
 
-Not owned but read: `bins` (origin bin, with a `.for('update')` lock — serialized against hold, merge and retire), `skus` (serial/catch-weight pre-flight), `warehouses`, `qc_holds` (only through the facade: `openHoldsForBinsInTx` for the skip arm), `idempotency_keys`, `outbox_messages`, `audit_events`.
+The module writes **no other table** (1-6c's sweep and commands write only `licences`, plus outbox and audit). The quarantine is inbound's `qc_holds` (written through `QcFacade.holdScopeInTx`, never directly); the ledger events are inventory's (written through `appendLedgerEventInTx`). The bin's on-hand sweep reads through `InventoryFacade.onHandInBinInTx`.
+
+Not owned but read — **1-6c** reads `clients`, `warehouses`, `skus`, `stock_on_hand`, `purchase_orders`/`purchase_order_lines` and `advance_shipment_notices`/`asn_lines` directly (the 12-5 shared-substrate precedent): tenancy imports this module (the sync-report apply arm), so importing the catalog, inventory-read or tenancy modules would cycle. The holder checks use the clients module's file-level seam (`assertClientInTenantInTx`, `assertClientTakesWorkInTx`) and tenancy's `assertWarehouseInTenant` — functions, no Nest module import. Also: `bins` (origin bin, with a `.for('update')` lock — serialized against hold, merge and retire), `skus` (serial/catch-weight pre-flight), `warehouses`, `qc_holds` (only through the facade: `openHoldsForBinsInTx` for the skip arm), `idempotency_keys`, `outbox_messages`, `audit_events`.
 
 ## Public seam
 
-`ExcursionFacade` (`src/modules/compliance/excursion.facade.ts`) — `recordExcursion`, `resolveExcursion`, `listExcursions`. `ColdChainFacade` (`src/modules/compliance/cold-chain.facade.ts`) — `getOrderColdChainTrace` (the FR-45 read, no capability gate — reads are never gated). The compliance module is a **consumer** of inventory's facade (ledger + sweep), inbound's facade (the hold core) and outbound's facade (order identity — `OutboundModule` imported 12-6; it exports only its facade and imports nothing back, so no cycle); nothing imports compliance except the api shell.
+`ExcursionFacade` (`src/modules/compliance/excursion.facade.ts`) — `recordExcursion`, `resolveExcursion`, `listExcursions`. `LicenceFacade` (1-6c, `licence.facade.ts`) — `addLicence` / `editLicence` / `withdrawLicence` (through `LicenceCommand`), `listLicences(tenantId, filters, istToday?)`, `coverageGaps(tenantId, istToday?)` and `sweepExpiry(tenantId, istToday)`; exported for the api shell's `LicencesController` and the jobs shell's `LicenceExpiryWorker`. `ColdChainFacade` (`src/modules/compliance/cold-chain.facade.ts`) — `getOrderColdChainTrace` (the FR-45 read, no capability gate — reads are never gated). The compliance module is a **consumer** of inventory's facade (ledger + sweep), inbound's facade (the hold core) and outbound's facade (order identity — `OutboundModule` imported 12-6; it exports only its facade and imports nothing back, so no cycle); compliance is imported by the api shell, tenancy (5-6, the sync-report apply arm) and — 1-6c — the jobs shell (`LicenceExpiryWorker`, through `LicenceFacade`).
 
 ## Flows
 
@@ -122,6 +124,111 @@ sequenceDiagram
 
 Errors: `400 validation-failed` (malformed warehouseId/orderId) · `401` · `403` (foreign-tenant session) · `404 not-found` (missing order, order of another warehouse in the same tenant, or warehouse outside the tenant) · `409 order-not-dispatched` (the order exists but has no dispatch events — FR-45 names dispatched units).
 
+## Drug and FSSAI licences (story 1-6c)
+
+**What it records.** The Drugs & Cosmetics Act and FSSAI licences that make holding scheduled drugs and food legal, on their holder: a **client** brand (optionally for one site — its premises — or for none — a head-office or central licence) or a **site** (the 3PL's own). Blocking uncovered work is story 1-6d; this story records, shows the gaps and warns.
+
+**Kinds are statutory forms (decision 1).** One need per schedule a SKU carries (`needsOf`, `shared/primitives/licence.ts`; an `H` + `NDPS` SKU needs both):
+
+| Need | Covered by | For |
+|---|---|---|
+| `drug-20b` | `drug-20b` | schedules G, H, H1 |
+| `drug-21b` | `drug-21b` | schedules C, C1 |
+| `drug-20g` | `drug-20g` | schedule X |
+| `ndps` | `ndps` | schedule NDPS |
+| `fssai` | `fssai-registration`, `fssai-state`, `fssai-central` (any tier) | food — 1-6b's `isFood` |
+
+`SCHEDULE_NEED` is a `Record` over 1-6a's `DRUG_SCHEDULES`, so a new schedule fails the compile until it has a need.
+
+**Validity (decision 6).** Valid on D: `active`, `valid_from` null or ≤ D, `valid_until` null or ≥ D (`licenceValidOn`). FSSAI tiers and NDPS require `valid_until`; a drug form's is optional and labelled "Valid until / retention due" (perpetual licences pay a retention fee every five years). A licence with no `valid_until` never warns.
+
+**Numbers (decision 7).** Normalised (trimmed, whitespace collapsed, upper-cased) before the hash. FSSAI: 14 digits — registration `2…`, state/central `1…`; drug and NDPS: 1–50 of `A–Z 0–9 space / . -`. Unique among the tenant's **active** licences per family (the three FSSAI tiers one family, each drug kind its own) — the index is the arbiter, caught by name → 409 `licence-number-taken`. A withdrawn licence frees its number.
+
+### The master — add, edit, withdraw (`LicenceCommand`)
+
+```mermaid
+sequenceDiagram
+    participant API as LicencesController
+    participant C as LicenceCommand
+    participant CL as clients.facade (fns)
+    participant T as tenancy.service (fns)
+    API->>C: add / edit / withdraw (Idempotency-Key, licences.manage)
+    C->>C: shape (kind, holder present, dates YYYY-MM-DD) → normalise number, note, dates
+    C->>C: payloadHash {arm: licence-add | licence-edit | licence-withdraw, tenantId, …normalised}
+    Note over C: tx begins
+    C->>C: assertPermission('licences.manage') → replay
+    alt add
+        C->>CL: assertClientInTenantInTx (404) — self → 400
+        C->>T: assertWarehouseInTenant (404)
+        C->>CL: assertClientTakesWorkInTx — FOR KEY SHARE, departed → 409 client-departed
+    else edit / withdraw
+        C->>C: licence row FOR UPDATE (404)
+    end
+    C->>C: replay again under the lock
+    C->>C: edit/withdraw of a withdrawn licence → 409 licence-withdrawn
+    C->>C: the rules on the MERGED row (400 naming the field)
+    alt edit unchanged
+        C->>C: store the key only (licences.edit:unchanged — no write, no audit)
+    else
+        C->>C: write (family unique → 409 licence-number-taken)
+        C->>C: edit: validUntil changed AND its implied warning ≠ the warned one → outbox licence.expiry_warning_cleared (renewed), reset both warned dates
+        C->>C: withdraw: an open warning → outbox licence.expiry_warning_cleared (withdrawn)
+        C->>C: audit licence.added | edited | withdrawn (target licence) → key LAST
+    end
+```
+
+- **The clear's outcome on an edit** is `expired` when the new date is already past, else `renewed`.
+- **Edit semantics (decision 10):** `validFrom`, `validUntil`, `note` absent = keep, null = clear; `number` cannot be null (400). The hash omits absent keys and keeps nulls. Kind, client and site are not in the edit DTO (`forbidNonWhitelisted` → 400) — a correction is a withdraw plus a new add.
+- **"Today"** for the edit's warning comparison and every read's `asOfDate` is `licenceClock` (`licence.command.ts`, the §7c mutable clock), read as an IST date.
+- **The holder lock.** The add takes the client row `FOR KEY SHARE` (the "no new work" gate) so a departure cannot commit between the check and the insert. A site licence locks nothing: no row exists to lock, and the unique index and the key settle a duplicate.
+
+### The reads — list and coverage gaps
+
+`GET …/licences` — every licence (≤ 500), active first then `valid_until` soonest first, each with `expiryState` (`valid | upcoming | expired | withdrawn`) and `daysLeft` for the server's IST `asOfDate`. `GET …/licences/coverage` — the gaps:
+
+```mermaid
+sequenceDiagram
+    participant F as LicenceFacade.coverageGaps
+    participant DB as Postgres (tenant tx)
+    F->>DB: goods = (stock_on_hand quantity > 0) ∪ (open PO + open line) ∪ (ASN announced / partially_received), joined to skus, filtered to drug or food SKUs IN SQL; clients not departed
+    DB-->>F: distinct (client, site, sku, systemOwned, food_category, drug_schedules)
+    F->>DB: active licences
+    F->>F: per row needsOf(sku) → (client, site, need) and (site, need) SKU sets
+    F->>F: site gap unless a site licence covers (siteLicenceCovers)
+    F->>F: client gap unless a client licence covers (clientLicenceCovers) — never for `self` (decision 4)
+    F-->>F: {asOfDate, gaps: [{holder, clientId?, warehouseId, need, coveredBy, skuCount}]} — per site: the site's gaps, then each client's, needs in vocabulary order
+```
+
+A client with no drug or food goods anywhere has no gap; a site counts only where goods are (there is no client–warehouse assignment). The web words each gap from `coveredBy`, so it mirrors no rule table.
+
+### The expiry sweep (`LicenceFacade.sweepExpiry`, `LicenceExpiryWorker`)
+
+```mermaid
+sequenceDiagram
+    participant W as LicenceExpiryWorker (jobs)
+    participant A as AUTH_DATABASE (read-only)
+    participant F as LicenceFacade.sweepExpiry
+    participant O as outbox
+    participant N as notifications (licence-expiry)
+    W->>A: tenants with an active licence, valid_until ≤ today + 60, not warned for every state
+    loop per tenant (try/catch)
+        W->>F: sweepExpiry(tenantId, istToday)
+        Note over F: own tenant tx — due rows ordered by id FOR NO KEY UPDATE SKIP LOCKED
+        F->>F: raise nothing for: departed client · valid_until before its IST added date (historical) · a successor (same client, site, need) valid on valid_until + 1 — but clear an open warning (successor → renewed; past valid_until → expired) and stamp the current state's warned date, no raise or audit row, so the row leaves the due set
+        alt upcoming (valid_until − 60 ≤ today ≤ valid_until), never warned
+            F->>O: licence.expiry_upcoming {warningId (fresh), licenceId, kind, number, holder, holderName, siteCode?, validUntil, state, warehouseId}
+            F->>F: audit licence.expiry_upcoming_raised (SYSTEM_ACTOR_ID) · upcoming_warned_on, open_warning_id
+        else expired (today > valid_until), not warned expired
+            F->>O: licence.expiry_warning_cleared {warningId: the open upcoming, outcome: expired}
+            F->>O: licence.expired {fresh warningId, …}
+            F->>F: audit licence.expired_raised · expired_warned_on (and upcoming_warned_on if unset), open_warning_id
+        end
+    end
+    O->>N: raise → one entry per warning id; cleared → resolved (renewed | withdrawn | expired)
+```
+
+`LICENCE_EXPIRY_POLL_MS` gates the worker (unset/0 = off); suites drive `sweepExpiry` with an injected date and `tick(today)` once. Each warning has its own id because a notification row is unique per `(source_type, source_id)` and a re-raise is a no-op: one id per licence would swallow the expired warning and never resolve.
+
 ## Invariants
 
 - **The ledger is the excursion's record (AD-11/FR-45).** One zero-delta `excursion.recorded` event per affected scope; both bin arms null (the zero-quantity envelope rule), `skuId` never null (hence one event per scope), batch/serial arms registry-closed. The relocation itself is the `qc.held` movements' work — the excursion event is the compliance fact, not a stock movement.
@@ -129,13 +236,22 @@ Errors: `400 validation-failed` (malformed warehouseId/orderId) · `401` · `403
 - **All-or-nothing.** Any serial-tracked or catch-weight SKU in the bin refuses the ENTIRE excursion naming every offender — FR-44 never leaves units in ATP; per-unit quarantine stays Epic 15's.
 - **Resolve is a review flip.** It releases nothing; the holds stay open until `qc.manage` disposes of them.
 - **Manual capture only (UX-DR30).** No threshold model, sensor ingestion or auto-detection — an operator-captured reading against a bin; no handling-unit arm (Epic 15), no unit conversion (°C only).
+- **A licence is never deleted (1-6c).** Withdraw is the only end; kind, client and site never change after the add; a number is unique per family among active licences only (the SQL-only family index).
+- **One warning per term, its own entry (1-6c).** The warned dates are the sweep's state; a fresh `warningId` per raise is the entry's `source_id`; the open one is always resolved before another opens (the expired raise clears the upcoming; a renewing edit and a withdraw clear theirs).
+- **The coverage read and the badge use the server's IST date (1-6c)** — never the browser's (`asOfDate` on both reads).
 - **The trace reads the ledger only (12-6).** The cold-chain reconstruction reads `ledger_events` (through inventory's facade — the only ledger door) and `bins` directly (the 12-5 shared-substrate precedent); it never reads `temperature_excursions` rows or projections. Excursion correlation is dwell-window based from the events alone, because the excursion arm carries no batch/serial (one event per affected (sku, bin) scope).
 
 ## Events
 
+**1-6c — licences.** Outbox: `licence.expiry_upcoming`, `licence.expired` (the `licence-expiry` panel source's two raises) and `licence.expiry_warning_cleared` (`outcome` ∈ `LICENCE_WARNING_OUTCOMES` = `renewed | withdrawn | expired`), pinned to the notifications module's literals by `test/notifications.spec.ts`. Audit: `licence.added`, `licence.edited`, `licence.withdrawn` (keyed, target `licence`) and the sweep's `licence.expiry_upcoming_raised` / `licence.expired_raised` (system actor, no key).
+
+
 Ledger: `excursion.recorded` (registered in `ledger-registry.ts`, `sinceVersion: 1`, reference kind `excursion`, batch/serial arms closed). Outbox: `excursion.recorded` (payload carries `affectedSkus` = every affected scope, `holdIds` = the holds created) and `excursion.resolved` (from resolve). Audit: `excursion.recorded` (reference = the idempotency key) and `excursion.resolved` (reference = the excursion's idempotency key).
 
 ## Gotchas
+
+- **Two licences of one holder and need are each other's successor (1-6c).** The sweep's successor rule mutes a warning when another active licence of the same client, site and need is valid the day after — a test that puts two expiring site licences of one kind at one site sees neither warn. Give each fixture its own holder (`test/licences.spec.ts` does).
+- **The migration cannot prove RLS (1-6c).** The migrator is a superuser and bypasses RLS, so 0084's probe covers the CHECKs and the family index only; the site-row invisibility under a portal stamp is proved as `wms_rls_probe` in `test/client-isolation.spec.ts`.
 
 - **The skip arm's ledger reach** — the first implementation emitted events only for *quarantined* scopes, which made an all-scopes-skipped excursion ledger-invisible (AD-11 violated). The 12-5 review caught it; the events loop walks the **sweep**, not the post-filter scopes. Do not "optimize" the loop back to the quarantined list.
 - **The record snapshot's `createdAt` is the row's `created_at`**, never the business `occurredAt` — the row insert uses `.returning({ createdAt })` and the snapshot reports `canonicalInstant(row.createdAt)`. `createdAt` is the keyset cursor field; the record response and later list/resolve reads must agree on it.
