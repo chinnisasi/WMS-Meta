@@ -2,7 +2,7 @@
 title: '1-6a SKU goods-type attributes — drug schedule, food category and allergens, dangerous goods, high value, fragile, stack limit'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '39cfc720a60916e7f07d2b9bd923a9371620f672'  # wms-be; wms-fe: 073d08e34b40528e6eaf1bce721f74077ae9ca42; wms-mobile: b6a2e3b89c957e4524e713c27fc76a41982e9c9d
 route: 'dispatch'
 review_loop_iteration: 0
@@ -243,14 +243,14 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be src/shared/primitives/goods-type.ts` (+ spec) -- tuples, map, canonicalisation, `assertGoodsType`, `resolveHazardClass` -- the one rule set
-- [ ] `wms-be drizzle/0083_sku_goods_type.sql` + schema + meta -- columns, CHECKs (the derivation backstop included), probes -- decisions 3, 5, 6
-- [ ] `wms-be catalog/{catalog.dto,catalog.controller,sku.command,catalog.facade}.ts`, `inbound/{receiving.dto,receiving.facade}.ts` -- fields, merge, `effectiveHazard` through guard and write, canonical hashing, replay defaults, snapshot -- decisions 7, 10
-- [ ] `wms-be catalog/import.command.ts` -- ten columns, cell grammar, derivation -- import parity
-- [ ] `wms-be test/sku-goods-type.spec.ts`, `openapi/openapi.json` -- every matrix row, the vocabulary pins, the export -- proof
-- [ ] `wms-fe` goods-type lib (+ tests), SKU table and create card, import help, badge sites, reason maps, fixtures, regenerated types -- decisions 1, 3, 7
-- [ ] `wms-mobile` api, snapshot parse, `handling-note.ts` (+ test), pick, pack, putaway and receive screens, the named pins and fixtures -- decision 1
-- [ ] meta `docs/design/modules/catalog.md` (goods-type section), `API-SURFACE.md`, `PENDING.md` (stack enforcement; DG on documents; class 8 none and the subsidiaries for 1-6b; explosive compatibility groups; EU allergens; returns, transfer and count notes), `docs/repos/wms-{be,fe}/README.md` -- the docs stay current
+- [x] `wms-be src/shared/primitives/goods-type.ts` (+ spec) -- tuples, map, canonicalisation, `assertGoodsType`, `resolveHazardClass` -- the one rule set
+- [x] `wms-be drizzle/0083_sku_goods_type.sql` + schema + meta -- columns, CHECKs (the derivation backstop included), probes -- decisions 3, 5, 6
+- [x] `wms-be catalog/{catalog.dto,catalog.controller,sku.command,catalog.facade}.ts`, `inbound/{receiving.dto,receiving.facade}.ts` -- fields, merge, `effectiveHazard` through guard and write, canonical hashing, replay defaults, snapshot -- decisions 7, 10
+- [x] `wms-be catalog/import.command.ts` -- ten columns, cell grammar, derivation -- import parity
+- [x] `wms-be test/sku-goods-type.spec.ts`, `openapi/openapi.json` -- every matrix row, the vocabulary pins, the export -- proof
+- [x] `wms-fe` goods-type lib (+ tests), SKU table and create card, import help, badge sites, reason maps, fixtures, regenerated types -- decisions 1, 3, 7
+- [x] `wms-mobile` api, snapshot parse, `handling-note.ts` (+ test), pick, pack, putaway and receive screens, the named pins and fixtures -- decision 1
+- [x] meta `docs/design/modules/catalog.md` (goods-type section), `API-SURFACE.md`, `PENDING.md` (stack enforcement; DG on documents; class 8 none and the subsidiaries for 1-6b; explosive compatibility groups; EU allergens; returns, transfer and count notes), `docs/repos/wms-{be,fe}/README.md` -- the docs stay current
 
 **Acceptance Criteria:**
 - Given a fragile DG-3 SKU on a wave, when a picker opens its task on the handheld, then the header shows the handling note, and the web picklist stop and pack-bench line show the same badges.
@@ -258,6 +258,18 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - Given a SKU with no goods-type data, when a handling screen renders it, then no badge or note appears; the SKU table's Handling cell shows `'—'`.
 
 ## Implementation Notes
+
+Implemented 2026-10-20 against the baselines above; nothing committed or pushed.
+
+- **Import chunk size (a defect the design missed).** The ten new `skus` columns pushed the catalog import's 2,000-row insert chunk past Postgres's 65,535 bind parameters (~37 columns × 2,000); `test/catalog.spec.ts`'s 5,000-row acceptance import answered 500. `INSERT_CHUNK_ROWS` is now 1,000; the rule ("a new column re-opens rows × columns") is in `IMPLEMENTATION-GUIDE.md` §3 and `modules/catalog.md`.
+- **Create hash.** The goods-type keys join only when present, after `barcodes` and before the conditional `clientId` (golden in `test/sku-goods-type.spec.ts`). `hazardClass` keeps its pre-1-6a `?? null` shape, so on the create absent and explicit null hash alike; wherever both commit they leave the same class (absent with class 8 is refused, null with a mapped class is refused).
+- **The pairing problem names the missing field.** A UN number without a class is refused naming `dgClass`, a class without a UN number naming `dgUnNumber`.
+- **Web: the hazard key under a mapped DG class is omitted, not sent.** The server derives it (decision 7, absent → derived); the form shows the derived value disabled before saving. Class 8: the select starts on "Choose…" unless the stored value is a corrosive — or the SKU already is class 8 with none, where it starts on "none" (its stored choice). Moving INTO class 8 with "none" always sends `hazardClass: null`, even over a stored null, or the server would answer `dg-hazard-required`.
+- **Web: the Handling column sits after Barcode,** not beside Hazard — two existing component pins fix the HSN → Weight · dims → Tracking → Storage → Hazard → Barcode run (11-2, 12-7), and they were kept rather than retargeted.
+- **Web: order detail.** Badges render on each kit child and each plain line; a kit parent shows none (decision 9 — the SKU actually handled).
+- **Mobile `dg` parse:** a `dg.unNumber` carrying the `UN` prefix is dropped (the server always strips it).
+
+**Verification run:** wms-be `db:migrate` (0083's probes pass), `db:generate` (no changes), lint, typecheck, the full jest suite (104 suites; the one failure — the chunk size above — fixed and its suite re-run green), `openapi:export`; wms-fe `api:generate`, lint, typecheck, `bun run test` (2,126 pass), build, `check:capability-mirror`; wms-mobile typecheck, test (731 pass).
 
 ## Spec Change Log
 
@@ -295,6 +307,24 @@ All backend paths are under `workspace/core/backend/wms-be/`.
 - D28 low (F10, F11): empty state; accessibility. Specified.
 - D29 low (F12, F13): the create-body pin; the import help grammar. Specified.
 - D30 low (F14, E11): kit child and read-only pack lines; capture-only fields shown only in the form; snapshot staleness; explosive compatibility groups. Stated, or sent to PENDING.
+
+**Code review, 2026-10-20.** Three layers: blind hunter (H1–H11), edge-case hunter (C1–C6), verification gap (V1–V3). 20 findings, 13 after merging duplicates: 9 patched, 4 rejected (some groups merge a patched finding with a rejected one). No loopback: no finding traced to the frozen intent or to a spec gap. Re-checked by hand: the full wms-be run (104/104 suites, 2577 tests) passed with the 1,000-row insert chunk.
+
+- C1 / H1 medium, patch: import row errors carry API wording ("or null for none", "send allergens: []"), so a user who types `null` is refused again. CSV wording, pinned.
+- C3 medium, patch: the `hazard_class` cell was case-sensitive except for `none`, against the spec's case-insensitive rule. Lowercased.
+- H3 medium, patch: the `skus_dg_hazard_derived` arms (a hand copy of `DG_HAZARD_MAP`) were probed only for classes 3 and 8. An e2e walks every mapped class against the DB.
+- V2 medium, patch: the snapshot's `dg` was tested only at the facade, below the controller copy. A route-level assertion was added.
+- H9 / V1 medium, patch: the create card reset a chosen hazard on a free → free DG switch (9 → 4.1), creating an unclassified SKU; the reset was untested at form level. It now keeps the choice, with form tests on both forms.
+- H6 / V3 medium, patch: the web copies of the map, the no-packing-group list and the vocabularies were unpinned. Exact-equality tests.
+- H10 low, patch (wording): `{dgClass:null}` with a stored UN number said "dgClass is missing". The detail now names what to clear.
+- H5 low, patch (comment): the stale "12 sku columns" chunk comment.
+- C2 low, patch: folded into C1 (the allergen and packing-group CSV wording).
+- C4 / H2 low, reject: create hashes `hazardClass` as `?? null` (pre-1-6a), so absent and null share a hash; explicit null on nullable goods keys hashes apart from absent. Both need a client to resend one key with a semantically different body. Changing the hash for hazard would break pre-1-6a keys (decision 10).
+- C5 low, reject: the receive note shows on the scan banner, as specced; later commit and quantity banners replace it.
+- C6 / H7 low, reject: the web badge ("DG 3 (6.1) · UN1230 · PG II") and the handheld note ("DG 3 (6.1) UN1230 PG II") differ in separators. Both strings are the spec's own (Boundaries web bullet; matrix "Handheld note" row).
+- H4 low, reject: OpenAPI `maxItems: 2` vs the DTO's larger `ArrayMaxSize` (duplicates fold first); the command enforces 2. Negligible.
+- H8 low, reject: a malformed `dg` is dropped on the handheld. The DB CHECKs make a malformed server value unreachable.
+- H11 low, reject: 0083 adds its CHECKs as separate statements under `ACCESS EXCLUSIVE`. `skus` is small (the 1-4b H9 reasoning).
 
 ## Design Notes
 
