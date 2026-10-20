@@ -75,6 +75,15 @@ There is **no delete command** (the append-only philosophy) and no per-axis valu
 | `shelf_life_days` | integer | **YES** | — | `skus_shelf_life_days_check` 1–3650 (0080) | 1-4: total shelf life in days from manufacture; roadmap 2.4 derives expiry from it. Not the client policy's `minShelfLifeDays` (minimum *remaining* life) |
 | `status` | text | NO | `'active'` | `skus_status_check` (`active`,`inactive`, 0082; `SKU_STATUSES`) | **1-4b:** `inactive` = no new inbound, kits or channel mappings; sells down only what stock covers in full; publishes 0. Every existing document, list and stock read still shows it. Master records deactivate, never delete |
 | `inactive_reason` | text | **YES** | — | `skus_inactive_reason_pairing` (NULL unless inactive), `skus_inactive_reason_length` (1–500, 0082) | 1-4b: why it was deactivated — trimmed by the command, blank = absent; replaced by a new reason, cleared only by reactivating |
+| `drug_schedules` | text[] | NO | `'{}'` | `skus_drug_schedules_check` (⊆ `G, H, H1, X, C, C1, NDPS`, 0083) | 1-6a: a drug may carry several (C + H). Stored sorted and unique. Captured only — 1-6c (licences) acts on it |
+| `food_category` | text | **YES** | — | `skus_food_category_check` (13 values) | 1-6a: `non-food` = declared not food; null = not set. Captured only (1-6b) |
+| `allergens` | text[] | NO | `'{}'` | `skus_allergens_check` (⊆ the FSSAI 2020 nine), `skus_allergens_food_pairing` (non-empty only with a category that is not `non-food`) | 1-6a: sorted and unique. Captured only (1-6b) |
+| `dg_un_number` | text | **YES** | — | `skus_dg_un_number_check` (four digits 0001–3599, one regex — no cast), `skus_dg_un_class_pairing` | 1-6a: stored without the `UN` prefix (the API accepts `UN1203`) |
+| `dg_class` | text | **YES** | — | `skus_dg_class_check` (1.1–1.6, 2.1–2.3, 3, 4.1–4.3, 5.1, 5.2, 6.1, 6.2, 7, 8, 9), **`skus_dg_hazard_derived`** | 1-6a: the primary DG class; **derives `hazard_class`** (decision 3, below) |
+| `dg_subsidiary_classes` | text[] | NO | `'{}'` | `skus_dg_subsidiary_classes_check`, `skus_dg_subsidiary_classes_bounds` (≤ 2, never the primary), `skus_dg_subsidiary_pairing` (need a primary) | 1-6a: captured and shown; nothing reads them yet (1-6b) |
+| `dg_packing_group` | text | **YES** | — | `skus_dg_packing_group_check` (I, II, III), `skus_dg_packing_group_pairing` (needs a class; none for 1.x, 2.x, 5.2, 6.2, 7) | 1-6a: optional — captured only |
+| `high_value` / `fragile` | boolean | NO | `false` | — | 1-6a: handling warnings (web badges, handheld notes). High value is a marker only; placement stays governed by storage class |
+| `max_stack_layers` | integer | **YES** | — | `skus_max_stack_layers_bounded` (1–100) | 1-6a: how many of the SKU's outermost received units may stand on one another; `1` reads "Do not stack". Shown, **not enforced** |
 
 ### `uom_conversions`
 `sku_id` · `uom` text NOT NULL, guarded by **`uom_conversions_uom_check`** (`0027:352`) — a *separate* constraint from `skus_uom_check` (`0027:351`) with the same value list, so **widening one without the other is a live bug the shared naming hides** · `factor` **integer** NOT NULL. `unique (sku_id, uom)`.
@@ -198,6 +207,37 @@ sequenceDiagram
 - **Receiving** books a blind or unmatched inactive line and raises one `grn.inactive-sku-received` review row per receipt (`inactiveSkuGrnLinesOpId`, payload `{grnId, grnCode, lines:[{skuId, skuCode, qty, uom}]}`, Discard only — the web's Acknowledge); the GRN snapshot carries `inactiveSkuReviewOpId` only when raised.
 - **Replenishment** treats an inactive SKU like a departed client's (no breach, an open one recovered) and dismisses its standing draft; the expiry scan is unchanged.
 - **Reads**: `SkuResponse` carries `status` / `inactiveReason` (`normalizeStoredSku` serves `?? 'active'` / `?? null`); `GET …/catalog/skus?status=` filters, absent lists every SKU; the device snapshot's SKUs carry `status`; `portal/skus` leaves inactive SKUs out.
+
+### Goods-type attributes (story 1-6a)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Ops
+  participant Ctl as catalog.controller
+  participant Cmd as SkuCommand.edit
+  participant G as goods-type.ts
+  participant PG as Postgres
+  Ops->>Ctl: PATCH /catalog/skus/:id {dgClass: '3', dgUnNumber: 'un1203'}
+  Ctl->>Ctl: explicit null on highValue / fragile / an array → 400
+  Ctl->>Cmd: edit
+  Cmd->>G: canonicalGoodsType (strip UN, sort + de-dup arrays)
+  Note over Cmd: hash the present keys → sku.edit → replay → SKU FOR UPDATE → replay
+  Cmd->>G: mergeGoodsType(row, fields) (!== undefined, never ??) → assertGoodsType(merged)
+  Cmd->>G: resolveHazardClass(merged.dgClass, stored, requested) → effectiveHazard
+  Note over Cmd: effectiveHazard ≠ stored → the 12-2 co-location guard (409) and the write
+  Cmd->>PG: UPDATE (goods fields + hazard_class = 'flammable')
+  Cmd-->>Ops: 200 {sku}
+```
+
+- **One rule set: `src/shared/primitives/goods-type.ts`** — the tuples, `DG_HAZARD_MAP`, `DG_CLASSES_WITHOUT_PACKING_GROUP`, `canonicalGoodsType`, `goodsTypeProblem` / `assertGoodsType` (400 `validation-failed` naming the field — the import maps it to the column), `hazardResolution` / `resolveHazardClass`. Create, edit and import all call it; unit-pinned rule by rule in `goods-type.spec.ts`, the matrix in `test/sku-goods-type.spec.ts`.
+- **DG sets hazard (decision 3).** 1.x → `explosive`, 2.x → `gas`, 3 → `flammable`, 5.1 → `oxidizer`, 6.1 → `toxic`; 8 → the user chooses `corrosive-acid`, `corrosive-base` or explicit none (a corrosive set to none is not segregated until 1-6b); 4.x, 5.2, 6.2, 7, 9 derive nothing. `skus_dg_hazard_derived` is the DB backstop (`IS NOT DISTINCT FROM`, so a null hazard beside a mapped class fails).
+- **`resolveHazardClass` (decision 7).** Mapped (not 8): absent → derived (replacing any stored class); equal → it; anything else, `null` included → `400 dg-hazard-mismatch`. Class 8: acid/base/`null` → that; absent → the stored value when it is a corrosive or the DG class is unchanged, else `400 dg-hazard-required`; other → mismatch. Unmapped or no DG class: as before 1-6a (absent keeps the stored value). A hazard-only PATCH is judged against the stored DG class. Create and import have no stored state: absent/blank derives, class 8 must name its choice (import cell `none`).
+- **The edit pipeline.** `effectiveHazard` is held OUTSIDE `fields` — `fields` is hashed, and a value derived from stored state would make one request hash differently by row. When it differs from the stored class it drives both the guard (the old gate `fields.hazardClass !== undefined` would have let a DG-only PATCH skip both the guard and the write) and the update.
+- **Canonical before hashing (decision 10).** The `UN` prefix is stripped and arrays sorted/de-duplicated before the hash, so `UN1203` and `1203`, or reordered allergens, replay. The create hashes each goods-type key **only when present** (after `barcodes`, before the conditional `clientId`) — a pre-1-6a body hashes byte for byte as before (golden in the suite). The edit appends them last to its spread. `hazardClass: null` and absent both hash `null` on the create (the pre-1-6a shape) — wherever both commit they leave the same class.
+- **Nothing else couples (decision 8).** DG and drug schedule never touch `storage_class`; food, DG and drug fields coexist (UN3065 alcohol); every edit is allowed while stock exists — the only stock-aware check is the existing hazard guard on a hazard change. Kits take the fields like any SKU, display only.
+- **Reads.** `SkuResponse` carries all ten (`normalizeStoredSku` serves `[]`/`null`/`false` on a pre-1-6a replay). The device snapshot's SKUs carry only the handling arm: `fragile`, `highValue`, `maxStackLayers`, `dg: {unNumber, class, subsidiaryClasses, packingGroup} | null` (`SkuSummary.dg`, `CatalogSnapshotDgDto`); drug schedule, food category and allergens are captured for 1-6b/1-6c and not sent.
+- **No new capability, audit action or event** — `sku.edit`, `sku.edited`, `catalog.sku_edited`.
 
 ### CSV import — the only creator of SKUs (until 1-4)
 
@@ -344,7 +384,7 @@ Guards, in the order they actually run:
 5. Replay lookup `:175`.
 6. Fix-set resolution (fix mode only) `:212-231`.
 7. Per-row validation, then duplicate detection.
-8. Bulk insert of valid rows, chunked at 2,000.
+8. Bulk insert of valid rows, chunked at 1,000 (2,000 before 1-6a).
 
 Writes: `skus`, `uom_conversions`, `kit_compositions` (11.6 — the kit resolution pass), `catalog_imports`, `catalog_import_errors`, `audit_events` (**9-3a:** one `catalog_import.executed` row, target `catalog_import` → the import row), `idempotency_keys`. Emits `catalog.imported` with the counts, plus one `catalog.kit_created` per composition the kit pass created (11.6 — the same `kitEventPayload` builder KitCommand uses).
 
@@ -404,7 +444,7 @@ Duplicate checks run afterwards because they need the whole file plus the tenant
 
 The counts overlap on a kit refusal: **the SKU row and the kit failure are counted independently**, so `committedRows + failedRows` can exceed the file's row count. This is honest and deliberate — a refused kit cell does not un-commit its SKU. Only the **PUT kit route** can retry the composition: fix mode cannot, because the committed SKU is refused `duplicate-sku-code` on resubmit before the kit pass ever runs. The FE import card states this and points at the Kit action.
 
-Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`, `duplicate-variant-values` (11.3), and the kit-pass row codes (11.6): `kit-component-not-found`, `kit-self-reference`, `kit-component-is-kit`, `kit-already-composed`, `kit-sku-holds-stock`, `duplicate-kit-component`, `empty-kit-composition`.
+Machine codes clients branch on: `validation-failed`, `duplicate-sku-code`, `duplicate-barcode`, `duplicate-variant-values` (11.3), the kit-pass row codes (11.6): `kit-component-not-found`, `kit-self-reference`, `kit-component-is-kit`, `kit-already-composed`, `kit-sku-holds-stock`, `duplicate-kit-component`, `empty-kit-composition`, and (1-6a) `dg-hazard-mismatch`, `dg-hazard-required`.
 
 ### Fix mode (`import.command.ts:212-231`)
 
@@ -428,7 +468,7 @@ A fix upload is a full file, not a delta — the operator re-submits the correct
 
 ### Header contract and parsing
 
-Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `storage_class` (12-1), `hazard_class` (12-2), `reorder_point`, `reorder_qty`, `barcode`, `product`, `variant_values` (11.3), `kit_components` (11.6) (`:88-102`). An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2, 11.3 and 11.6 through the parser**: a CSV carrying the new columns against a pre-story binary would be rejected wholesale, so the header contract and the row parser grew together.
+Shared by both formats: required `sku_code`, `name`, `uom`, `gst_rate`; optional `uom_conversions`, `hsn`, `batch_tracked`, `serial_tracked`, `catch_weight_tracked`, `weight_grams`, `length_mm`, `width_mm`, `height_mm`, `country_of_origin`, `storage_class` (12-1), `hazard_class` (12-2), `reorder_point`, `reorder_qty`, `barcode`, `product`, `variant_values` (11.3), `kit_components` (11.6), and since 1-6a the ten goods-type columns after `barcodes` (`drug_schedules`, `food_category`, `allergens`, `dg_un_number`, `dg_class`, `dg_subsidiary_classes`, `dg_packing_group`, `high_value`, `fragile`, `max_stack_layers`). A **blank `hazard_class` is ABSENT since 1-6a** — a mapped `dg_class` derives it; `none` is the explicit none. An unknown column, a duplicate column, a missing required column, or a file with no data rows is 400 `file-unreadable` — **which is what forced 11.2, 11.3 and 11.6 through the parser**: a CSV carrying the new columns against a pre-story binary would be rejected wholesale, so the header contract and the row parser grew together.
 
 **The reader is shared since the ASN import (2026-10-17):** CSV/XLSX parsing, the header contract, blank-row filtering and the row cap moved verbatim to `src/shared/import/sheet-reader.ts` (`readSheet`), with the file-level refusals (`importTooLarge`, `unsupportedFileType`, `fileUnreadable`) and the upload filter (`SheetUploadFilter`, `shared/import/upload-filter.ts` — it was `CatalogUploadFilter` in the catalog controller). The catalog calls it with the reader's defaults, so its behaviour and its tests are unchanged; the ASN import opts into ignoring unknown columns, spreadsheet row numbers, naming every missing column (`missing-columns`) and IST wall-clock date cells.
 
@@ -438,7 +478,7 @@ Three parser traps handled explicitly:
 - **XLSX**: a workbook with more than one worksheet is rejected — only the first would silently win (`:594-596`). `cellText` (`:655`) unwraps formulas (`{result}`), rich text, dates and booleans.
 - **Duplicate header column**: rejected in both formats because the last occurrence would silently win.
 
-Bulk inserts are chunked at 2,000 rows (`INSERT_CHUNK_ROWS`, `:405`): Postgres binds at most 65,535 parameters per statement, and 10,000 rows × 12 columns would exceed it and 500 a file that passed the row cap.
+Bulk inserts are chunked (`INSERT_CHUNK_ROWS`): Postgres binds at most 65,535 parameters per statement, and the `skus` insert binds one per **column** per row. **1-6a cut the chunk from 2,000 to 1,000 rows:** the goods-type columns took a `skus` row to ~37 parameters, so 2,000 rows bound ~74k and the 5,000-row acceptance import 500'd (`test/catalog.spec.ts` caught it). **Adding a `skus` column re-opens this arithmetic** — rows × columns must stay under 65,535.
 
 ### The UoM vocabulary (`uom.ts`)
 
@@ -513,6 +553,8 @@ The rule is a **precision lookup**, not a hand-maintained list of "discrete" spe
 | A barcode equals no SKU code of its client — **enforced on every write since 1.4** (create, edit, PUT, import, correction — `barcode-is-code`); pre-1.4 rows are not surveyed | the write paths only, no constraint |
 | Tracking flags never change while the SKU has stock or pending stock (1-4) | `sku-has-stock` under the SKU row lock |
 | Kit-ness is derived, never stored — a kit **is** a SKU with composition rows | Every "is a kit" question is a `getKitSkuIdsInTx` SELECT; no flag column exists to drift from the rows (11.4) |
+| A mapped DG class's SKU carries its derived hazard class; class 8 carries a corrosive or none (1-6a) | `resolveHazardClass` at every write path + `skus_dg_hazard_derived` |
+| Goods-type arrays are stored sorted and unique; the pairing rules hold (UN ↔ class, subsidiaries/PG need a class, allergens need food) (1-6a) | `canonicalGoodsType` + `assertGoodsType` at every write path + the 0083 CHECKs |
 | A kit never holds independent stock (FR-38) | 409 `kit-cannot-hold-stock` at all three +stock writers (GRN submit, `stock.adjust`, over-receipt **approve**); the create-side twin `kit-sku-holds-stock` refuses creating a kit on stock or a live reservation; the GRN-vs-kit-create race is closed by matching id-ordered sku-row `.for('update')` locks on both sides |
 | The BOM is flat — one SELECT resolves any composition | `assertComponentsAreNotKits` 409 `kit-component-is-kit`; no recursion anywhere |
 | Concurrent mutual compositions cannot both commit | `lockSkus` takes `.for('update')` on kit + component sku rows in id order — the loser re-reads committed state and refuses |
@@ -541,6 +583,8 @@ Both appended in-transaction through `OUTBOX_SINK`; a replay returns before the 
 ---
 
 ## Gotchas
+
+**A derived value must reach the guard and the write, not only the response (1-6a design review).** The 12-2 hazard guard and the update were both gated on `fields.hazardClass !== undefined`, so a DG-only PATCH that derives `explosive` would have skipped the co-location guard and never written the class. Any rule that derives a stored column from another field drives the existing guard condition and the write from the RESOLVED value (`effectiveHazard`), held outside the hashed `fields`.
 
 **A takes-work guard must be fed what is NEW, not the whole request (1-4b).** Every write path the inactive guard covers is a replacement (amend lines, a mapping set, a kit composition): guarding the whole request locks users out of editing anything that keeps an inactive SKU, and guarding only id-less lines misses a kept line re-pointed to an inactive SKU. Judge against the stored state (`skusGainingInbound`, the stored pair set, the full stored composition — the kit PUT's old `.limit(1)` probe was not enough).
 
