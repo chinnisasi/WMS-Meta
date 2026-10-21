@@ -138,9 +138,18 @@ Two sources, both authoritative:
 - **GRN sequence exhaustion** should be a typed 409; `occurredAt` drift needs a bound decision *(epic-3 retro a14)*
 - **A closed PO whose receipts were retargeted to its successor shows nothing under "Receipts in the ledger"** *(9-3a code review FE6)* — since 21-9 a receipt against a closed PO with an open successor is booked against the successor (`poId` = the successor), so `GET …/inventory/events?poId=<closed PO>` lists only the receipts made before the close. 9-3a fixed the empty state's wording ("No receipt events for PO … yet."); the link itself still says nothing about the successor. Linking the successor from the closed PO's row, or filtering on the PO chain, would close it
 
+### gate-in (2-3a)
+
+- **Returnable empties are not recorded** — crates, pallets and drums the truck brings back (or must take back) have no field on the gate-in; a returnable-packaging ledger per partner is its own story *(2-3a decision 12)*
+- **Several seals are one comma-separated field** — `seal_number` holds `S-991, C-12` as typed; a per-seal status (one intact, one broken) needs a child table *(2-3a decision 12)*
+- **The GRN card's time is browser-local** — `GoodsReceiptsCard` renders `occurredAt` in the viewer's zone while the gate-in surface renders IST through `istDateTimeLabel`; the card should move to IST too *(2-3a)*
+- **Stale open gate-ins are flagged, never closed** — a gate-in left `gated_in`/`unloading`/`unloaded` more than 7 days shows "Open > 7 days" on the web and leaves the device (decision 15); nothing gates it out or alerts anyone. A sweep or a notification is a later story *(2-3a decision 15)*
+- **Dock appointments and the dock-door master are 2-3b** — the dock door is a typed code (≤ 20) until then *(2-3a decision 6)*
+- **Two desks editing one gate-in: last write wins** — the amend is a full replacement under the row lock, with no version check; the second desk's save overwrites the first's without a warning *(2-3a, stated)*
+
 ## partners (story 1-3)
 
-- **Consignee and transporter pickers** — the partner master holds them, but orders, e-way bills and gate-in keep their free-text fields until roadmap 2.3 (gate-in transporter), 4.1/4.2 (order consignee + several ship-to addresses) and 4.9 (B2B freight) add pickers *(1-3 decision 6)*
+- **Consignee and transporter pickers** — the partner master holds them, but orders and e-way bills keep their free-text fields until roadmap 4.1/4.2 (order consignee + several ship-to addresses) and 4.9 (B2B freight) add pickers *(1-3 decision 6)*. ~~Gate-in transporter (2.3)~~ **done in 2-3a** — the gate-in picks an active transporter partner (`assertTransporterInTx`) or takes a typed name
 - **A contact list and several ship-to addresses per partner** — one contact and two addresses sit on the row today *(1-3 decision 3, roadmap 4.2)*
 - **Portal reads of a client's own links** — `partner_client_links` already carries the 0041 client clause; no portal route reads it *(1-3 decision 8)*
 - **Not built, by decision:** lead time on a link, a vendor import, a GSTIN checksum check, a capability rename (`vendor.manage` guards the whole partner master) *(1-3 Never list)*

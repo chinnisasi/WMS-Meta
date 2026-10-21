@@ -19,7 +19,7 @@ Files: `src/modules/partners/partners.command.ts`, `partners.facade.ts`, `partne
 
 Vocabularies (`schema.ts`): `PARTNER_ROLES`, `PARTNER_LINK_ROLES` (vendor, consignee — **a transporter is never linked**), `PARTNER_STATUSES` — pinned against the CHECKs by `test/business-partners.spec.ts`.
 
-**Decisions.** A partner is **one GST registration** — a company registered in two states is two partners; PAN is not unique (decision 5). Status is `active | inactive` plus a reason; D3's "blocked" is the same thing for new documents, and open POs keep receiving (decision 1). One contact and two addresses sit on the row; contact lists and several consignee ship-tos wait for roadmap 4.2 (decision 3). The capability stays `vendor.manage` (decision 4). Consignees and transporters are master records only — orders, e-way bills and gate-in keep their free fields until 2.3 / 4.1 / 4.2 / 4.9 add pickers (decision 6). Nothing is ever deleted.
+**Decisions.** A partner is **one GST registration** — a company registered in two states is two partners; PAN is not unique (decision 5). Status is `active | inactive` plus a reason; D3's "blocked" is the same thing for new documents, and open POs keep receiving (decision 1). One contact and two addresses sit on the row; contact lists and several consignee ship-tos wait for roadmap 4.2 (decision 3). The capability stays `vendor.manage` (decision 4). Consignees and transporters are master records only — orders and e-way bills keep their free fields until 4.1 / 4.2 / 4.9 add pickers (decision 6); **the gate-in (2-3a) is the first document to pick a transporter** (`assertTransporterInTx`, below), with a typed name as the alternative. Nothing is ever deleted.
 
 ## API
 
@@ -61,6 +61,7 @@ Hash discriminators: `arm: 'partner-create' | 'partner-update' | 'partner-status
 - `assertVendorLinkedInTx(tx, tenant, vendorId, clientId)` → `VendorSnapshotV1` — the PO guard (below).
 - `findDefaultVendorForClientInTx(tx, tenant, clientId)` → `{id, code, name} | null` — the active partner holding the vendor role whose active vendor link is the client's default.
 - `partnerNamesInTx` — the device snapshot's fallback name read.
+- **`assertTransporterInTx(tx, tenant, partnerId)` → `TransporterSnapshotV1` (story 2-3a)** — the gate-in's transporter guard: the partner row `FOR KEY SHARE` (no link — a transporter is shared by every client); unknown 404 · `409 partner-not-transporter` · `409 transporter-inactive`; returns `vendorSnapshotOf`'s v1 shape (`TransporterSnapshotV1` is an alias), frozen on `gate_ins.transporter_snapshot`. A gate-in amend re-runs it only when the transporter changes.
 - `PartnersFacade.list`.
 
 Architecture guard (`test/architecture.spec.ts`, "business partners are partners-module-owned"): only `src/modules/partners` writes either table (Drizzle or raw SQL, `vendors` included); siblings import only the facade, module or DTO; the command writes and never deletes; the PO command and the sweep go through the facade.
