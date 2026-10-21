@@ -150,6 +150,8 @@ Second index: `rejected_ops_tenant_status_created_at_id_idx` — the review queu
 
 **`SyncReportCommand`** (`sync-report.command.ts:471`, 5-6) export exists for the same reason: `recordSyncReport` (badge-in), `listRejectedOps` (any member, keyset), `resolveRejectedOp` (`review.decide`).
 
+**`BinLabelsService`** (2-10a, `bin-labels.ts`) is not exported either — only `TenancyController.printBinLabels` calls it. The renderer it calls lives in `src/shared/labels/` (pure, no DB) so 2-10b's LPN labels and later documents reuse it.
+
 **`UsersCommand`** and the bin/zone/warehouse commands are **not** exported — they are reachable only through this module's own controllers.
 
 ---
@@ -534,6 +536,37 @@ Capacity is the one quantity in the system with **no unit at all** — a bin hol
 **The DAMAGED bin (story 2-4a).** `ensureDamagedBinInTx` is the RETURNS ensure's twin — both now share `ensureReservedSystemBinInTx` (zone + bin code `DAMAGED`, zone name `Damaged`, `system_owned`, `staging`, the 1M sentinel), lazily ensured by the first receipt whose settling lines carry damage (never on a good-only receipt, so a pre-rule collision blocks only damage). Inventory's `damagedUnits` subtracts it from ATP. `assertNotReservedLocationCode` reserves `DAMAGED` beside `RETURNS` (`RESERVED_LOCATION_CODES`; zone create, bin create and grid generation answer 409 `reserved-location-code`, the detail naming the system location); migration 0087 **re-codes** every pre-rule user zone and bin coded `DAMAGED` (retired included) to `DAMAGED-<first 8 of its id>`, naming each in a NOTICE — nothing in the product could free the code (codes cannot be renamed, a retired bin keeps its code, zones cannot be retired; code review CR1). `damaged-bin-conflict` (a user bin or zone coded `DAMAGED`) is therefore a defensive arm only; its detail names the location's id for an administrator to re-code, never a retire. Proved by `test/receipt-condition-migration.spec.ts`. Count, transfer, merge, retire, pick, replan and putaway exclude it as system-owned; the QC-hold origin refuses it by code; the adjustment allows only a write-off.
 
 The QC-hold re-select additionally requires `systemOwned = true` (`:169`): adopting a user-created bin named `QC-HOLD` would park stock where the ATP hook counts zero.
+
+### Bin labels (story 2-10a — `bin-labels.ts`, `src/shared/labels/`)
+
+`POST …/warehouses/{w}/bins/labels` prints bin labels as **ZPL** (203-dpi Zebra) or **PDF** — a file download, served through the IMPLEMENTATION-GUIDE §6 binary pattern (`@Res()`, every refusal thrown first, then `Content-Type`, `Content-Length`, `Content-Disposition`, `Cache-Control: no-store`, `res.end`). It is a **read**: no idempotency key, no audit row, no outbox event; capability `labels.execute` (owner, ops_manager, operator).
+
+```mermaid
+sequenceDiagram
+  participant W as Web (BinLabelsDialog)
+  participant C as TenancyController.printBinLabels
+  participant S as BinLabelsService.render
+  participant DB as Postgres (one tenant tx)
+  participant L as shared/labels
+  W->>C: POST {binIds | zoneId, format, layout, size}
+  C->>C: assertOwnTenant
+  C->>S: assertCanPrint (labels.execute, 403 before any 400)
+  C->>C: uuid warehouseId, xor (null = absent) / case-only duplicate ids / a4 rules (400)
+  C->>S: render
+  S->>DB: assertPermission(labels.execute) → warehouse code (404)
+  S->>DB: bins by id (lower-cased; each in this warehouse, else 404) | zone (404) → its printable bins, ONE read limited to 1001 (0 → 404 no-bins-to-print, >1000 → 422)
+  S->>DB: zone codes; dedicated clients' codes via listClientsInTx (clients facade, AD-6)
+  S->>S: refusals: retired → system → barcodable → fit (422 + binCodes)
+  S->>S: sort (numeric collation, code, id)
+  S->>L: renderBinLabelsZpl / renderBinLabelsPdf
+  C-->>W: 200 file (the web names it: bin-labels-<WH>-<YYYYMMDD>.<ext>)
+```
+
+- **The label.** The code in large text, a **Code 128 start-B of exactly the code** (`code128.ts`, in-house — no barcode library; ZPL `^BCN,h,N,N,N,N` with `>:` and `>` escaped `><`, so the symbol is exactly `11·n + 35` modules), `<ZONE> - <WAREHOUSE>`, and a small line with the storage class when not `ambient` and `CLIENT <code>` when dedicated. Every string is `asciiFold`ed (non-ASCII → `?`) before ZPL or PDF; ZPL text goes through `^FH` with `_5E`/`_7E`/`_5F`. No printer configuration commands.
+- **Sizes.** `label` layout 4x2 in (812 × 406 dots / 288 × 144 pt) or 2x1 in (406 × 203 / 144 × 72); `a4` (PDF only) is a fixed 3 × 8 grid of 70 × 36 mm cells. Bars are ≥ 2 units (2 dots, or 2 × 0.127 mm) with 10-module quiet zones, which caps a code at **28 characters (4x2), 11 (2x1), 18 (A4)** — `layout.spec.ts` pins them; a longer code is `422 bin-code-too-long-for-label`.
+- **Printable bins.** Non-retired, non-system bins. A listed retired or system bin is refused (`422 bin-retired` / `bin-not-printable`); a zone print skips them silently. Bin create is **not** tightened: a code outside printable ASCII is accepted at create and refused here (`422 bin-code-not-barcodable`; PENDING).
+- **Handheld: no change.** Every bin scan matches `value.trim()` exactly against the bin code, and the camera reads `code128` — so the printed symbol, which is the code byte for byte, is what the scan resolves.
+- **Tests.** `src/shared/labels/*.spec.ts` (the encoder, escaping, folding, the fit limits, a byte-for-byte ZPL golden, PDF bars decoded back); `test/bin-labels.spec.ts` (every refusal arm, the sort, the portal fence, tenant isolation, route order, 1000 labels as A4 PDF in < 15 s). `test/support/labels.ts` reads a ZPL or PDF label back to its payload.
 
 ---
 
