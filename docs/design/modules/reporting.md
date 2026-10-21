@@ -1,6 +1,6 @@
 # Reporting module
 
-> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. Story 9-3a adds the **audit trail read** (FR-28) — the owner's filterable, cursor-paged view of `audit_events`, the module's third read-only exception. The async **export** of that trail (9-3b) is tenancy's, not this module's: its three routes sit beside the trail in the api shell's `ReportingController`, which calls `TenancyService` — reporting gains no code and no fourth exception (§The audit trail → *The export*).
+> The operational dashboard (FR-27, story 9-1): a per-warehouse read model that computes ten KPI tiles as projections over the owning modules' records, served by one Overview endpoint, with every figure naming the exact list behind it. Story 21-8 adds the **per-client service report** (CAP-10) — one read behind an operator route and a portal route. Story 9-3a adds the **audit trail read** (FR-28) — the owner's filterable, cursor-paged view of `audit_events`, the module's third read-only exception. The async **export** of that trail (9-3b) is tenancy's, not this module's: its three routes sit beside the trail in the api shell's `ReportingController`, which calls `TenancyService` — reporting gains no code and no fourth exception (§The audit trail → *The export*). Story 5-3a adds the **operational registers** — stock on hand, the inbound and outbound registers, the ledger and batch ageing as client-filtered CSV/XLSX downloads behind one route. They are **not** a read-model exception: every row comes from a read on the owning module's facade (§The operational registers).
 
 Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line` below is relative to `wms-be/`. Read `../IMPLEMENTATION-GUIDE.md` first — and its §7a, the read-only exception this module exists under.
 
@@ -8,7 +8,7 @@ Source: `workspace/core/backend/wms-be/src/modules/reporting/`. Every `file:line
 
 ## Owns
 
-**No tables.** The module is a read model: `kpis.ts` (one function per tile), `window.ts` (the IST windows), `sql.ts` (the SQL helpers `rowsOf`/`n`/`nf`/`ratio`/`ts`/`countingSinceInTx`, moved out of `kpis.ts` by 21-8), `service.ts` (21-8 — the service report's period guard and queries), `audit.ts` (9-3a — the audit trail read, `audit_events` only), `reporting.facade.ts` (the warehouse check, the best-effort runner, the service reads, the audit guard and read). It exports `ReportingFacade` alone; the api shell is its only consumer — `ReportingController` (`src/api/reporting.controller.ts`, DTOs in `src/api/reporting.dto.ts`) and, since 21-8, `PortalController`'s `GET portal/service`.
+**No tables.** The module is a read model: `kpis.ts` (one function per tile), `window.ts` (the IST windows), `sql.ts` (the SQL helpers `rowsOf`/`n`/`nf`/`ratio`/`ts`/`countingSinceInTx`, moved out of `kpis.ts` by 21-8), `service.ts` (21-8 — the service report's period guard and queries), `audit.ts` (9-3a — the audit trail read, `audit_events` only), `reporting.facade.ts` (the warehouse check, the best-effort runner, the service reads, the audit guard and read, and — 5-3a — the register download), `registers.ts` (5-3a — the register registry: columns, period rule and facade read per register; the slots class). It exports `ReportingFacade` alone; the api shell is its only consumer — `ReportingController` (`src/api/reporting.controller.ts`, DTOs in `src/api/reporting.dto.ts`) and, since 21-8, `PortalController`'s `GET portal/service`.
 
 The two facts the dashboard needed that nothing stored before are **outbound-owned**, not reporting's (see `outbound.md`):
 
@@ -46,10 +46,12 @@ The exception is bounded by guards in `test/architecture.spec.ts` ("reporting is
 | `portalServiceReport` | same | 21-8: the same read, its transaction stamped `{ clientId }` (the `PORTAL_READS` architecture scan reads this body) | `GET /tenants/{t}/portal/service` (client from `PortalSession`) |
 | `auditTrail` | `(tenantId, actorUserId, AuditTrailQuery) → Page<AuditTrailEntry>` | 9-3a: `audit.view` guard in its own transaction (403 `role-denied`), then one page of `audit_events` under a 5 s budget (503 `report-unavailable`) | `GET /tenants/{t}/reporting/audit` — **never a portal read** |
 | `auditRead` | `(tx, tenantId, query) → Page` | a plain field set to `readAuditPageInTx`, so a suite can force a statement timeout without a second production path (the `serviceRead` precedent) | `auditTrail` only |
+| `register` | `(tenantId, warehouseId, {report, format, clientId, from?, to?}, now = new Date()) → RegisterFile` | 5-3a: the period rule (400), a slot (503), then ONE repeatable-read, read-only transaction under a 15 s whole-read deadline: warehouse (404 `unknown-warehouse`), the register's facade reads, the 50,000-row cap (422); then the file is built (CSV or XLSX) | `GET /tenants/{t}/warehouses/{w}/reports/{report}` |
+| `registerSlots` / `registerDeadlineMs` / `registerMaxRows` / `registerRead` | plain fields | 5-3a: the process-wide slots, the budget, the cap and the read — a suite holds the slots, shrinks the budget or the cap, or forces a timeout without a second production path | `register` only |
 
 `Overview` = `{asOf, stale, window: {todayFrom, d7From, to}, tiles: {dockToStock, pickRate, shortPicks, grnVariances, orderAccuracy, oversell, expiryAlerts, syncHealth, dispatchPipeline, sm8}}`. Each tile carries `state: 'ok' | 'unavailable'`. Every figure is `{value: number | null, drill: {apiPath, query, reconciles}}`; a windowed figure is `{today, d7}` of those. `value` is null when the tile is unavailable **or** the figure has no data (an empty median or ratio) — never a fake 0. `drill` is always present, unavailable tiles included.
 
-Member-open, except the audit trail: the Overview and the service report are not capability-gated; `auditTrail` is owner-only (`audit.view`, 9-3a).
+Member-open, except the audit trail: the Overview, the service report and the registers (5-3a) are not capability-gated; `auditTrail` is owner-only (`audit.view`, 9-3a).
 
 ## The flow
 
@@ -248,6 +250,69 @@ sequenceDiagram
 **The export (9-3b) — tenancy's, routed here.** `POST /tenants/{t}/reporting/audit/exports` (queue an export of the applied filters; owner-only, keyed, audited, always 202), `GET …/reporting/audit/exports` (the caller's own last 20, unpaged) and `GET …/exports/{id}/file` (the gzipped CSV, requester-only) are declared on the api shell's `ReportingController` but call `TenancyService` — tenancy owns `audit_events`, `users` and the export tables, so the export needs no read exception, and **nothing under `src/modules/reporting` names the export** (pinned in `test/architecture.spec.ts`, "the audit exports are tenancy-owned"). The trail's FILTER moved to `src/shared/db/audit-filter.ts` so both readers use one definition (the `warehouse-filter.ts` precedent; tenancy may not import reporting): `audit.ts` calls `auditFilterSql` and re-exports `escapeLikePrefix`, `AUDIT_ACTION_PREFIX_RE` and `AuditFilters`, and this section's guard block now covers that file with the same rules. `AuditTrailQueryDto`'s filter fields moved to `AuditFilterBaseDto`, which the export body and its stored `filters` share — the trail's query parameters are unchanged. Details: `tenancy.md` §The async audit export.
 
 **Not here (PENDING):** anchoring and chain alerts in the export (9-3c), retention (9-3d); deep links from a target to its document; a portal audit read or a `client_id` on `audit_events`.
+
+## The operational registers (story 5-3a)
+
+**What they are.** The files operations, accounts and clients ask for — what is in stock, what came in, what went out, every movement, what is ageing or near expiry — as one read-only download, `GET /tenants/{t}/warehouses/{w}/reports/{report}?format=csv|xlsx[&clientId][&from&to]`. The web's Operational reports section on `/reports` is the only consumer. 5-3b (space utilisation, operator productivity, count accuracy) is not here (PENDING).
+
+```mermaid
+sequenceDiagram
+  participant W as web /reports Operational reports
+  participant C as ReportingController
+  participant F as ReportingFacade.register
+  participant M as owning facades (inventory, inbound, outbound, catalog, tenancy)
+  participant PG as Postgres
+
+  W->>C: GET warehouses/{w}/reports/{report}?format&clientId&from&to (parseAs blob)
+  Note over C: TenantSessionGuard (portal → 403)<br/>own tenant → 403; uuid / report name / format → 400
+  C->>F: register(t, w, query)
+  Note over F: period rule → 400 (dated: required + assertServicePeriod; snapshot: none)
+  Note over F: registerSlots.tryAcquire() — full → 503 report-unavailable, nothing read
+  F->>PG: BEGIN REPEATABLE READ, READ ONLY; setTxDeadline(15 s)
+  F->>PG: warehouse code → 404 unknown-warehouse
+  F->>M: the register's …RegisterInTx reads (each statement re-arms statement_timeout to the time left)
+  Note over F: row 50,001 → 422 report-too-large; 57014 → 503 report-unavailable
+  F-->>C: RegisterFile (the whole CSV / XLSX buffer)
+  C-->>W: 200 + headers, res.end(buffer)
+```
+
+**Not a read-model exception.** Unlike the tiles, the service report and the audit read, the registers read **through the owning modules' facades** (AD-6). `ReportingModule` imports `InventoryModule`, `InboundModule`, `OutboundModule` and `CatalogModule` (nothing imports reporting back), and reporting itself runs no register SQL:
+
+| Register | Rows | Facade reads | Period |
+|---|---|---|---|
+| `stock-on-hand` | bin × batch, non-zero | `InventoryFacade.stockOnHandRegisterInTx` (ONE statement: `batch_on_hand` ∪ `stock_on_hand` of **non**-batch-tracked SKUs — never both arms for one SKU, design review B3), `CatalogFacade.batchFactsByIdsInTx` | as of now (a `from`/`to` is 400) |
+| `inbound-register` | GRN line | `InboundFacade.inboundRegisterInTx` (the GRN `(tenant, warehouse, created_at, id)` keyset walk + that page's lines, PO `vendor_snapshot`, ASN, gate-in and its LINKED documents), catalog batch facts, tenancy display names | required |
+| `outbound-register` | order line | `OutboundFacade.outboundRegisterInTx` (the orders keyset walk + lines, the lateral latest shipment by `(labelled_at, id)`), `InventoryFacade.firstDispatchByOrderInTx` | required |
+| `ledger` | event | `InventoryFacade.ledgerRegisterInTx` (the `(tenant, [client,] warehouse, created_at, id)` keyset walk), `InboundFacade.grnCodesByIdsInTx`, catalog batch facts, tenancy display names | required |
+| `batch-ageing` | bin × batch with stock | `InventoryFacade.batchAgeingRegisterInTx` (ONE statement), catalog batch facts; sorted expiry ascending, none last, in TS | as of now |
+
+Every register also reads client codes through `clients.facade` `getClientsInTx`. The columns are the registry's (`registers.ts`; the header golden is `test/registers.spec.ts`).
+
+**Bounds (decision 2).** At most `REGISTER_MAX_ROWS` = 50,000 rows: each read is limited to 50,001 and the 50,001st is **422 `report-too-large`** ("narrow the filters"), thrown as soon as the facade read returns — before any lookup and before any byte. A **whole-read deadline** of `REGISTER_DEADLINE_MS` = 15 s: `setTxDeadline` (`shared/db/tx-deadline.ts`) registers it on the transaction and `rearmTxDeadline` — called by **every** facade register read before **every** statement — re-arms the transaction-local `statement_timeout` to the time left (`statement_timeout` is per statement — design review B2); a 57014 anywhere is **503 `report-unavailable`**, nothing partial. **Two process-wide slots** (`RegisterSlots`, the `TileSlots` idea without waiting): a third concurrent request is 503 `report-unavailable` **before** it opens a transaction. Every 503 sets `Retry-After: 5`; the 422 carries the cap as `maxRows` and advice per register (a snapshot: "pick a client"). The keyset walks take a page size (default the constant; `test/registers.spec.ts` walks each at 1 over `created_at` ties), and each page's line query is bounded to the rows still wanted + 1. Async export above 50k and per-tenant quotas are PENDING.
+
+**One snapshot (decision 5).** The whole read is ONE `REPEATABLE READ, READ ONLY` tenant transaction (`withTenantTransaction`'s new `accessMode: 'read only'`): the two snapshot registers are one statement each, the dated ones walk their keyset page by page (full-precision `::text` cursors) and every page — and every lookup after — sees the same snapshot.
+
+**Periods (decision 4).** `from`/`to` are inclusive IST dates under `assertServicePeriod` (the service report's rules and details — real dates, `from ≤ to`, ≤ 366 days); the window is `serviceWindow`'s `[istMidnightOf(from), min(istMidnightOf(to + 1), now))`, computed here and handed to the facades as instants, on each source's indexed `created_at` (GRN, order, ledger event). An event at 23:59:59 IST on `to` is in; 00:00 IST the day after is out (pinned). The ledger's `recorded_ist` column prints `recorded_at` while the window is on `created_at` (the transaction's start — the two differ by the command's own duration).
+
+**Client attribution and filter (decision 6).** `clientId` is the 1-5a rule (the shared `client-filter.ts` predicates — `skuOfClient` for stock and ageing, `orderOfClient` for outbound), compared lower-case — an unknown or another tenant's id is an **empty file** (the header only; filename segment `client-unknown`), a malformed one 400. Stock and ageing: the SKU's client. Inbound: the **line** SKU's client (`skuOfClient`) — a blind GRN with a null `client_id` is still attributed through its lines. Ledger: `ledger_events.client_id`. Outbound: `orders.client_id`.
+
+**Formats (decision 3).** Typed cells (`shared/export/cells.ts`: `text | number | instant | date`, asserted per column). **CSV** (`shared/export/csv.ts`): UTF-8 BOM, RFC 4180, the formula guard (`csvCell`) on **text only** — a negative quantity is the number `-5`, never `'-5` (design review B1). `csvCell` and `UTF8_BOM` moved here from `tenancy/audit-export.csv.ts`, which re-exports them (the audit export's bytes are unchanged — its suite passes). **XLSX** (`shared/export/xlsx.ts`): exceljs' streaming `WorkbookWriter` (`useSharedStrings: false`, `useStyles: true`) into a buffer; strings are inline strings (a `=…` string is never a formula), numbers numeric, instants and dates date cells shifted by `IST_OFFSET_MS` (exceljs writes a `Date`'s UTC fields as the wall clock) with `yyyy-mm-dd hh:mm:ss` / `yyyy-mm-dd`. **IST everywhere:** instants through the new `istWallClock` (`YYYY-MM-DD HH:mm:ss`), calendar dates (expiry, mfg — stored at IST midnight) through `istDateOf`, so an expiry prints its own date, never the UTC day before.
+
+**Privacy (decision 7).** No emails: actors print through `memberDisplayNamesInTx` (`tenancy.service.ts`). Members have no name column, so the display name is the **email's local part** (`ravi.kumar@acme.in` → `ravi.kumar`); two members sharing a local part each get `-user-<last 8 hex>`, an empty local part or an id with no member row reads `user-<last 8 hex>`, the system actor `System`. **Member-open bulk export — a recorded risk** (PENDING, 6.4). Access: any staff role (the lists behind them are member-open); a portal token is fenced (403). No capability and **no audit row** — download auditing is roadmap 6.4 (PENDING).
+
+**The columns, in brief** (quantities in base units of the SKU's `uom`, which every register prints):
+
+- `stock-on-hand`: warehouse, zone, bin, `system_bin` (`yes`/`no` — RECEIVING, QC-HOLD, IN-TRANSIT, RETURNS are listed and flagged), SKU code and name, HSN, client code, uom, batch code, `expiry_date`, quantity. A serial-tracked SKU is one row per bin; catch weight is units only; a kit never appears (it holds no stock).
+- `inbound-register`: GRN code, `created_ist` (the period's basis), `recorded_ist`, document (`po:<code>` / `asn:<code>` / `blind:<reason>`), vendor name (the PO's frozen `vendor_snapshot` — legal name, else name), client code, gate-in code, `supplier_documents` (`<kind> <number>`), `supplier_document_dates`, `eway_bill_numbers` (each `; `-joined in position order, ALIGNED — one slot per document in all three lists, `-` where a document has no date or e-way bill — **only the gate-in documents that name this receipt's PO or ASN**: a truck carries several clients' goods, so an unlinked document is never printed beside a line; a blind receipt prints none), SKU code and name, uom, batch code, qty, applied qty, `recorded_by`.
+- `outbound-register`: order id, `created_ist`, status, source, `channel_order_ref` (`external_event_id`, ingested orders only), client code, consignee legal name and GSTIN, destination city, state and pincode, SKU code and name, `kit_of` (an exploded component names its kit line's SKU — never sum the two), uom, `ordered_qty`, `first_dispatched_ist`, carrier, AWB — a PAIR: the FIRST `dispatch.dispatched` event's reference when it named either, else the latest shipment's (`''` is absent; never one from each source). A second shipment row never duplicates a line (lateral `limit 1`).
+- `ledger`: `created_ist` (the period's basis), `recorded_ist`, `occurred_ist`, type, SKU code, client code, uom, from-bin, to-bin, batch code, signed quantity, `reference` (an **exhaustive** switch over the `LedgerReferenceDoc` union with a `never` check — `referenceSummary`; GRN codes looked up; a kind this build does not know prints the kind), actor.
+- `batch-ageing`: SKU code and name, client code, bin, batch code, mfg date, expiry date, `days_to_expiry` (IST dates, negative once expired), `batch_created_ist` and `days_since_batch_created` — the batch's first appearance **in the tenant** (a batch is per (tenant, SKU, code)), uom, quantity. No untracked-age column: `stock_on_hand.created_at` is the bin's first-ever stock, not the current stock's age (PENDING: age per receipt).
+
+**The dispatch lookup** (`firstDispatchByOrderInTx`) states `reference_doc ? 'orderId'` beside the `->> 'orderId' = any($ids)` equality, so 0039's partial `ledger_events_order_ref_idx` applies — pinned by an `EXPLAIN` of the real statement (`firstDispatchQuery`) in `test/registers.spec.ts`.
+
+**The route** is the §6 binary pattern: the facade builds the whole buffer, so every refusal (400, 404 `unknown-warehouse`, 422 `report-too-large`, 503 `report-unavailable`) is problem+json; then `Content-Type` (`text/csv; charset=utf-8` or the xlsx type), `Content-Length`, `Content-Disposition: attachment; filename="<report>-<WH>[-<client>]-<from>_<to>|asof-<date>.<ext>"` (unreadable cross-origin — the web names its own), `Cache-Control: no-store`, `res.end(buffer)`. `@ApiProduces('text/csv', <xlsx>)`; the generated client types the 200 `Blob | File`.
+
+**Measured** (`bun scripts/smoke-register-xlsx.ts --rows 50000`, Bun 1.4.0, 2026-10-22): the smoke (every cell kind written, parsed back with exceljs) passes under Bun; a 14-column ledger-shaped sheet of **50,000 rows → 4.4 MB XLSX in ~0.9 s** (RSS +161 MB, heap +37 MB while building) and **10.0 MB CSV in ~60 ms**. Two slots bound the process to two such buffers at once. The database side of a 50k register is unmeasured at production volume; the register indexes are PENDING.
 
 ## Gotchas
 
