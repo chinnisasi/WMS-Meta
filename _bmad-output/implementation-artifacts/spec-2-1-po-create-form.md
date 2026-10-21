@@ -2,7 +2,7 @@
 title: '2-1 PO create form — raise a purchase order on the web for one client'
 type: 'feature'
 created: '2026-10-20'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '88c563ba7c72223adc7bbd873930bc1761714695'  # wms-be; wms-fe: fd09b7940f2ab8fa46a8d8e227f23ab5aa03bff1; wms-mobile: 03ded78f5481ffd1583e06a5df74eb3f6c3a8cc9
 route: 'dispatch'
 review_loop_iteration: 0
@@ -180,35 +180,35 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `wms-be`:
+- [x] `wms-be`:
   - the `kind` constants;
   - the PO code select;
   - the create, amend and close kit guards;
   - the sweep's kit arm;
   - the four 409 texts;
   - the OpenAPI export.
-- [ ] `wms-be` tests, one for each backend row of the matrix:
+- [x] `wms-be` tests, one for each backend row of the matrix:
   - create (no PO, no outbox row);
   - the three amend arms and unchanged/lowered → 200;
   - close carried → 409 and cancelled → 200;
   - the sweep dismisses a kit draft;
   - submit before the sweep → 409 with the draft kept;
   - the ASN and ASN-import labels unchanged.
-- [ ] `wms-fe client.ts`: regenerate the client, then add the wrapper and its body test.
-- [ ] `wms-fe lib/purchase-orders.ts` and its test:
+- [x] `wms-fe client.ts`: regenerate the client, then add the wrapper and its body test.
+- [x] `wms-fe lib/purchase-orders.ts` and its test:
   - each `parsePoCreate` refusal;
   - rupees → paise: `"12.5"` → 1250, `"0.01"` → 1, while `"0"` and `"12.345"` are refused;
   - `2026-10-25` → `2026-10-24T18:30:00.000Z`;
   - each `poReason` arm.
-- [ ] `wms-fe po-create-form.tsx` and `inbound-cards.tsx`, with a component test for each web matrix row:
+- [x] `wms-fe po-create-form.tsx` and `inbound-cards.tsx`, with a component test for each web matrix row:
   - the options come from the client-scoped reads and exclude kits;
   - changing the client clears the vendor and the lines;
   - the loading, empty and failed states;
   - the exact POST body and key, and the key reused on a retry;
   - the warehouse switch;
   - the banner.
-- [ ] `wms-fe use-inbound.ts`: the reload listener and its test.
-- [ ] Meta docs, last, as listed in the Code Map.
+- [x] `wms-fe use-inbound.ts`: the reload listener and its test.
+- [x] Meta docs, last, as listed in the Code Map.
 
 **Acceptance Criteria:**
 - Given an ops manager on Bengaluru DC with GlowCo selected in the switcher, when they open the form, then the client defaults to GlowCo, and only GlowCo's actively linked vendors and active non-kit SKUs are offered.
@@ -238,6 +238,16 @@ context:
 - On localhost:3001 in the demo tenant: raise a PO for GlowCo. Confirm it lists on page one and reads back through `GET …/inbound/purchase-orders/{id}` with the `vendorSnapshot`.
 
 ## Implementation Notes
+
+Implemented 2026-10-21 against this spec; nothing was committed or pushed.
+
+- **`kit-cannot-hold-stock` codes on the web.** The server's kit problem has no `extensions`, and parsing the codes out of `detail` would be prose parsing. So after the refusal the form re-reads the kits (`fetchAllPages(fetchApiListKits)`, the house kit-editor recovery, guide §1.4) and names the draft's SKUs that the fresh read marks as kits: `poReason(error, kitCodes)`. If that re-read fails, the copy has no codes ("A SKU on this purchase order is a kit — …"). It then reloads `useKits` and the SKU options.
+- **`noValidate` on the form.** The quantity input's `step` follows the SKU's precision, and native validation would block a `1.5` on an `each` SKU before the server could refuse it. That contradicts the Precision row of the matrix. The parser is the only gate.
+- **The warehouse switch.** The open state is keyed by warehouse, as specified. A render-phase "adjust state on change" also forgets it, so switching back never re-opens a form for the first warehouse. This is React's sanctioned pattern, not an effect.
+- **Option hooks.** `usePoVendorOptions` / `usePoSkuOptions` (`ResourceState`) live in `lib/use-inbound.ts`. `fetchApiListSkus` gained an optional `limit`. `isRealDate` is now exported from `lib/audit.ts`.
+- **One extra client-side refusal.** `parsePoCreate` also refuses a line whose SKU is no longer offered (it dropped out of a re-read, e.g. it became a kit) and names the line. A dropped vendor stays named in the picker through `unlinkedVendorLabel`, cannot be chosen, and Raise waits for a fresh pick.
+- **Close's kit read.** It reads the carried lines' SKU codes through `assertSkuIdsInTenant` and runs after the "nothing left to carry" 400. Close takes no SKU lock (it has no `assertSkusTakeWorkInTx`), so the lock reliance in the Design Notes covers create and amend only.
+- **Manual check not run.** The on-localhost check (raise a GlowCo PO in the demo tenant) was not run; the e2e and component suites cover the matrix.
 
 ## Spec Change Log
 
@@ -275,3 +285,27 @@ The findings:
 - D22 low (F10): the duplicate-SKU refusal is web-only. Fix: recorded in Design Notes.
 - D23 low (F11, E11): the reason set and the client edge states. Fix: the full house set, reused copy, two states.
 - D24 low/info (E9, E13): PO code uniqueness, catch-weight pricing, the stale PENDING line. Fix: PENDING entries; the coverage-gaps and handheld claims are verified correct.
+
+**Code review, 2026-10-21.** Three layers: the blind hunter (H1–H14), the edge-case hunter (C1–C7) and the verification gap (V1–V3). There were 24 findings. 13 are patched, 3 deferred and 8 rejected. There was no loopback, because none needed a spec or intent change.
+
+- H1 low (C2 the same): close's kit read takes no `FOR KEY SHARE`, so a kit create that commits concurrently with a close could carry a kit line. Real but narrow, and the fix adds a lock. Rejected under the rule for a low finding with a complex fix; recorded in PENDING beside the Design Notes' create/amend-only lock reliance.
+- H2 medium → defer: close carries an inactive SKU onto the successor without a check. This predates 2-1, since close never ran `assertSkusTakeWorkInTx`.
+- H3 false: close's new `assertSkuIdsInTenant` cannot 404 in practice, because master records deactivate and are never deleted. The `?? skuId` fallback is dead code but harmless.
+- H4 low → patch: the close-refusal test now also asserts no `po.closed` / `po.created` outbox rows.
+- H5 medium → patch (C5 the same): `isVendorRefusal` missed `partner-not-vendor`.
+- H6 medium → patch (C6 the same): after `client-departed` the departed client stayed picked. Now the client resets and the clients read reloads.
+- H7 low, rejected: the kit list is read twice after a kit refusal. That happens only on the error path.
+- H8 low, rejected: `useKits` is tenant-wide and stops at 1,000 kits (`fetchAllPages`, 20 hops). The server's 409 still guards it; recorded in PENDING.
+- H9 medium → defer: kit composition does not refuse a SKU on an open PO or draft, and nothing finds existing kit lines. This predates 2-1.
+- H10 low, rejected: the banner sits below the table and survives a reopen. This matches the ASN form's banner.
+- H11 low, rejected: Discard and a client change ask for no confirmation. This matches the ASN form.
+- H12 low → patch: "Add line" is now disabled at 200 lines.
+- H13 medium → patch: tests for the `sku-inactive` re-read, `client-departed` and the SKU read failure.
+- H14 low, rejected: where `sortedByCode` lives and the `UNREACHABLE_REASON` import. `UNREACHABLE_REASON` is the house location the spec named.
+- C1 false: splitting a stale kit line into two lines with the same total adds no inbound, so `skusGainingInbound` is right to admit it. The matrix's "a second line" row is pinned with a raised total.
+- C3 medium → patch: while kits were loading or had failed, kit SKUs were offered. The SKU rows now wait for the kit read.
+- C4 medium → patch: an edit made while a create was in flight cleared the key. The inputs are now disabled while busy.
+- C7 medium → patch (web) and defer (backend): a unit cost above int4 paise overflows the column, so the web now refuses it. The DTO's missing `@Max` predates 2-1.
+- V1 → patch: test that the draft keeps its client after a switcher change.
+- V2 → patch: test that a create from page two returns the list to page one.
+- V3 → patch: the portal announce test checks the exact kit label.
