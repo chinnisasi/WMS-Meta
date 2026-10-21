@@ -993,3 +993,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-10a-bin-labels.md`
   summary: Bin labels resolve dedicated-client codes via listClientsInTx (500-row cap) plus a per-id getClientInTx fallback; an unresolvable client may 404 the whole print (unverified).
   evidence: 2-10a code review BH6/VG4 (maybe-false, medium if true); settle with a by-ids clients facade read and a unit test with a stubbed facade.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-bin-to-bin-moves.md`
+  summary: Moving stock that open picklist lines are planned against gives no warning — the pick later re-plans (pick-bin-short); the web move form should warn and a supervisor should see it.
+  evidence: 3-1 code review BH4; decision 5 allows moving allocated stock by design.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-1-bin-to-bin-moves.md`
+  summary: Recent moves resolve batch codes via the per-SKU batch list; a batch with no stock left may be missing from it and show as a raw id (unverified).
+  evidence: 3-1 code review BH14 (maybe-false); check whether GET …/inventory/batches returns zero-quantity batches.

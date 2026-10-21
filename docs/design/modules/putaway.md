@@ -61,6 +61,10 @@ The one table in the system with split ownership, and **the one with no architec
 
 ---
 
+## Relationship to the bin-to-bin move (story 3-1)
+
+Putaway moves stock **out of the Receiving bin** against a GRN line; the move (`movements/move.command.ts`) relocates stock **between two storage bins** with no document — the floor's "this belongs over there". The move does not reuse putaway's command or its 400s: its target runs the transfer receive's gate runner (`InventoryFacade.assertPlacementGatesInTx`, the same gate set and order as the placement, 409 with each gate's own code), and a system bin on either end is refused before it (`409 bin-not-movable`). There is no suggested target (3-1's Never list). On the handheld the two flows share one draft-free target check, `src/lib/target-bin.ts` (`targetBinRefusal`: system → blocked → class → dedicated client), extracted from putaway's `evaluateBin`; putaway keeps its own words, byte-identical (pinned).
+
 ## Public seam
 
 `putaway.module.ts:31` exports **two** providers — the facade and, unusually, `BinStateCommand` (because the tenancy controller keeps the `PATCH .../bins/{binId}` URL and delegates into it).

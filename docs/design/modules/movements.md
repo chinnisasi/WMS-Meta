@@ -6,7 +6,7 @@ Paths are relative to `workspace/core/backend/wms-be`. Read [`../IMPLEMENTATION-
 
 **The module's one idea:** every planned stock movement is a pair of ledger legs, not a field on a row. The stock never "leaves the system" between the legs — it parks, physically and visibly, in a system-owned IN-TRANSIT bin, so the serial-in-exactly-one-bin invariant survives unbroken and ATP exclusion falls out of a bin-code predicate rather than a state flag.
 
-This doc covers the transfer-orders slice (story 5-1), the cycle-count slice (story 5-3) and the variance-resolution slice (story 5-4). Stock adjustments (5-2) and the human review queue (5-5) grow here.
+This doc covers the transfer-orders slice (story 5-1), the cycle-count slice (story 5-3), the variance-resolution slice (story 5-4) and the **bin-to-bin move** (story 3-1, §The bin-to-bin move below — the module's one movement with no table of its own). Stock adjustments (5-2) and the human review queue (5-5) grow here.
 
 ---
 
@@ -170,6 +170,42 @@ A submit under an enabled policy wraps every variance row in the frozen stamp an
 
 ---
 
+## The bin-to-bin move (story 3-1)
+
+Files: `move.command.ts` (`MoveCommand.moveStock`), `move-reason.ts` (`MOVE_REASON_CODES`, the note and serial ceilings). Route: `POST /tenants/{t}/warehouses/{w}/inventory/moves` in `api/movements.controller.ts`, behind `AnySessionGuard` — the handheld's queued `stock.move` op and the web Moves page share it. Capability `stock.move` (owner, ops_manager, operator; code-only, no seed).
+
+**No table, no migration.** One request is one move with one `moveId` (uuid v7); each arm appends one `stock.moved` ledger event carrying BOTH bins (a batch arm, or one magnitude-1 event per serial), so the fold debits the origin and credits the target in the same transaction. The moveId, the reason code and (only when given) the trimmed note ride the reference doc `{kind:'bin-move', moveId, reasonCode, note?}`; the ledger is the history. One audit row `stock.moved` (target `bin_move`, `targetId` = the moveId, actor = the operator — also when a review Apply re-runs it). **No outbox event** — ATP is unchanged: both bins are storage bins and both quarantined scopes are refused. **Not billable, not portal-visible** in 3-1 (a `both`-shape event meters 0; PENDING).
+
+```mermaid
+sequenceDiagram
+    participant D as Handheld (offline) / Web
+    participant C as MoveCommand
+    participant I as InventoryFacade
+    D->>C: moveStock (Idempotency-Key = op ULID / per-draft key)
+    Note over C: shape above the tx: qty vs serials, reason/note, same bin,<br/>occurredAt (device only), batch beside serials
+    C->>C: device + operator (device) → stock.move → replay
+    C->>C: warehouse → SKU (kit, catch-weight, tracking, precision)
+    C->>C: both bins FOR UPDATE in id order → replay AGAIN
+    Note over C: system on either end → 409 bin-not-movable; retired origin → 409 bin-retired
+    C->>I: openQuarantinedBinsInTx(sku, [origin, target]) → 409 move-scope-quarantined
+    C->>I: assertPlacementGatesInTx(target, subject 'move') — the gate codes, 409
+    C->>C: assertSecureBinAuthority(origin) → serials resolved + locked → batch by code → on-hand per arm
+    C->>I: appendLedgerEventInTx × arms (stock.moved, origin → target)
+    C->>C: audit stock.moved → idempotency key LAST
+```
+
+**Guard order** (the spec's 18 steps, IMPLEMENTATION-GUIDE §1): 1 request shape above the transaction (qty/serial count, ≤ 500 distinct serials, reason vocabulary, note ≤ 200 code points and required with `other`, same bin, device `occurredAt` required and Z-suffixed / web `occurredAt` refused, `batchCode` beside serials) → hash → 2 `assertDeviceOperatorInTx` (device only) → 3 `stock.move` → 4 replay → 5 warehouse → 6 SKU: kit `409 kit-cannot-hold-stock`, catch-weight `400` (handling units carry no bin), serial-tracked needs serials / untracked refuses them, batch-tracked-only needs a batch code / untracked refuses one, the precision refusal → 7 both bins `.for('update')` in id order, scoped to the warehouse (404) → **8 replay again under the locks** (race-tested) → 9 `bin-not-movable` either end, origin `bin-retired` (a **blocked origin is allowed** — emptying it is the point) → 10 quarantine on both (sku, bin) scopes → 11 the target's placement gates through `InventoryFacade.assertPlacementGatesInTx` (retired, blocked, class, dedicated client, secure, bulk, segregation, load — the transfer receive's 409 family, the wording naming "move") → 12 `assertSecureBinAuthority(origin)` → 13 serial numbers resolved to catalog ids (`404 serial-unknown`) and `lockSerialsInTx` → 14 batch by (tenant, sku, code) (`404 not-found`) → 15 on-hand per (sku, bin) and per (sku, bin, batch) → `409 move-source-short` (serial arms skip the probe: the ledger's serial guard is the authority — `409 serial-elsewhere`) → 16 the appends → 17 audit → 18 the key (a unique violation → `409 conflict`).
+
+**Identity.** A batch move names the batch CODE the operator observed (hashed as sent — there is no FEFO default, so it is intent, not a derivation). A serial move names serial numbers; each serial's batch, on a batch-and-serial SKU, is the one its latest ledger event carried (`serialsLocatedInBinInTx`, the merge precedent), and `batchCode` beside serials is 400.
+
+**Hash** (`moveFingerprint`, fixed key order): `surface` (`device` \| `web`), tenant, device or null, operator, warehouse, sku, `batchCode ?? null`, qty (base units), from, to, reason, `note ?? null`, sorted serials or null, and `occurredAt` **on the device only** (a web move uses `occurredAt = recordedAt = now`, never hashed). Golden-pinned per surface in `test/moves.spec.ts`.
+
+**Allocated stock may be moved.** Reservations carry no bin; a device pick op holding the origin's pre-move epoch answers `409 pick-bin-short` on replay and re-plans (the AC, pinned).
+
+**Review.** A refused handheld move reaches the queue through the sync report (`REJECTED_OP_TYPES` gains `stock.move`; decisions `apply`, `discard`; `PAYLOAD_FIELDS` includes `warehouseId`; `SKU_NAMING_OP_TYPES` too, so an open row blocks a client's wind-down). Apply re-runs `MoveCommand` with the op's own device and operator; the remedy for a gate refusal that still holds is Discard, then a web move or an adjustment that matches the floor.
+
+**Lock order.** Bin rows (id order) → serial advisory (sorted) → the warehouse advisory inside the first append — the canonical chain. Two opposite moves lock the same two rows in the same order and serialise (tested).
+
 ## Invariants
 
 1. **Every stock write rides the ledger** — movements never projects stock directly.
@@ -186,8 +222,12 @@ A submit under an enabled policy wraps every variance row in the frozen stamp an
 
 ---
 
+12. **A move changes no ATP and no client** (3-1) — both bins are storage bins of one warehouse, a system bin is refused on either end, and a quarantined scope is refused both ways; the SKU (and so the event's client) never changes.
+13. **A move is all or nothing** (3-1) — no partial moves; a serial elsewhere or a short origin rolls the whole request back.
+
 ## Events
 
+- **3-1:** the ledger event `stock.moved` (one per arm, `bin-move` reference arm, both identity arms open); no outbox event. Vocabulary cost 46 → 47 (`stock.move`).
 - **Ledger chain events**: `transfer.outbound` (source chain, per arm), `transfer.inbound` (dest chain, per arm; cross-warehouse also writes the drain arm on the SOURCE chain with `toBinId` null). Additive registration in `ledger-registry.ts` with the `transfer` reference-doc arm.
 - **Outbox lifecycle events**: `transfer.created`, `transfer.outbound-confirmed`, `transfer.inbound-confirmed`, `transfer.cancelled`.
 - **Vocabulary cost**: the story grew the capability vocabulary 25 → 27 (`transfers.manage`, `transfers.execute`) and the RLS policy count 46 → 48 — the pinned counts in `test/users.spec.ts` / `test/client-isolation.spec.ts` carry the story reference.

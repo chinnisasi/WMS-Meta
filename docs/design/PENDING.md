@@ -507,7 +507,14 @@ Two sources, both authoritative:
 
 ## movements
 
-- **No FE `/moves` surface** — transfer orders are creatable/confirmable via HTTP only; the planner verbs (create / cancel / outbound confirm) have no web consumer, and the FE capability mirror must grow `transfers.manage` / `transfers.execute` in that story. Deferred by Decision 1 of spec-5-1; the FE drift guard stays red against this backend until it lands *(5-1)*
+- **Bin-to-bin moves — what 3-1 left out** *(story 3-1)*:
+  - **Catch-weight SKUs cannot be moved** (400) — handling units carry no bin location, so a move cannot say which cases moved. Needs a location on the handling unit (or a per-case move) first.
+  - **Secure bins are server-only on the handheld** — the device has no capability mirror, so a move out of or into a secure bin by an operator queues and is refused on replay (`403 role-denied`, rejected → review). A role hint in the snapshot would let the device refuse it offline.
+  - **A client-requested re-slot is not billable** — `stock.moved` meters 0 (a `both`-shape event) and no rate-card charge exists for it; 5.5 (billing for real contracts) can add a per-move charge keyed on the `client-request` reason.
+  - **Moves are not portal-visible** — the portal reads stock, not movements; a client asking "who moved my stock" is answered from the operator ledger only.
+  - **A pallet (LPN) move** waits for 3.6 — today a move names a SKU, a quantity and a batch or serials, never a pallet.
+  - **No suggested target** — the move takes whatever valid bin the operator scans or picks; a directed suggestion (the putaway ranking) is not offered.
+- **No FE transfer surface** — the `/moves` page is the bin-to-bin move since 3-1, but transfer orders are still creatable/confirmable via HTTP only; the planner verbs (create / cancel / outbound confirm) have no web consumer, and the FE capability mirror must grow `transfers.manage` / `transfers.execute` in that story. Deferred by Decision 1 of spec-5-1; the FE drift guard stays red against this backend until it lands *(5-1)*
 - **No in-transit cancellation** — cancel is draft-only (`409 transfer-wrong-state` otherwise). Reversing an in-transit transfer wants a compensating-order design, not a state flip *(5-1, Decision 3)*
 - **Snapshot truncation signal computed then dropped** — `getTransferTasksInTx` over-reads `MAX_SNAPSHOT_TRANSFER_TASKS + 1` to learn truncation, then slices without surfacing it; the same shape as pick's `MAX_SNAPSHOT_PICK_TASKS`. Both want a truncation marker on `CatalogSnapshotResponse` when a consumer exists *(5-1)*
 - **Expression index candidate on `ledger_events.reference_doc->>'transferId'`** — the transfer correlation reads (detail assembly, the per-line inbound serial-arm derivation) ride the existing `reference_doc` GIN/index posture; revisit if detail-read latency shows up *(5-1)*
