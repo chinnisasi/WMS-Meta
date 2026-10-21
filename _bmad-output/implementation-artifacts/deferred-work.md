@@ -960,3 +960,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-po-create-form.md`
   summary: `PurchaseOrderLineInputDto.unitCostPaise` has no `@Max`, so a cost above 2,147,483,647 paise overflows the int4 `unit_cost_paise` column (likely a 500 instead of a named 400).
   evidence: 2-1 code review C7; the web form now refuses it client-side, the API does not. Fix: `@Max(2147483647)` and a test.
+
+- source_spec: none
+  summary: 2-3b dock appointments — book an inbound slot (date/time window, dock door, vendor/client, expected PO/ASN) ahead of arrival, a schedule view, and matching a gate-in to its appointment.
+  evidence: Split from roadmap 2.3 on 2026-10-21 at the user's choice — the appointment is an independent scheduling feature (own table and screens); 2-3a gate-in and receipt header ships first and the gate-in→appointment link is additive later.
