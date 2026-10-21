@@ -950,3 +950,13 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-6c-drug-and-fssai-licences.md`
   summary: Licence edits keep no history — a changed number or validity date overwrites the row, and `licence.edited` carries only the target id.
   evidence: 1-6c code review H7. `audit_events` has no details column (pre-existing audit design); 1-6d enforcement and Epic 18 registers will want a before/after record (a `licence_revisions` table or audit payloads).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-po-create-form.md`
+  summary: PO close carries an inactive SKU's open quantity onto the successor PO without the 1-4b `sku-inactive` check, so a stop-inbound SKU gains a fresh PO line.
+  evidence: `po.command.ts` close never runs `assertSkusTakeWorkInTx` on carried lines (2-1 code review H2); pre-existing since 1-4b. Fix with `assertSkusTakeWorkInTx` over the carried set, which also gives close's kit read the `FOR KEY SHARE` it lacks (H1).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-po-create-form.md`
+  summary: Kit composition admits a SKU that sits on an open PO line or suggested-PO draft, and nothing lists existing open PO lines that are kits.
+  evidence: `test/kits.spec.ts:918` makes such a kit; 2-1 only refuses new inbound and dismisses drafts (code review H9). Settle by refusing kit compose while open PO/ASN lines exist, or by a report of kit lines on open documents.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-po-create-form.md`
+  summary: `PurchaseOrderLineInputDto.unitCostPaise` has no `@Max`, so a cost above 2,147,483,647 paise overflows the int4 `unit_cost_paise` column (likely a 500 instead of a named 400).
+  evidence: 2-1 code review C7; the web form now refuses it client-side, the API does not. Fix: `@Max(2147483647)` and a test.
