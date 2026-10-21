@@ -2,7 +2,8 @@
 title: 'PO create form — raise a purchase order on the web'
 type: 'feature'
 created: '2026-10-18'
-status: 'draft'
+status: 'done'  # SUPERSEDED, never implemented — replaced by spec-2-1-po-create-form.md (2026-10-21)
+superseded_by: '_bmad-output/implementation-artifacts/spec-2-1-po-create-form.md'
 baseline_commit: '41eb113152bafba1827af7efaacc4f7d5f2686cc'  # wms-be; wms-fe baseline: caf526919642948035a3082869dac6c1aec0317f
 route: 'dispatch'
 review_loop_iteration: 0
