@@ -1010,3 +1010,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
   summary: Link the Moves page to /moves/counts (and its tabs) once WMS-FE #103 (the real /moves page) merges — until then the count-admin surface is reachable only by URL.
   evidence: 3-5a decision 4 and code review BH4; editing moves/page.tsx before #103 merges would conflict with it.
+
+- source_spec: none
+  summary: 4-1b client order number + staff CSV/Excel order import — a client_order_ref column with a per-client unique index (migration, after 0087/WMS-BE #116 merges), entered on the staff and portal forms and shown everywhere an order is labelled; an order import reusing src/shared/import/sheet-reader.ts with dry-run/execute, deduped by client order number.
+  evidence: Split from roadmap 4.1 on 2026-10-22 (recommended, taken autonomously) — the column needs a migration that cannot be generated correctly until #116's 0087 merges, and a safe re-import depends on that number; portal order entry (4-1a) ships without either.
