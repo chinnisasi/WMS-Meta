@@ -982,3 +982,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
   summary: A write-off out of DAMAGED is a plain stock.adjusted with no reference to the GRN line or vendor, so a vendor claim cannot be reconciled from the ledger once units are written off.
   evidence: 2-4a code review BH9; grn.damaged carries grnLineId but the disposition does not. Belongs with 2.8 (QC fail disposition / return to vendor).
+
+- source_spec: none
+  summary: 2-10b pallet/carton (LPN) labels at receiving — an LPN (licence plate) record for what a pallet or carton holds, its label (ZPL + PDF, reusing 2-10a's renderer) printed at receiving, and the LPN carried through putaway.
+  evidence: Split from roadmap 2.10 on 2026-10-22 (recommended, taken autonomously under the user's standing instruction) — no LPN model exists in any repo, so it is a feature of its own, and it touches the receive command/screen that 2-4a (WMS-BE #116, WMS-Mobile #30) is changing; bin labels (2-10a) ship first and build the shared renderer.
