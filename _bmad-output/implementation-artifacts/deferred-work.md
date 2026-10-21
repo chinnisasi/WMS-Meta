@@ -971,3 +971,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-3a-gate-in-and-receipt-header.md`
   summary: No device-store test proves a settled `gate-in.unload` (or a settled return receipt) triggers the catalog snapshot refresh; dropping the `settledOpStalesOpenGateIns` clause leaves a stale gated_in status on the device.
   evidence: 2-3a code review V6 — `device-store.ts:547` is unit-tested only via the predicate; the `settledReturnWork` precedent is equally untested. One shared store test should cover both.
+
+- source_spec: none
+  summary: 2-4b receipt line attributes — expiry derived from the SKU's shelf life (mfg date + skus.shelf_life_days when no expiry is captured) and temperature on arrival for cold-chain SKUs.
+  evidence: Split from roadmap 2.4 on 2026-10-21 at the user's choice — both are small per-line capture fields, independent of 2-4a (good/damaged/short quantities with reason codes and a non-sellable damaged location), which ships first.
