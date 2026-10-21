@@ -964,3 +964,10 @@
 - source_spec: none
   summary: 2-3b dock appointments — book an inbound slot (date/time window, dock door, vendor/client, expected PO/ASN) ahead of arrival, a schedule view, and matching a gate-in to its appointment.
   evidence: Split from roadmap 2.3 on 2026-10-21 at the user's choice — the appointment is an independent scheduling feature (own table and screens); 2-3a gate-in and receipt header ships first and the gate-in→appointment link is additive later.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3a-gate-in-and-receipt-header.md`
+  summary: The gate-in list has no search by vehicle number or GI code and no date range, so "is KA01AB1234 still inside?" means paging, and gated-out rows accumulate in the default view.
+  evidence: 2-3a code review H11 — `GET …/receiving/gate-ins` filters by warehouse and status only. Add `q` (vehicle/code prefix) and `from`/`to` on `gated_in_at`, with the web search box.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3a-gate-in-and-receipt-header.md`
+  summary: No device-store test proves a settled `gate-in.unload` (or a settled return receipt) triggers the catalog snapshot refresh; dropping the `settledOpStalesOpenGateIns` clause leaves a stale gated_in status on the device.
+  evidence: 2-3a code review V6 — `device-store.ts:547` is unit-tested only via the predicate; the `settledReturnWork` precedent is equally untested. One shared store test should cover both.

@@ -2,7 +2,7 @@
 title: '2-3a gate-in and receipt header — the inbound vehicle visit, recorded at the gate and the dock'
 type: 'feature'
 created: '2026-10-21'
-status: 'ready-for-dev'
+status: 'done'
 baseline_commit: '89f85b66bf067e2ea0fdac931d0b9e6d12e39204'  # wms-be; wms-fe: b1c852dd11d8148a66481c0e01209082fbcfefdd; wms-mobile: 03ded78f5481ffd1583e06a5df74eb3f6c3a8cc9
 route: 'dispatch'
 review_loop_iteration: 0
@@ -68,6 +68,9 @@ Dock appointments are 2-3b.
     - Plates are normalised: uppercased, with spaces, dots and hyphens stripped, then matched against `^[A-Z0-9]{4,15}$`. BH-series and temporary registrations are accepted.
 14. **`gatedInAt` is editable** through Edit while the status is `gated_in`. It must not be in the future, and the change is audited. The unload and gate-out times stay as recorded.
 15. **The device offers only gate-ins** that are not `gated_out` and gated in within the last 7 days, at most 200, newest first. The web flags an open gate-in older than 7 days.
+
+16. **(Amended at code review, 2026-10-21) Security fields lock at the unload end.** Once `unload_ended_at` is set, an amend that changes `seal_status`, `seal_number` or `packages_declared` is refused with 409 `gate-in-field-locked`. Other fields stay editable until the gate-out. Every amend's audit row records the before and after value of each changed field, except the driver phone, which is recorded as "changed" only.
+17. **(Amended at code review, 2026-10-21) The dock count is blind.** The device snapshot's `openGateIns` carries no `packagesDeclared`, and the handheld never shows the declared figure. The web shows the declared figure and the flag.
 
 **Always — backend:**
 - **Migration `0086_gate_ins.sql`:**
@@ -381,7 +384,18 @@ Dock appointments are 2-3b.
 
 ## Implementation Notes
 
-## Spec Change Log
+**Implemented 2026-10-21 (uncommitted on `feat/2-3a-gate-in-and-receipt-header` in all three repos).**
+
+- **Routes as built:** the device unload entry is `POST …/devices/gate-ins/{gateInId}/unload` (DeviceSessionGuard), beside the web `POST …/receiving/gate-ins/{gateInId}/unload`. The facade is a new `inbound/gate-in.facade.ts` (`GateInFacade`) — the api shell's seam; `gate-in.read.ts` holds the views and the receiving/snapshot reads.
+- **Answers:** every mutation's answer (= the stored idempotency snapshot) carries the driver phone MASKED; only the detail read shows it in full, to a `gate.manage` holder. The list adds `packagesDifference` beside `packagesFlag`; a receipt's `document` is `{kind: po|asn|blind, code}`.
+- **Shape rules beyond the letter of the spec:** a seal number with `sealStatus: none` is refused (400) rather than dropped; a duplicate document number is matched case-insensitively; an amend resending the stored `gatedInAt` is not a change (so it never trips `gate-in-time-locked`). Extra CHECKs: each instant paired with its actor, the count paired with the end.
+- **Re-run carriage:** the shelf-life and licence rows carry `gateInId` only when it is a uuid (a non-uuid could never link and would fail the row's payload probe).
+- **Tests updated as consequences:** `client-isolation` policy count 119 → 121; `client-master`'s non-SKU-naming op types gain `gate-in.unload`; `return-receipts`' decision rule; `users` → 46; a new golden in `per-client-sku`; re-run link cases in `client-receiving-policy` and `licence-enforcement`; an architecture block (gate-in tables inbound-owned, every outbox append through `outboxGateIn`).
+- **Handheld deviations:** End is also refused once the snapshot reads `unloaded`; the all-refused receipt also gets the not-linked words; the "Back to documents" path in the code is "Start a new receipt"; Start/End stay disabled until the outbox is read.
+- **Web deviations:** an unchanged edit time sends the stored instant (not the minute-rounded input); the time field is disabled once unloading; an inactive saved transporter stays selectable as "(no longer listed)"; link options name the client by its brand name; a device review row names the gate-in by its id tail (the payload carries no code); `definePageTabs` gained an explicit `defaultTab`; `ConfirmRow` gained optional fields.
+
+- **Code-review round (2026-10-21):** decision 16 — `gate-in-field-locked` (seal status/number, packages declared, once the unload ended) and the amend's field-level diff stored in a new nullable `audit_events.changes jsonb` (0086; the phone as `{changed: true}`); decision 17 — `packagesDeclared` dropped from `openGateIns` (an older seal's is stripped by the handheld's parser); the gate-out floor is the latest of unload end / start / gated in, and a web unload may not follow a recorded gate-out; reverse status CHECKs (probed); the detail's role read rethrows non-problem errors; `grn.submit.gateInId` is `string-or-null` and `gate-in.unload.gateInId` a plain string in `PAYLOAD_FIELDS`; the web sends a Record's `gatedInAt` only when edited and a row action's default time untrimmed; the review-queue guidance reads by problem code. Note: the audit READ does not expose `changes` yet.
+
 
 ## Review Triage Log
 
@@ -430,3 +444,31 @@ The findings:
 - D37 low (M12): older server and time capture. Fix: stated.
 - D38 low (W17, W19, W20): action gating, the client note, document-row UX. Fix: stated and tested.
 - D39 info (W9): the default tab. Fix: decision 9.
+
+**Code review, 2026-10-21.** Three layers: the blind hunter (H1–H15), the verification gap (V1–V6) and the edge-case hunter (C1–C7). There were 28 findings. Two were put to the user, who amended the intent in place as decisions 16 and 17, so no code was reverted (the 1-6d precedent). In all, 18 are patched, 2 deferred and 8 rejected.
+
+- H1 low → patch: the status CHECKs constrained one direction only. Reverse CHECKs added and probed.
+- H2 low, rejected: duplicate documents have no DB unique backstop. The command refuses them, and the backstop would need an expression index.
+- H3 medium → patch (C1 the same): a web gate-out could predate the recorded unload, and a web unload could postdate the gate-out. Both are now ordered; device times stay unchecked by design.
+- H4 + H5 medium → **user, decision 16**: seal and declared-count edits after counting erased the flag with no trace. Those fields now lock at the unload end, and the amend audit records before/after values.
+- H6 medium → **user, decision 17**: the declared count biased the dock count. The device count is now blind.
+- H7 false: an operator sees the full phone. That is decision 10 as approved (`gate.manage` holders, operators included).
+- H8 medium → patch: the web create recorded the time the form opened. `gatedInAt` is now sent only when edited.
+- H9 low, rejected: a hand delivery carrying a vehicle or seal is accepted. That is contradictory but harmless, and the fix adds guards.
+- H10 low → patch: the not-found guidance on the unload review row was wrong. It is now worded per code.
+- H11 medium → defer: no search by vehicle or code, and no date range, on the gate-in list.
+- H12 medium → patch: the concurrency paths were untested. Concurrent-create codes are now raced.
+- H13 low → patch: the DTO comment contradicted `@IsIn`. Comment corrected.
+- H14 low → patch: `operator-mismatch` on the device route was untested. Test added.
+- V1 → patch: the keyset cursor walk, plus `invalid-cursor`.
+- V2 → patch: a start after gate-out keeps `gated_out`. The code was correct but unpinned.
+- V3 → patch: the `grn.submit` review apply carrying `gateInId`.
+- V4 → patch: the e2e for the `gate-in.unload` sync-report row (filed, apply refused, discard).
+- V5 → patch: the refused-receipt `gateInLink`.
+- V6 → defer: the store-level refresh after a settled unload is untested. Its precedent, `settledReturnWork`, is equally untested.
+- C2 low, rejected: paging on the editable `gated_in_at` can shift a row across pages after an amend. Accepted by decision 14; rare.
+- C3 low → patch: the facade's `.catch(() => null)` swallowed DB errors. It now rethrows anything that is not a ProblemException.
+- C4 medium → patch: a non-uuid `gateInId` failed the sync-report shape probe and refused the whole report. It is now probed as a string.
+- C5 false: the web offers no late unload on a gated-out visit. The spec's action gating (Start on `gated_in`; End on `gated_in`/`unloading`) is explicit, and the device path still fills late.
+- C6 medium → patch: a default time truncated to the minute tripped `time-out-of-order` within the same minute. An unedited time now sends the exact instant.
+- C7 low, rejected: after blank document rows are dropped, the server's "Document N" can name the wrong screen row. Rare, and the fix needs a row map.

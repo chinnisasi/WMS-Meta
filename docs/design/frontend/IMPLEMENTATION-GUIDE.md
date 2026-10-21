@@ -240,6 +240,12 @@ Inbound, Outbound, Replenishment, Compliance and Settings show one section at a 
 - **Gate** — the bar renders only past the screen's session gate; a wrapper with no gate of its own (`ComplianceTabs`, `SettingsTabs`) renders nothing until the session is known.
 - **Only the selected section mounts**, so a test of a non-default section mounts with `initialTab` (or `?tab=`) rather than clicking — a click first mounts the default tab and pollutes "mounting sends reads only" claims — and queries inside the panel or by `data-tab`, never by bare text (the label and the `<h2>` are the same words).
 
+### 1.8b A tab bar whose default is not its first tab (2-3a)
+
+`definePageTabs` takes an optional `defaultTab`: the default renders at the bare route and every other tab — the first one included — at `?tab=<id>`. Inbound uses it so Gate-in leads the bar (`?tab=gate-ins`) while `/inbound` keeps opening Purchase orders and every existing link and pin stays valid. A tab whose count must not wait for the client filter (Gate-in — a truck carries several clients) reads its count separately and sits outside `CountedInboundTab`'s client assumptions.
+
+**A confirmation that carries fields (2-3a).** `ConfirmRow` accepts optional fields (End unload's count, a time); the key is bound to what was typed — a retry of the same values reuses it, an edit mints a new one — so a frozen-value confirmation never replays another value's answer.
+
 ### 1.9 Document drills — display-only keys, one key per document (9-3a)
 
 FR-28: every ledger event is two navigations from its document. Five document surfaces link "View ledger" to `/inventory/ledger` filtered to that document — the GRN table, the PO table ("Receipts in the ledger" — a putaway names its GRN, not the PO), the expanded order detail, an approved adjustment card and an adjusted variance card. The link is a **ledger drill** (§1.6) built by one helper, `ledgerDocHref(doc, id, warehouseId, label?)` (`lib/drill.ts`):
@@ -381,6 +387,7 @@ Three rules inside it:
 | `lineRecordsReason(error, status)` *(21-5b)* | `lib/invoice-records.ts:159` | `invoice-group-changed`, `invalid-cursor` |
 | `usageReason` *(21-4)* | `lib/usage.ts:227` | — |
 | `auditReason` *(9-3a)* | `lib/audit.ts:246` | `role-denied` → "Only the owner can read the audit trail", `report-unavailable` → "Narrow the filters or dates", `validation-failed` → the server's detail, `invalid-cursor` |
+| `gateInReason(error)` *(2-3a)* | `lib/gate-ins.ts` | `time-in-future`, `time-out-of-order`, `gate-in-closed`, `gate-in-time-locked`, `gate-in-field-locked`, `partner-not-transporter`, `transporter-inactive` (both re-read the transporter list), `document-warehouse-mismatch`, `not-found`, `validation-failed` → the server's detail; vehicle copy "4–15 letters and digits; spaces, dots and hyphens are ignored" |
 | `rateCardReason(error, action)` *(21-3)* | `lib/rate-cards.ts:276` | `rate-card-effective-date`, `rate-card-effective-overlap`, `rate-card-no-lines`, `rate-card-not-draft`, `rate-card-not-cancellable`, `client-not-active` |
 | `rejectionReason` (seven **file-local** copies) | `auth-forms.tsx:257`, `warehouse-create-form.tsx:133`, `zone-bin-setup.tsx:845`, `import-catalog.tsx:266`, `sku-table.tsx:316`, `users-card.tsx:288`, `devices-card.tsx:283` | `duplicate-email`/`invite-pending`/`invite-invalid` · `duplicate-warehouse-code` · `duplicate-zone-code`/`duplicate-bin-code`/`grid-too-large`/`bin-not-empty`/`bin-retired`/`bin-merge-hold-open`/`bin-segregation-conflict` (1-6b)/`bin-full`/`bin-blocked` · `import-too-large`/`unsupported-file-type`/`file-unreadable` · `duplicate-barcode` · `email-exists`/`last-owner` · — |
 
