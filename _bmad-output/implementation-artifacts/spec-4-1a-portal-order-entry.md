@@ -2,7 +2,8 @@
 title: '4-1a portal order entry — a client user places an outbound order in the portal, for their own SKUs, through a portal command sharing the order pipeline'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'e1771c7fc88b060ac998c0bf2c113058b9859c1d'  # wms-be; wms-fe: 3a5a14ff1150780d13bb002d05800a63b7e3dd3b; wms-mobile: unchanged
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -133,9 +134,9 @@ None.
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: the phase-helper refactor (staff golden green first), `placePortalOrder`, the route and DTOs, the capability, the pins, the RLS probe; OpenAPI; tests.
-- [ ] Web: the shared fieldset and state select, the form, the hints, parsers and mappers, the mirror, plus tests; regenerated client.
-- [ ] Meta docs:
+- [x] BE: the phase-helper refactor (staff golden green first), `placePortalOrder`, the route and DTOs, the capability, the pins, the RLS probe; OpenAPI; tests.
+- [x] Web: the shared fieldset and state select, the form, the hints, parsers and mappers, the mirror, plus tests; regenerated client.
+- [x] Meta docs:
   - `API-SURFACE.md`;
   - `outbound.md` (the portal command, the reject policy, the licence seam);
   - `clients.md` (portal capabilities);
@@ -159,6 +160,18 @@ None.
 - `bun run lint && bun run typecheck` (wms-be, wms-fe); `bun test`, including `portal-boundary.test.ts`, and `bun run check:capability-mirror` (wms-fe): pass.
 
 ## Implementation Notes
+
+Implemented 2026-10-22 against this spec (wms-be and wms-fe on `feat/4-1a-portal-order-entry`, uncommitted; meta docs uncommitted).
+
+- **Phase helpers.** `createOrder`'s body became `preflightPhase` / `grantPhase` / `writePhase` plus `placeOrder` (phase 2.5), parameterised by a private `OrderSurface<R>` (transaction opener, `authorize`, `reauthorize`, `loadLineSkus`, `prefetchLicences`, `assertLicences`, `backorderRefusal`, `respond`). The staff surface is the old code path statement for statement; the existing goldens (`test/issuance-gate-parity.spec.ts`) and every order suite pass unchanged, plus a staff hash + response-key golden in the new suite.
+- **The licence seam** is `portalLicenceSnapshot` (an operator-shape transaction reading only `licenceEnforcedInTx` + the new `activeLicenceFactsInTx`), run before each stamped phase transaction; the stamped phase judges with the new pure `licenceCoverageOf` (compliance's `licenceCoverageInTx` is now that pair — same result, same "no needs → no read"). Generic refusal `portalLicenceNotCovered` (`licence-not-covered`, no `skuCodes`).
+- **Shortage refusal** reuses the reject-policy code `order-backorder-rejected` with a portal detail and top-level `skuCodes` (`portalStockShort`); staff `BackorderRejectedError` unchanged.
+- **Phase-3 gate** repeats the full phase-1 gate (capability, actor, client `FOR SHARE` + status); a refusal throws into the existing catch, which releases every grant (proved by a grant-time interposition that suspends the client, and one that deactivates the user).
+- **Race:** the same-key loser fails on `idempotency_keys`' unique index → `409 conflict` (the existing `writeIdempotencyKey`), proved deterministically with a barrier on `grantReservation` (both requests past their phase-1 replay before either writes).
+- **New helper** `getWarehouseNameInTx` (tenancy) for the response's `warehouseName`.
+- **Pins:** `PORTAL_WRITES` + `PORTAL_DELEGATIONS` (architecture), a scan that every `withTenantTransaction` in `placePortalOrder` is stamped, the phase helpers open none, and the seam reads exactly its two functions; `test/portal.spec.ts` (client capabilities, the portal write allowlist, 15 portal routes); `test/users.spec.ts` (47 capabilities, `orders.place` = owner + client); RLS probe arm in `test/client-isolation.spec.ts` (the whole write set under the stamp with a 42501 control, and the site licence invisible stamped / visible unstamped).
+- **Web:** `StateSelect` moved to `components/shared/` (re-exported from `components/address/`); `ShipToFieldset` extracted (markup unchanged; the staff form draws it); `LineRows` gained an optional `hint` slot; `usePortalStockRows` drains `portal/stock` for the "available here" hint (on hand − allocated at the chosen warehouse).
+- **Verification:** wms-be `bun run test` (110 suites, 2798 tests), lint, typecheck, build, `openapi:export`; wms-fe `bun run test` (2305), lint, typecheck, build, `check:capability-mirror` (47), `api:generate`. Mutation checks: removing the phase-3 `reauthorize` fails the two between-phases tests; removing the key clear on edit fails the web retry test.
 
 ## Spec Change Log
 
@@ -188,3 +201,29 @@ Design review, 2026-10-22 (backend B, web W). Every accepted finding is folded i
 | W8 | low | Wrong cap copy. Order-specific message. |
 | W9 | low | Form placement. Section action button pattern. |
 | W10 | low | Omissions without PENDING. Address book and cancel request in PENDING; test plan. |
+
+Code review, 2026-10-22 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routes taken autonomously (recommended).
+
+| ID | Verdict | Finding → resolution |
+|---|---|---|
+| BH7 + EC8 + EC9 | medium | Patch: a SKU deactivated between phases is placed (sell-down) from the portal, against decision 8. The portal surface refuses any inactive SKU at phase 3; OpenAPI text fixed. |
+| BH5 | medium | Patch: the portal licence assert returns on a null prefetch (fail-open), and SKUs hidden by RLS drop out of the re-check. Throws on null; a locked-SKU count below the line count refuses. |
+| BH6 | low, accepted | The portal's phase-3 licence facts are read just before the write transaction, not inside it. A narrow window, recorded with the existing licence-withdrawal race in PENDING. |
+| EC7 | low | Patch: the unstamped licence read runs before the authority check and on every replay. Moved after authorize and the replay miss. |
+| BH1 | low | Patch: the hint is `onHand − allocated`, not ATP. Relabelled "on hand, not yet allocated". |
+| BH2 + EC1 + EC2 | medium | Patch: a truncated stock read shows real stock as "0". No hint when truncated and no row. |
+| BH3 + EC3 | low | Patch: hints stay stale after a shortage refusal. Stock reloaded on `order-backorder-rejected`. |
+| EC4 + EC5 + EC6 | low | Patch: zero warehouses, a null session on submit and a failed stock read give no feedback. Status, the unauthenticated sentence, ReadFailure with retry. |
+| BH8 | medium | Patch: the site-seam test passes without the seam. Control: client licence only, refused. |
+| BH9 | low | Patch: the portal staying off the dedup and backorder-record paths is unpinned. Asserted (null channel refs) with a test. |
+| BH10 | medium | Patch: the "deactivated" test sets `invited`. Uses `deactivated`. |
+| BH11 + VG1 + VG2 | medium | Patch: untested arms (the phase-3 licence re-check, enforcement off, the inactive race, a GSTIN state mismatch). Tests added. |
+| BH12 | low | Patch: no client-side precision check. Per-line check naming the line. |
+| BH13 | low | Patch: the 200-line ceiling is duplicated as literals. BE derives it from the staff constant; FE pins it equal in a test. |
+| BH14 | low | Patch: `consigneeLegalName` is unbounded in the DTO. `@MaxLength(100)`. |
+| VG3 | medium | Patch: the in-flight lock is untested. Held-POST test. |
+| VG4 | low | Patch: the truncated catalogue and single-warehouse auto-pick are untested on the order form. Tests copied. |
+| BH4 | low | Patch (docs): the 2,000-SKU portal cap now blocks orders too. The PENDING typeahead entry is extended to the order form. |
+| VG5 | medium | Deferred: no runtime test that the portal command's transactions carry the client stamp. The repo's portal-write pattern (21-7b) relies on the source scan plus the probe; a non-superuser harness is cross-cutting. |
+| VG-other | low, rejected | `resolveDedupLoser` appears reachable on the portal. Unreachable (null channel refs), now pinned (BH9). |
+| BH14 (follow-up) | low | The `@MaxLength(100)` added for BH14 broke the IMPLEMENTATION-GUIDE §4 rule (8-1d): the cap is counted in code points after the trim, by the command, behind the replay. A UTF-16 DTO cap would refuse names the command accepts. Reverted; the DTO description says the command enforces it. |

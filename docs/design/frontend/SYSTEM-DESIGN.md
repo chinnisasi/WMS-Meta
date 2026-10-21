@@ -14,7 +14,7 @@ Next.js 16.3 App Router, React 19, Tailwind 4, TypeScript 6, bun. Five runtime d
 
 Dev server is :3001 so the backend keeps :3000 (`package.json:12`).
 
-Users: **Owner, Ops Manager, Accountant** on a desk — and, since story 21-7, a **client brand's own user** (role `client`) in the client portal (read-only in 21-7; since 21-7b read-mostly plus ASN — it can announce its own inbound shipment), which has its own shell and never mounts an operator surface. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
+Users: **Owner, Ops Manager, Accountant** on a desk — and, since story 21-7, a **client brand's own user** (role `client`) in the client portal (read-only in 21-7; since 21-7b read-mostly plus ASN — it can announce its own inbound shipment; since 4-1a it can also place an outbound order of its own SKUs), which has its own shell and never mounts an operator surface. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
 
 ## What it deliberately does NOT do
 
@@ -66,7 +66,7 @@ No surface of the thirteen is a `SurfacePlaceholder` any more — the last, `/mo
 |---|---|
 | `/portal` | redirects to `/portal/stock` |
 | `/portal/stock` | `PortalStock` — this client's stock per (SKU, warehouse): on hand, allocated, base UoM; never a bin |
-| `/portal/orders` | `PortalOrders` — the client's orders, expandable to their lines (kit components nested under the kit line) |
+| `/portal/orders` | `PortalOrders` — the client's orders, expandable to their lines (kit components nested under the kit line). **4-1a:** "Place an order" (gated on `orders.place`) opens the portal's second write form — see *Portal order entry* below |
 | `/portal/inbound` | `PortalInbound` — advance shipment notices and purchase orders, each expandable to its lines. **21-7b:** "Announce a shipment" (gated on `asn.announce`) opens the portal's one write form — see *Portal ASN entry* below |
 | `/portal/invoices` | `PortalInvoices` — issued invoices (never a draft), opening to the party and lines (a portal layout, not the operator's printable one — that renders from the operator DTO) |
 | `/portal/service` | `PortalService` (21-8, `components/portal/portal-service.tsx`) — this client's service report: the same period inputs and three tiles as the operator's `/reports` section (`service-tiles.tsx`), from `GET portal/service` via `usePortalService` (`usePortalDetail` keyed `${from}\|${to}\|${warehouseId ?? ''}`). The warehouse select appears only when `portal/warehouses` (every tenant warehouse — reused deliberately) returns more than one; a failed read takes its slot as `WarehousesFailure` with Retry (21-11b). A 404 reads "That warehouse is no longer available"; a 503 "The report took too long — try a shorter period". Every request is `/portal/*` and never carries a `clientId` |
@@ -82,6 +82,15 @@ No surface of the thirteen is a `SurfacePlaceholder` any more — the last, `/mo
 - **Refusals.** `portalAsnReason` sends the session codes (`client-suspended`, `role-denied`, `permission-denied`, `unauthenticated`) to `portalReadReason` and words `not-found`, `duplicate-asn-code`, `kit-cannot-hold-stock`, `validation-failed`, `idempotency-key-reuse` and `conflict` for a client. The POST goes through `portalError`, so `client-suspended` fires the portal event like any read.
 - **Success.** A banner, and the notices list is reset to its FIRST page and refetched (`usePortalList(...).reset()`, the table remounted) — a plain reload would refetch a page-2 cursor and hide the new notice.
 - There is no portal amend, close or cancel (decision 2).
+
+**Portal order entry (story 4-1a).** The Orders section gains a **Place an order** action button (the `portal-inbound.tsx` pattern; shown when the session role holds `orders.place`; closed by default). The form (`PlaceOrderForm` in `components/portal/portal-orders.tsx`) reads only portal routes:
+- **Options.** `usePortalSkuOptions` (this client's **active non-kit** SKUs — exactly what the server admits; anything else is a 404) and `usePortalWarehouses`, as the announce form; the empty and too-large catalogue sentences are the order's own (`PORTAL_ORDER_NO_SKUS_MESSAGE`, `PORTAL_ORDER_SKUS_TOO_MANY_MESSAGE`).
+- **Rows and the hint.** `LineRows` with an opt-in `hint` slot (absent everywhere else — byte-identical rows): each line reads "on hand, not yet allocated: N {uom}" — on hand less allocated at the CHOSEN warehouse, from every page of `portal/stock` (`usePortalStockRows`, the drain's cap; past it a SKU with no row read shows no hint, never 0) through `availableHereLabel`. Non-blocking: an order above it is still sent; the server's reservation rules (a shortage refuses the whole order, naming the SKUs, and re-reads the stock). A failed stock read shows `ReadFailure` + Retry beside the lines and the order can still be placed. No warehouses → "No warehouses are set up yet — ask the warehouse"; a session gone at submit sends nothing and says so; a quantity finer than its SKU's `uomPrecision` is refused naming the line.
+- **Ship to.** The shared `ShipToFieldset` (below) — the same fieldset the staff form draws.
+- **Body and key.** `parsePortalOrderCreate(draft, warehouseId)` builds `{warehouseId, lines[{skuId, quantity}], destination, consigneeGstin?, consigneeLegalName?}` — never a `clientId`, never a `ratePaise` — through the shared `parseDestinationFields`, `parseGstinField`, `legalNameProblem` and `legalNameBody`. `fetchApiPortalPlaceOrder` posts it with a per-draft key (reused on a retry, cleared on any edit — every field is hashed — and on success; an in-flight ref; the fieldset disabled while in flight). Discard unmounts the form, so the draft and its key go with it.
+- **Refusals.** `portalOrderReason` — a FIXED sentence per code, never the server's `detail`: the session codes via `portalReadReason`; `not-found`; `order-backorder-rejected` naming `extensions.skuCodes`; `licence-not-covered` (generic); `sku-inactive`; `order-catalog-changed`; `reservation-store-unavailable`; `validation-failed`; `idempotency-key-reuse`; `conflict`; any other code "The order was not placed ({code})".
+- **Success.** "Order placed — N lines to {warehouse} ({placedAt as IST})" (`placedOrderBanner`, from the response), and the list reset to page ONE and refetched (`reset()` + a `pageEpoch` table key).
+- No portal cancel or edit, no kits, no rate (4-1a's Never list).
 
 ### `(auth)` — outside the shell (`src/app/(auth)/layout.tsx`, a centred card)
 
@@ -225,7 +234,7 @@ The **picked client** (1-5a) is a sibling: `lib/active-client.ts` stores it per 
 
 ## The capability mirror
 
-`src/lib/users.ts` hand-mirrors the backend's `src/modules/tenancy/permissions.ts`: a `CAPABILITIES` tuple (46 entries as of story 2-3a — `gate.manage` is held by the operator too; 43 as of story 9-3c — 9-3a's `audit.view` and 9-3c's `ledger.acknowledge`, both owner-only through `OWNER_ONLY_CAPABILITIES`, which `OPS_EXCLUDED_CAPABILITIES` spreads) and `ROLE_CAPABILITIES` for the five roles (21-7 added `client: []`; 21-7b made it `client: ['asn.announce']` and added `asn.announce` to `OPS_EXCLUDED_CAPABILITIES`, because the Ops Manager's set is derived by exclusion and would otherwise inherit the portal verb).
+`src/lib/users.ts` hand-mirrors the backend's `src/modules/tenancy/permissions.ts`: a `CAPABILITIES` tuple (46 entries as of story 2-3a — `gate.manage` is held by the operator too; 43 as of story 9-3c — 9-3a's `audit.view` and 9-3c's `ledger.acknowledge`, both owner-only through `OWNER_ONLY_CAPABILITIES`, which `OPS_EXCLUDED_CAPABILITIES` spreads) and `ROLE_CAPABILITIES` for the five roles (21-7 added `client: []`; 21-7b made it `client: ['asn.announce']` and added `asn.announce` to `OPS_EXCLUDED_CAPABILITIES`, because the Ops Manager's set is derived by exclusion and would otherwise inherit the portal verb; 4-1a made it `client: ['asn.announce', 'orders.place']`, `orders.place` excluded the same way — 47 entries).
 
 **Why it exists.** The sidebar must decide what to render before any request is made. There is no capability endpoint; the backend answers 403 `role-denied` at command time, which is the wrong moment to learn a form should not have been offered.
 
@@ -272,7 +281,9 @@ The guard resolves `../../../backend/wms-be/src/modules/tenancy/permissions.ts` 
 
 **`components/shared/warehouses-failure.tsx`** (21-11b) — `WarehousesFailure({ state })`, the one rendering of a failed warehouses read: "Warehouses not loaded" + the reason + Retry (`ReadFailure`), or a `compact` one-line variant for the switcher in the narrow sidebar and the mobile menu. Its prop is the minimal failed arm from `lib/resource-state`, so the portal uses it too. Every warehouse-listing surface renders it on `failed` — never an empty list, never "No warehouse yet" (which stays for a real empty `ready`). Beside it, `WarehousesRefreshNote` — the one-line "Couldn't refresh warehouses — Retry" shown while a failed refresh keeps the last-good list (`refreshFailed` on the ready data, decision 3).
 
-**`components/shared/line-rows.tsx`** (21-11b) — `LineRows`, the ASN draft line rows, shared by the operator ASN card and the portal announce form.
+**`components/shared/line-rows.tsx`** (21-11b) — `LineRows`, the ASN draft line rows, shared by the operator ASN card and the portal announce form (4-1a: and the portal order form, through an optional per-line `hint` slot that renders nothing when absent).
+
+**`components/shared/ship-to-fieldset.tsx`** (4-1a) — `ShipToFieldset`, the order's controlled "Ship to" fieldset: contact, phone, two address lines, city, `StateSelect`, pincode, the optional buyer GSTIN with its non-blocking state-mismatch warning (`buyerGstinStateMismatch`), and the legal name once a GSTIN is typed. Moved, markup unchanged, out of the staff `OrderCreateForm` (`outbound/outbound-orders.tsx`), which now draws it too; each form keeps its own draft and clears its own key in the `on*` handlers. **`components/shared/state-select.tsx`** (4-1a) — `StateSelect` moved here from `components/address/` (which re-exports it for the operator importers) so the portal can reach it.
 
 ---
 

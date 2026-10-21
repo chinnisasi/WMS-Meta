@@ -1014,3 +1014,6 @@
 - source_spec: none
   summary: 4-1b client order number + staff CSV/Excel order import — a client_order_ref column with a per-client unique index (migration, after 0087/WMS-BE #116 merges), entered on the staff and portal forms and shown everywhere an order is labelled; an order import reusing src/shared/import/sheet-reader.ts with dry-run/execute, deduped by client order number.
   evidence: Split from roadmap 4.1 on 2026-10-22 (recommended, taken autonomously) — the column needs a migration that cannot be generated correctly until #116's 0087 merges, and a safe re-import depends on that number; portal order entry (4-1a) ships without either.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-1a-portal-order-entry.md`
+  summary: No runtime test proves portal write commands (placePortalOrder, ASN announce) run their transactions under the client stamp — the suites connect as a superuser, so RLS is inert; only a source scan and the hand-written wms_rls_probe check it.
+  evidence: 4-1a code review VG5; needs a non-superuser e2e harness, cross-cutting across portal writes.
