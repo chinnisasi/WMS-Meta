@@ -448,6 +448,8 @@ Not idempotency-keyed commands — identity creation. Both: fail-closed tracked-
 
 **Ensure is creation, never edit — amended by 1-2b to *fill a null, never overwrite*.** An existing batch keeps its original `mfgDate`/`expiryDate`; a retry with different dates rewrites nothing (`:296-298`, `:332-334`). The one exception is opt-in and receiving's alone: `ensureBatchesInTx(…, { fillNullExpiry: true })` fills an existing batch's NULL expiry with the input's by a conditional `UPDATE … WHERE expiry_date IS NULL`, then re-selects (a concurrent writer that filled it first keeps its value; the receipt compares the resolved expiry with its own and refuses the line `batch-expiry-mismatch`). A non-null expiry is never overwritten; manual movements (`ensureBatches`) never fill. Expiries are stored as the instant their IST date begins (`istMidnightOf`) and compared by `istDateOf`.
 
+**Story 5-3a — `batchFactsByIdsInTx(tx, tenant, batchIds)`** → `Map<id, {code, mfgDate, expiryDate, createdAt}>` (instants canonical ISO; one bound `uuid[]`, so a 50,000-row register binds one parameter; re-arms the caller's whole-read deadline): the operational registers' batch columns. `createdAt` is when the batch first appeared in the TENANT — a batch is per (tenant, SKU, code), never per warehouse.
+
 **Story 1-2b — two reads for receiving and its surfaces:** `batchesByCodesInTx(tx, tenant, [{skuId, code}])` (the receipt reads each line's existing batch before its expiry rules) and `batchCodesByIdsInTx` (the QC holds list's batch code); `countUntrackedSkus(tenant, client)` — the client's non-batch-tracked, non-kit SKUs, the receiving policy panel's count.
 
 ---
