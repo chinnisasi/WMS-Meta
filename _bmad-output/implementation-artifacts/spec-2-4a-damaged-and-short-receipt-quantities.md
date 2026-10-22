@@ -2,7 +2,8 @@
 title: '2-4a damaged and short receipt quantities — per-line good / damaged / short with reason codes, damaged units in a non-sellable DAMAGED bin'
 type: 'feature'
 created: '2026-10-21'
-status: 'ready-for-dev'
+baseline_commit: 'e1771c7fc88b060ac998c0bf2c113058b9859c1d'  # wms-be; wms-fe: 3a5a14ff1150780d13bb002d05800a63b7e3dd3b; wms-mobile: d8df154903f908f31432e47aaaec4971a5efb3cc
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -90,7 +91,7 @@ context:
   - The four columns.
   - Drop `goods_receipt_lines_qty_positive`; add `_qty_nonnegative` (`qty >= 0`) and `_received_positive` (`qty + damaged_qty > 0`).
   - The pairing CHECKs, `IS NOT NULL` before `IN`, for damage and for short.
-  - `RAISE NOTICE` with the count of user zones and bins already coded `DAMAGED`.
+  - **Re-code collisions (code review CR1):** every user zone or bin (`system_owned = false`, retired or not) coded `DAMAGED` is re-coded to `'DAMAGED-' || left(id::text, 8)`, with a `RAISE NOTICE` naming each (warehouse, old, new code). Codes cannot be renamed and retire keeps the unique key, so nothing else frees the code. After 0087 the collision is unreachable (creates reserve it); `damaged-bin-conflict` stays only as a defensive arm, and its detail names the colliding location's id instead of advising a retire.
   - Refused-insert probes: `qty 0, damaged 0`; damaged without a reason; a reason with 0; an unknown code. An accepted `qty 0, applied 0, damaged > 0` row is rolled back.
   - Follow the 0086 header and the IMPLEMENTATION-GUIDE §3 checklist.
 - `src/modules/inbound/receipt-condition.ts` (new):
@@ -194,11 +195,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE schema, `0087` and `receipt-condition.ts`: columns, CHECK swap, notice, probes; `db:generate` reports no changes.
-- [ ] BE bin, reserved codes, registry, metering, ATP, adjustment and QC-origin guards, stale lists.
-- [ ] BE DTOs and the command: as mapped, including the arms, the builders and normalisation.
-- [ ] BE facade and controller: snapshot vocabularies, the lines route, list sums, drill; OpenAPI export.
-- [ ] BE tests `test/receipt-condition.spec.ts`:
+- [x] BE schema, `0087` and `receipt-condition.ts`: columns, CHECK swap, notice, probes; `db:generate` reports no changes.
+- [x] BE bin, reserved codes, registry, metering, ATP, adjustment and QC-origin guards, stale lists.
+- [x] BE DTOs and the command: as mapped, including the arms, the builders and normalisation.
+- [x] BE facade and controller: snapshot vocabularies, the lines route, list sums, drill; OpenAPI export.
+- [x] BE tests `test/receipt-condition.spec.ts`:
   - every matrix row;
   - the old-op hash golden, and a new golden with all four fields;
   - ATP, reservation and channel quantity exclude DAMAGED;
@@ -206,9 +207,9 @@ context:
   - a `+` adjustment and an approved pend are refused;
   - an old review row re-applies;
   - a reserved-code refusal, and the ensure conflict.
-- [ ] Mobile: draft, payload, screen, snapshot and note, plus tests (an all-damaged line and receipt, the switch, a pack move, key absence, a legacy snapshot, the rollback blocker).
-- [ ] Web: card lines, labels, write-off dialog, ledger lists, review copy, drill, plus tests; regenerated client.
-- [ ] Meta docs (with the docs PR):
+- [x] Mobile: draft, payload, screen, snapshot and note, plus tests (an all-damaged line and receipt, the switch, a pack move, key absence, a legacy snapshot, the rollback blocker).
+- [x] Web: card lines, labels, write-off dialog, ledger lists, review copy, drill, plus tests; regenerated client.
+- [x] Meta docs (with the docs PR):
   - `API-SURFACE.md` (the route and the error arms);
   - `modules/inbound.md`, `inventory.md`, `tenancy.md`;
   - mobile IMPLEMENTATION-GUIDE §2 keys;
@@ -246,7 +247,24 @@ context:
 
 ## Implementation Notes
 
+Implemented 2026-10-21 on `feat/2-4a-damaged-and-short-receipt-quantities` in each child repo (committed locally, not pushed): wms-be `ba38163`, wms-mobile `31347a0`, wms-fe `fb408e8` (amended after code review). The meta docs are edited in the working tree, uncommitted (the docs PR lands after the code merges).
+
+- **Hash:** `conditionHashFields` puts `damagedQty`, `damageReasonCode`, `shortQty`, `shortReasonCode` after `weightsGrams`. Each pair is hashed only when its quantity is > 0. Goldens in `test/receipt-condition.spec.ts`: a pre-2-4a op hashes byte for byte (and to the same digest with explicit `0`/`null`), and a new op carries all four.
+- **Normalisation:** `NormalisedGrnLineInput` applies `?? 0` / `?? null`. The shape tier (`assertLineConditionShape`) sits beside `qty`'s checks, behind the replay lookup, which is where `qty`'s checks already were. The controller passes the four keys only when they are present.
+- **Bin ensure:** `ensureDamagedBinInTx` and `ensureReturnsBinInTx` now share `ensureReservedSystemBinInTx`, which is the 13-2 body unchanged. `RESERVED_LOCATION_CODES` reserves both codes.
+- **Write-off guard:** lives in `assertAdjustableInTx`, right after the bin read (`assertBinInWarehouse` now returns `systemOwned`). It refuses `!(quantityDelta < 0)`.
+- **`receiving.spec.ts`:** its 0013 CHECK test pinned `goods_receipt_lines_qty_positive`. The same insert (qty 0, nothing damaged) is now refused by `_received_positive`. The assertion names the new constraint, with a comment: the behaviour is unchanged and only the constraint's name moved.
+- **Migration probe:** a negative `qty` cannot be probed against `_qty_nonnegative` alone. Postgres tests CHECKs in name order, so the `applied_*` pair always fires first. This is noted in 0087.
+- **Mutation check:** dropping the `qty > 0` guard on the terminal arm's over-receipt (R1) fails the new suite, and so does dropping the `− damaged` ATP term.
+- **Web:** the Stock tab's Action column appears only when a listed row can be written off, so every other table is unchanged. The billing CSV export of receipt lines is also unchanged; the on-screen drill shows a Damaged column.
+- **Verified:**
+  - wms-be: the full `bun run test` (110 suites, 2798 tests), lint, typecheck, build, `db:migrate` + `db:verify`, and `db:generate` reporting "No schema changes".
+  - wms-fe: `bun test` (2306), lint, typecheck, build, `check:capability-mirror`.
+  - wms-mobile: `bun test` (799) and typecheck (the repo has no lint script).
+
 ## Spec Change Log
+
+- **2026-10-22, code review CR1 (Blind Hunter, Edge Case Hunter ×4):** the RETURNS-precedent `damaged-bin-conflict` had no remedy. Retire keeps `bins_warehouse_id_code_unique`, codes cannot be renamed, and zones cannot be retired, so a pre-rule `DAMAGED` location blocked damaged receipts in its warehouse forever, while four texts (the 0087 notice, the problem detail, the mobile comment, the web guidance) advised a retire that does nothing. **Amended:** Code Map, migration bullet: 0087 re-codes collisions; the conflict text no longer advises a retire. **Known-bad state avoided:** an unresolvable 409 and a review row whose Apply always fails. **KEEP:** everything else in the implementation (commits wms-be `d12c77b`, wms-mobile `5aa3c25`, wms-fe `4660501`). Applied as a targeted patch, not a revert and re-derive: the amendment touches one migration block and three strings, and the rest of the code was verified (tests pass and the I/O matrix is covered). This was the recommended approach, taken autonomously.
 
 ## Review Triage Log
 
@@ -297,3 +315,24 @@ Design review, 2026-10-21 (three reviewers: receiving R, inventory I, clients C)
 | C13 | low | The timeline filter list. Both lists. |
 | C14 | low | The Units column shows 0. "+N damaged". |
 | C15 | low | No docs task. Added. |
+
+Code review, 2026-10-22 (three layers: Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Verdicts as above; the route follows each.
+
+| ID | Verdict | Finding → resolution |
+|---|---|---|
+| CR1 = BH1, BH2, EC1, EC2, EC7, EC8 | high | Bad spec: a pre-rule `DAMAGED` zone or bin can never be cleared (retire keeps the unique key, codes cannot be renamed, zones cannot be retired), yet four texts advise a retire. Spec amended (Change Log): 0087 re-codes collisions; texts fixed; migration test. |
+| BH3 | low, rejected | A wholly-missing invoice line cannot be shorted. Decided at design (Never list; PENDING "A short line with no arrivals cannot be recorded"). |
+| BH4 + EC5 | medium | Patch: "Move to damaged" moves only the last scan's pack factor, from any SKU's scan, and Short steps ±1, so one crushed unit in a case of 12 cannot be recorded. Typed quantity entry for damaged and short (honouring precision), with the default factor keyed to the open line. |
+| BH5 + VG3 + VG-other | low | Patch: the web QC-hold form filter misses system RETURNS and keys on code alone. Key on `binSystemOwned` + code {QC-HOLD, RETURNS, DAMAGED}; test. |
+| BH6 | low | Patch: 0087 probes miss a negative `short_qty` and an accepted short-only line; the jest pin misses the short side. Added. |
+| BH7 | low | Deferred: the CHECKs scan under ACCESS EXCLUSIVE. `NOT VALID` then `VALIDATE` is the 6.2 live-deploy work (the 0081 precedent). |
+| BH8 | low, rejected | A fifth ATP query. A real but small cost; merging the system-bin terms into one grouped query is a refactor beyond this story. |
+| BH9 | medium | Deferred: a write-off loses its GRN-line and vendor provenance. This is the vendor-claim / RTV path of 2.8. |
+| BH10a | dup | → CR1 (conflict → Apply e2e is moot once the collision is unreachable). |
+| BH10b | low | Patch: the lines route's 403 and foreign-tenant arm is untested. Test added. |
+| BH10c + EC4 | medium | Patch: the rollback blocker lives only in `canConfirm`/`confirmBlocker`, with `snapshot` optional, and a refreshed seal that makes a SKU serial or catch-weight after damage was drafted queues a guaranteed 400. `confirmPayload` refuses both, and `canConfirm` blocks damage on serial or catch-weight per the snapshot; tests. |
+| BH11 | low, rejected | Several pending write-offs can exceed DAMAGED on-hand. A later approval fails with `insufficient-on-hand` and nothing is lost; the adjustment pend flow behaves this way everywhere. |
+| EC3 | low | Patch: DAMAGED was ensured from `lines` before settlement, so a rejected-only damaged line created the bin. Ensured after settlement from `settled`. |
+| EC6 | low | Patch: the write-off banner and panel survive a warehouse switch. Reset on `warehouseId`. |
+| VG1 | medium | Patch: the billing drill's `damagedQty` is untested on BE and web. Tests added. |
+| VG2 | medium | Patch: licence-refused damage through Apply, and the `po-line-not-found` rejected entry carrying damage, are untested. Tests added. |

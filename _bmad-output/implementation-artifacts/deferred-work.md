@@ -975,3 +975,10 @@
 - source_spec: none
   summary: 2-4b receipt line attributes — expiry derived from the SKU's shelf life (mfg date + skus.shelf_life_days when no expiry is captured) and temperature on arrival for cold-chain SKUs.
   evidence: Split from roadmap 2.4 on 2026-10-21 at the user's choice — both are small per-line capture fields, independent of 2-4a (good/damaged/short quantities with reason codes and a non-sellable damaged location), which ships first.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
+  summary: Migration 0087's CHECKs (and similar ADD CONSTRAINTs) scan goods_receipt_lines under ACCESS EXCLUSIVE; use ADD CONSTRAINT … NOT VALID then VALIDATE CONSTRAINT for live deploys.
+  evidence: 2-4a code review BH7; same class as the 0081 concurrent-index note (roadmap 6.2 live-deploy work).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
+  summary: A write-off out of DAMAGED is a plain stock.adjusted with no reference to the GRN line or vendor, so a vendor claim cannot be reconciled from the ledger once units are written off.
+  evidence: 2-4a code review BH9; grn.damaged carries grnLineId but the disposition does not. Belongs with 2.8 (QC fail disposition / return to vendor).
