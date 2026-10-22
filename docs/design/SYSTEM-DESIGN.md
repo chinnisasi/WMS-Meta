@@ -134,6 +134,24 @@ All poll on configurable intervals and **take explicit tenant context** — AD-3
 
 ---
 
+## Processes, readiness and deploys (story 6-2a)
+
+The backend is **one image** (`wms-be/Dockerfile`, Bun, non-root) run as three kinds of process that differ only by environment (`DEPLOY.md` §1):
+
+| Process | What it runs |
+|---|---|
+| **migrate** (one-shot per deploy) | `db:migrate:deploy` — the guarded migrator — then `db:provision-roles`, as the database owner |
+| **api** (1..N) | the HTTP surface; every `*_POLL_MS` unset, so no background job |
+| **worker** (exactly one) | the same process with the jobs above switched on by their `*_POLL_MS`; deployed stop-then-start, because seven jobs are not proven safe twice |
+
+The web is its own image (`wms-fe/Dockerfile`, the Next standalone server on Node); its API base is read at **run time** (`WMS_API_BASE_URL`, served as `/runtime-config.js`), so one image serves every environment.
+
+- **Liveness** is `GET /health` (touches nothing). **Readiness** is `GET /health/ready`: both Postgres pools, Valkey `PING`, and the schema **at or after** the image's bundled journal (`max(__drizzle_migrations.created_at)` ≥ the last `when`) — never "equal", so the old tasks stay ready while the migrator moves the schema ahead of them. Migrations are additive by assumption; that is what makes "ahead" safe.
+- **Graceful shutdown** follows Nest's hook order (`src/shared/lifecycle/shutdown.ts`): stop accepting → workers await their in-flight tick and in-flight requests finish (one 20 s drain deadline) → the server closes → the pools close; a 25 s force exit bounds it under a 30 s stop timeout.
+- **The deploy migrator** (`src/shared/db/migrate-deploy.ts`) wraps drizzle's own runner: one migrator at a time (a session advisory lock on a reserved connection), and a refusal of any pending index build on a large existing table unless the index was pre-built `CONCURRENTLY` and is valid — the runbook in `DEPLOY.md` §5, enforced rather than trusted. `db:migrate` (dev, the tests' template) is unchanged.
+
+---
+
 ## Where state lives
 
 | | |

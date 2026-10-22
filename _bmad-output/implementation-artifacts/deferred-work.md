@@ -1012,6 +1012,25 @@
   evidence: 3-5a decision 4 and code review BH4; editing moves/page.tsx before #103 merges would conflict with it.
 
 - source_spec: none
+  summary: 6-2b AWS environments + deploy pipeline — staging and production in ap-south-1 as IaC (ECS Fargate services for wms-be API + workers and wms-fe, RDS Postgres, ElastiCache Valkey, S3 buckets, SES identity, Secrets Manager, ALB + ACM, CloudWatch logs), and a GitHub Actions deploy (build → push ECR → migrate task → rolling deploy, staging auto, production on approval).
+  evidence: Split from roadmap 6.2 on 2026-10-23 (recommended, taken autonomously) — 6-2a ships the container images, the CI build and the guarded migration runner that 6-2b deploys.
+- source_spec: spec-6-2a-container-images-and-safe-migrations.md
+  summary: 6-2b — a Bun in-image graceful-drain smoke (SIGTERM the wms-be image during a slow request; assert 200 and exit 0). The drain order is proven by jest on Node only; Bun was checked by hand.
+  evidence: 6-2a code review C26 (X → 6-2b).
+- source_spec: spec-6-2a-container-images-and-safe-migrations.md
+  summary: The deploy migrator guards index builds only — a foreign key or CHECK added without NOT VALID, SET NOT NULL, a volatile default and a rewriting type change still take a full-table lock unguarded. IMPLEMENTATION-GUIDE §3 carries the rule for new migrations; a guard is its own design.
+  evidence: 6-2a code review C29 (X → PENDING deploy).
+- source_spec: spec-6-2a-container-images-and-safe-migrations.md
+  summary: 6-2b — wms-fe has no graceful drain: Next's standalone server.js exits on SIGTERM without waiting for in-flight renders; a drain wrapper around it.
+  evidence: 6-2a code review C30 (X → 6-2b; recorded in DEPLOY.md §1).
+- source_spec: spec-6-2a-container-images-and-safe-migrations.md
+  summary: 6-2b — a worker heartbeat (each job stamps its last tick; a staleness check the orchestrator reads), and no full API listener on the worker task (none, or health-only).
+  evidence: 6-2a code review C31 (X → 6-2b; recorded in PENDING deploy).
+- source_spec: spec-6-2a-container-images-and-safe-migrations.md
+  summary: 6-2b — the ALB/ECS values DEPLOY.md now states (target-group fail-open with readiness on shared dependencies, deregistration delay 20–25 s, stop timeout 30 s), digest-pinned base images, and the wms-fe writable cache under a root-owned image.
+  evidence: 6-2a code review C28 and C19 (the X halves → 6-2b).
+
+- source_spec: none
   summary: 4-1b client order number + staff CSV/Excel order import — a client_order_ref column with a per-client unique index (migration, after 0087/WMS-BE #116 merges), entered on the staff and portal forms and shown everywhere an order is labelled; an order import reusing src/shared/import/sheet-reader.ts with dry-run/execute, deduped by client order number.
   evidence: Split from roadmap 4.1 on 2026-10-22 (recommended, taken autonomously) — the column needs a migration that cannot be generated correctly until #116's 0087 merges, and a safe re-import depends on that number; portal order entry (4-1a) ships without either.
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-1a-portal-order-entry.md`

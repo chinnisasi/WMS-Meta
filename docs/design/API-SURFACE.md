@@ -1,6 +1,6 @@
 # API surface
 
-Every route the backend exposes, grouped by the module that owns it. **272 operations across 32 controller files** (counted from `wms-be/openapi/openapi.json` and `src/**/*.controller.ts` at story 5-3a — recount from the exported document, do not hand-increment).
+Every route the backend exposes, grouped by the module that owns it. **273 operations across 32 controller files** (counted from `wms-be/openapi/openapi.json` and `src/**/*.controller.ts` at story 6-2a — recount from the exported document, do not hand-increment).
 
 Base path `/api/v1`. Full request/response/error contract is in [`../repos/wms-be/README.md`](../repos/wms-be/README.md); this is the inventory — what exists, who owns it, what gates it.
 
@@ -467,7 +467,8 @@ Return authorizations (FR-46) and receipts (FR-47). Every web route: `TenantSess
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/v1/health` | anonymous |
+| GET | `/api/v1/health` | anonymous. Liveness only — touches nothing |
+| GET | `/api/v1/health/ready` | anonymous, tenant-free (story 6-2a). 200 `{status: 'ready', migration}` when both pools answer `select 1`, Valkey `PING`s and the schema is **at or after** the image's bundled journal; else `503 not-ready` with `failing` ∈ `database`, `auth-database`, `valkey`, `migrations-unreadable`, `migrations-behind` (names only). The load balancer's probe (`DEPLOY.md`) |
 | POST | `/api/v1/echo` | anonymous |
 | GET | `/api/v1/openapi.json` | The contract. Swagger UI at `/api/docs` |
 | ALL | `/api/v1/{*path}` | `NotFoundController` catch-all — **must map last**, which is why `ApiModule` registers after the spine modules |
