@@ -386,6 +386,8 @@ bun run db:generate                          # must report "No schema changes"
 git status --short                           # must show NO untracked files
 ```
 
+**Re-run `typecheck` on the merged result, not only on your branch (found at 4-1b).** Two PRs can each pass CI and still break `main` together: 3-1 (#118) added the ledger reference arm `bin-move`, 5-3a (#121) added a `never`-checked switch over the reference kinds that did not know it, and `main` failed `tsc` after both merged. A story that adds a discriminated-union arm or an exhaustive switch rebases onto the latest `main` and re-runs `typecheck` before it merges.
+
 Run the **full** suite, not a scoped subset. `architecture.spec.ts` is what guards module boundaries, and a scoped run skips it.
 
 **A new background worker** follows `PushSenderWorker` (`jobs/jobs.module.ts`): env-gated by its own `*_POLL_MS` through `parsePollMs` (unset/`0` = off; documented in `.env.example` and the README), single-flight `running`, an `unref`'d timer and a shutdown hook, discovery of the tenants with work on the read-only BYPASSRLS `AUTH_DATABASE`, and one owning-module facade call per tenant inside its own `try/catch` — every write stays in the module's tenant transactions. The suites drive the facade method (and `tick()` once, for the plumbing), never timers. 9-3b's `AuditExportWorker` (`AUDIT_EXPORT_POLL_MS` → `TenancyService.runDueAuditExports`) is the latest; a long job also needs a **heartbeat** and a finish **conditional on the claimed attempt**, so a reclaimed runner that wakes up later changes nothing (`tenancy.md` §The async audit export).
