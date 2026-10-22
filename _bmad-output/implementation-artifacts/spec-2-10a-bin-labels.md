@@ -2,7 +2,8 @@
 title: '2-10a bin labels — print bin labels as ZPL (thermal) or PDF from the web, barcode = the bin code the handheld scans'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'e1771c7fc88b060ac998c0bf2c113058b9859c1d'  # wms-be; wms-fe: 3a5a14ff1150780d13bb002d05800a63b7e3dd3b; wms-mobile: unchanged
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -134,17 +135,17 @@ None (decision 8).
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE `src/shared/labels/*` + `pdf-lib`: the encoder and decoder, escaping, folding, fit, ZPL and PDF, with unit specs (the ZPL golden, escape cases, a Devanagari zone name folding to `?`, the decoded payload equal to the code for both formats, page count and size read back with pdf-lib).
-- [ ] BE `bin-labels.ts`, the DTO and the route; OpenAPI export.
-- [ ] BE `test/bin-labels.spec.ts` (e2e):
+- [x] BE `src/shared/labels/*` + `pdf-lib`: the encoder and decoder, escaping, folding, fit, ZPL and PDF, with unit specs (the ZPL golden, escape cases, a Devanagari zone name folding to `?`, the decoded payload equal to the code for both formats, page count and size read back with pdf-lib).
+- [x] BE `bin-labels.ts`, the DTO and the route; OpenAPI export.
+- [x] BE `test/bin-labels.spec.ts` (e2e):
   - every matrix row;
   - the sort and its ties;
   - the portal 403's exact code and detail;
   - tenant isolation;
   - route order;
   - 1000 labels as A4 PDF in under 5 s.
-- [ ] Web: selection, dialog, error arms and filename, plus tests (including an IST date boundary for a viewer outside IST between 00:00 and 05:30 IST); regenerated client.
-- [ ] Meta docs:
+- [x] Web: selection, dialog, error arms and filename, plus tests (including an IST date boundary for a viewer outside IST between 00:00 and 05:30 IST); regenerated client.
+- [x] Meta docs:
   - `API-SURFACE.md`;
   - `modules/tenancy.md`;
   - `SYSTEM-DESIGN.md` module map (`src/shared/labels`);
@@ -179,6 +180,20 @@ None (decision 8).
 
 ## Implementation Notes
 
+Implemented 2026-10-22 against the reviewed design (wms-be `feat/2-10a-bin-labels`, wms-fe `feat/2-10a-bin-labels`; wms-mobile unchanged).
+
+- **The Code 128 table was checked against an independent decoder**, outside the suite: symbols rendered from `encodeCode128B` were decoded by ZXing (`zxing-wasm` 3.1.3, from the local bun cache, not added to any repo) — every printable character, and payloads chosen to produce every check value 0–102, decoded to their payloads. The PDFs (4x2, 2x1, a 30-label A4 sheet) were also rasterised at 300 dpi (CoreGraphics) and ZXing decoded every barcode (24/24 on the A4 page). In-suite, `test/support/labels.ts` decodes the PDF bars and the ZPL `^FD` back to the code.
+- **AC 1 (camera scan in putaway) is NOT yet done** — it needs a printed label and a handheld. Record the result here when it is run.
+- **ZPL text is left-aligned, without `^FB`**, because `^FB` reads `\&` in field data as a line break; the `^A0` character width is fitted to the printable width (`floor(printable / length)`, capped at the height), truncating with `...` below a minimum. The PDF shrinks Helvetica-Bold to fit by measured width.
+- **`MAX_LABELS_PER_PRINT` (1000) lives in `src/shared/labels/layout.ts`**, so `tenancy.dto.ts` does not import `bin-labels.ts` and its module graph (the 11-5 `bin-capacity.ts` precedent); `bin-labels.ts` re-exports it as `MAX_BIN_LABELS`.
+- **The filename fold** replaces each UTF-16 unit outside `[A-Za-z0-9._-]` with `-`, identically on both sides (`binLabelsFilename` in `bin-labels.ts` and `lib/bin-labels.ts`).
+- **Dedicated client codes** come from `listClientsInTx` (capped at 500); a client beyond the cap is read with `getClientInTx` — both clients-facade functions.
+- **Unknown bin ids answer one 404 naming up to 10 missing ids.** Authority runs first, so an accountant gets 403 even for an unknown warehouse (tested).
+- **The listing arms' `binCodes` are the offenders sorted in label order** (decision 7), first 50; the detail quotes each code (`JSON.stringify`) and ends `+k more`.
+- **Web:** the "dialog" is an inline panel with `role="dialog"` (the merge picker's pattern on this card); the file is `BinLabelsDialog.tsx` as named here, though the folder is otherwise kebab-case. The print panel and the selection are both scoped to the zone they were made in (derived at render, no effect). "Print zone labels" is enabled for any selected zone (code review: printable bins may sit on a later page; the server answers an empty zone `no-bins-to-print`). "Print labels (N)" is disabled above 1000 ticks; a ticked row the refreshed page shows unprintable is pruned; the print controls wait for the warehouse code.
+- **Timing:** the 1000-label A4 PDF (a zone print) is bounded at 15 s in `test/bin-labels.spec.ts` (loosened from 5 s for full-suite load, code review).
+- **Code review fixes:** `labels.execute` is asserted (its own transaction, `BinLabelsService.assertCanPrint`) before the warehouse-param and cross-field 400s, so an accountant gets 403 whatever it sends (the DTO's ValidationPipe shape checks still run first); `binIds: null` / `zoneId: null` count as absent; ids are lower-cased, a case-only duplicate is `400 validation-failed`; the zone path reads its bins once with `limit 1001` (the exact count is read only for the `too-many-labels` message); each ZPL label adds `^LH0,0^PON`; `maxCodeLengthFor` moved to `shared/labels/layout.ts`; the too-long copy names the per-paper limits (4x2 28, 2x1 11, A4 18).
+
 ## Spec Change Log
 
 ## Review Triage Log
@@ -212,3 +227,27 @@ Design review, 2026-10-22 (two reviewers: backend/labels L, web/checklists W). E
 | W13 | low | Empty-zone UX. Button disabled; both 404 arms tested. |
 | W14 | medium | Context and docs incomplete. API-SURFACE, PENDING and the module map added. `epic-2-context.md` rejected: it describes the old epic 2 (batch/serial), not roadmap phase 2, and earlier roadmap specs omit it. |
 | W15 | low | Checklists not walked. Walked in Design Notes. |
+
+Code review, 2026-10-22 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routes were taken autonomously (recommended).
+
+| ID | Verdict | Finding → resolution |
+|---|---|---|
+| BH2 + EC7 + VG-o1 | medium | Patch: "Print zone labels" is disabled from the current page only, so a zone with printable bins on later pages cannot be printed. Enabled whenever a zone is selected; `no-bins-to-print` answers an empty zone. |
+| BH1 + EC5 | medium | Patch: the cross-page selection is unbounded, so more than 1000 ticks gets a 400 with "reload" copy. Capped at 1000 with a hint. |
+| EC1 + EC2 | medium | Patch: `binIds: null` causes a 500 and `zoneId: null` a 404. Null is treated as absent in the xor; 400. |
+| EC6 + BH3 | medium | Patch: a ticked bin later retired or unbarcodable stays selected. The selection is pruned against `binPrintBlock` on refresh. |
+| BH9 + EC9 | low | Patch: the 400s fire before `labels.execute`. The permission is asserted first. |
+| EC3 | low | Patch: duplicate uuids in mixed case. Lower-cased before uniqueness and lookup. |
+| EC4 | low | Patch: the count-then-select race. One select with `limit MAX+1`. |
+| EC8 | low | Patch: an unknown warehouse code gives an empty filename segment. Controls hidden until the code is known. |
+| BH7 | low | Patch: ZPL does not pin home or orientation. `^LH0,0^PON` added (format-level, not configuration); golden updated. |
+| BH4 | low | Patch: the too-long copy says "pick a larger size", which is wrong for A4. Copy names the per-paper limits (28 / 11 / 18). |
+| VG1 + VG2 + VG3 | medium | Patch: untested text truncation, A4 too-long through the service, and the PDF→A4→ZPL dialog switch. Tests added. |
+| BH-s3 | low | Patch: `layout.spec` re-implements `maxCodeLengthFor`. It imports the exported function. |
+| BH11 | medium | Deferred: rendering runs synchronously on the request thread with no concurrency bound. The 5 s e2e bound is loosened to 15 s (full-suite load). |
+| BH6 + VG4 | maybe-false (medium if true) | Deferred: client codes come from a 500-row list plus a per-id fallback, and an unresolvable client may 404 the whole print. Settled by a by-ids clients facade read and a test. |
+| BH8 | low | Deferred: ZPL `^A0` text fit has not been seen on a printer. With the camera-scan manual check (PENDING). |
+| BH5 | low, rejected | Exposing `Content-Disposition` via CORS. Decision 12 builds the name on the web; parallel tests pin both. |
+| BH10 | false | "No handheld test". Decision 8 cites every scan path; the barcode payload is decoded in BE tests. |
+| BH12 | false | "No docs". The docs are edited in the meta working tree and ship in the docs PR. |
+| BH13, BH-s1, BH-s2, BH-s4 | low, rejected | The unused `count`, the hard-coded 1000 copy, `zoneCode ?? ''` (zones always have codes) and panel a11y. Negligible; no user impact. |

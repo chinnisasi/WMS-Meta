@@ -202,6 +202,13 @@ Two sources, both authoritative:
 - **`user.createdAt` is Postgres text, not ISO (R2)** — `users.created_at` is a `mode: 'string'` timestamp passed through unconverted (`sign-in.command.ts:135`, `users.command.ts:681`), so the sign-in and users-list bodies carry `2026-10-10 03:19:24.482733+00` while the DTO documents `2026-09-08T00:00:00.000Z` (`tenancy.dto.ts`). Pre-existing since 1.5 *(epic-21 retro)*
 - **9-3d retention must keep enrollment mint rows** *(9-3a design)* — `device.enrolled`'s actor is read from the device's `device.enrollment_code_minted` audit row at enroll time; an enroll whose mint row is gone is refused `400 enrollment-code-invalid`. A retention job that deletes old audit rows must keep the mint row of every device not yet enrolled (a pending code) — and, if the trail is to stay explainable, of every enrolled device whose `device.enrolled` row it keeps
 
+### bin labels (2-10a)
+
+- **Direct network printing** — labels download as a `.zpl` or `.pdf` file; sending ZPL straight to a printer (raw TCP 9100 from the server, or Zebra Browser Print from the web) is not built *(2-10a decision 3)*
+- **Bin create accepts codes no label can carry** — `CreateBinDto.code` is `@Length(1, 32)` only, so a non-ASCII or control character, a leading/trailing space, or a code over 28 characters (the 4x2 limit; 11 at 2x1, 18 on A4) is accepted at create and refused only at print (`422 bin-code-not-barcodable` / `bin-code-too-long-for-label`; the web greys out the unbarcodable rows). A create-time `@Matches` over printable ASCII with no leading/trailing space (and a length policy) would close it; existing rows need a pre-flight list first *(2-10a decision 10)*
+- **LPN (pallet / carton) labels at receiving are story 2-10b** — they reuse `src/shared/labels` *(2-10a decision 1)*
+- **The camera-scan acceptance check is manual and still open** — a printed 4x2 and 2x1 label of `A-01-01` resolving in putaway's `resolveBinBarcode` on a real handheld, to be recorded in the spec's Implementation Notes. The automated proofs are the decoded ZPL `^FD`, the PDF bars decoded back, and a one-off ZXing decode of the PDFs rasterised at 300 dpi *(2-10a AC 1)*
+
 ## catalog
 
 - ~~**`uom_conversions.factor` is an integer nothing applies**~~ — **closed by 1-4:** the rows are the SKU's pack levels (2–1,000,000, `uom_conversions_factor_check`), edited by `PUT …/packaging`, and the handheld applies the factor to a pack scan through the snapshot's `packBarcodes`. The server still converts nothing (documents and the ledger stay in base units); fractional conversions (kg↔lb) still wait *(story 10.2; 1-4)*
