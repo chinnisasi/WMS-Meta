@@ -2,7 +2,8 @@
 title: '3-2b handheld stock adjustment — a stock.adjust device op on the existing adjust route; operators request (always pended for approval), holders adjust under the threshold; review-queue apply arm'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'e3f881de53cd7728c4ca43b25752de85063d610b'  # wms-be (feat/5-1a-email-service tip — 0089; rebase onto main after WMS-BE #125 merges); wms-fe: 2e145dbbfd433c377e3791471a9d9ac3cf4c84b4; wms-mobile: 9c9d6d6a5141d1a89b936e064d68ce003fe5b52d
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -190,10 +191,10 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: the composer extraction and port; the route device arm; command capability/forced-pend/fingerprint; pendReason on 202 and on reads; the permission; sync-report op type and apply arm; snapshot `adjustReasons`; tests; OpenAPI regen.
-- [ ] Mobile: the adjust draft (payload with explicit nulls), sender, classifier, screen, inbox entry; tests.
-- [ ] FE: capability mirror, review-queue arm, approval-view pendReason; regenerated client; tests.
-- [ ] Meta docs (after code): inventory module (device arm, forced pend, composer seam), the mobile fate table, API-SURFACE, the FE design, PENDING, both interface contracts; IMPLEMENTATION-GUIDE if a new pattern emerges.
+- [x] BE: the composer extraction and port; the route device arm; command capability/forced-pend/fingerprint; pendReason on 202 and on reads; the permission; sync-report op type and apply arm; snapshot `adjustReasons`; tests; OpenAPI regen.
+- [x] Mobile: the adjust draft (payload with explicit nulls), sender, classifier, screen, inbox entry; tests.
+- [x] FE: capability mirror, review-queue arm, approval-view pendReason; regenerated client; tests.
+- [x] Meta docs (after code): inventory module (device arm, forced pend, composer seam), the mobile fate table, API-SURFACE, the FE design, PENDING, both interface contracts; IMPLEMENTATION-GUIDE if a new pattern emerges.
 
 **Acceptance Criteria:**
 - Given the web adjust request fixtures from 3-2a, when they are hashed, then the fingerprints equal today's goldens.
@@ -209,6 +210,21 @@ context:
 - `cd workspace/core/frontend/wms-fe && bun run test && bun run lint && bun run typecheck && bun run build` — expected: all pass. The drift guard goes green after the BE merges.
 
 ## Implementation Notes
+
+Implemented 2026-10-23 on `feat/3-2b-handheld-stock-adjustment` in all three child repos (committed locally, not pushed). wms-be is stacked on `feat/5-1a-email-service` (WMS-BE #125, migration 0089), so the migration is **0090**; rebase onto main after #125 merges. The FE generated client was regenerated from that BE, so it also carries 5-1a's contract (FE #110) — regenerate after both merge.
+
+Choices the spec left open, taken here (recommended):
+- **The composer is `AdjustmentSubmission`** (`src/modules/tenancy/adjustment-submission.ts`, A2), exported by `TenancyModule`; the controller only branches the session. `normalizeArms` also maps null FIELDS inside `batch` to absent (the handheld sends explicit nulls) — before 3-2b a null date 400'd, so no stored hash can change. The submission runs `InventoryFacade.assertAdjustmentShape` (new — the command's own shape checks, exported) first, so a device request without `occurredAt` answers 400 before any identity is minted.
+- **Authority** is one function, `assertAdjustAuthority(role)` in `tenancy/permissions.ts` (`adjust` | `request` | 403 naming `stock.adjust`), used by the command and the submission.
+- **Pend reason**: `threshold` whenever the strict-greater rule fired (also for an operator), else `approval-required` (also with no policy — threshold null). A second CHECK, `stock_adjustment_pendings_threshold_reason_check`, keeps a `threshold` pend's threshold non-null. Both CHECKs are added VALID (the table is small); the migration probes accepted and refused shapes. The 202 carries `pendReason`; the list carries `pendReason` + `sourceDeviceId`.
+- **The audit row's `occurred_at` is now `nowIso()`** on both adjust arms (was the request's business time — `expectAuditRow`'s one-minute bound refused a queued handheld op). Action, target and actor are unchanged. Recorded in IMPLEMENTATION-GUIDE §1.
+- **The `stock_adjustment.pending_approval` outbox payload is unchanged in shape**; its `thresholdQuantity` may now be null (no consumer reads it — notifications decode sku/delta/reason only).
+- **Review Apply** validates the stored payload's reasonCode (vocabulary via `InventoryFacade.adjustmentReasons()`), note (1–500), `batch` and `serials` shapes → 400 before any write.
+- **Mobile**: `conflict` is rejected (A5 lists it), unlike the move's queued arm. The confirm step is a "Review the adjustment" → summary → "Confirm the adjustment" pair. New-batch dates are offered on any batch Add (the device cannot tell a new code; PENDING). `adjustReasons` is optional on the type and parsed to `[]`.
+- **FE**: the pend card shows the device as `from handheld …<last 8>` (the device list is not loaded by the queue). `adjustOutcome` reads an `approval-required` (or null-threshold) 202 as "Sent for approval".
+- **Retargeted tests (said openly):** `ledger.spec` "capability missing" now uses the accountant (the operator pends — a new test pins that); `batch-serial.spec`'s denied role is the accountant; `users.spec` 49 + the request grants + the A6 containment clause; `portal.spec` anyRoutes 5; `return-receipts.spec` names `stock.adjust`; FE `users.test.ts`; the FE pend card copy test.
+
+Verification: BE `lint`, `typecheck`, the full jest suite (see the report), `db:migrate` + `db:generate` "No schema changes"; new `test/handheld-adjustment.spec.ts` (22 cases: goldens, the matrix, A2/A4/A7, live-vs-apply parity, snapshot, CHECK pin, OpenAPI). Mutation checks: moving the device check after composition fails the A2 test; an always-present `surface` key fails both A8 goldens. Mobile `bun test` 887 pass + `typecheck`. FE `bun test` 2549 pass, `lint`, `typecheck`, `build`, `check:capability-mirror` (49 / 5).
 
 ## Spec Change Log
 
