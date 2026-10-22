@@ -1021,3 +1021,7 @@
 - source_spec: none
   summary: 5-3b analytic reports — space utilisation (bin fill vs capacity), operator productivity (lines/units per operator per shift from the ledger), count accuracy (variance rate by class/zone), each with the 5-3a client filter and CSV/Excel export.
   evidence: Split from roadmap 5.3 on 2026-10-22 (recommended, taken autonomously) — the roadmap row lists them as a "then" second wave; 5-3a ships the five operational registers first.
+
+- source_spec: none
+  summary: 4-1c staff CSV/Excel order import — upload orders (client, warehouse, client order number, ship-to, SKU lines) reusing src/shared/import/sheet-reader.ts with Check file (dry run) / Import, one createOrder per order with a derived key, deduped by the client order number (4-1b's per-client unique ref).
+  evidence: Split from 4-1b on 2026-10-23 (recommended, taken autonomously) — the import is independently shippable and depends on the client order number landing first.
