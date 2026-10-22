@@ -3,7 +3,7 @@ title: '3-2b handheld stock adjustment — a stock.adjust device op on the exist
 type: 'feature'
 created: '2026-10-22'
 baseline_commit: 'e3f881de53cd7728c4ca43b25752de85063d610b'  # wms-be (feat/5-1a-email-service tip — 0089; rebase onto main after WMS-BE #125 merges); wms-fe: 2e145dbbfd433c377e3791471a9d9ac3cf4c84b4; wms-mobile: 9c9d6d6a5141d1a89b936e064d68ce003fe5b52d
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
