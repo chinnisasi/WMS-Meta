@@ -3,7 +3,7 @@ title: '3-2b handheld stock adjustment — a stock.adjust device op on the exist
 type: 'feature'
 created: '2026-10-22'
 baseline_commit: 'e3f881de53cd7728c4ca43b25752de85063d610b'  # wms-be (feat/5-1a-email-service tip — 0089; rebase onto main after WMS-BE #125 merges); wms-fe: 2e145dbbfd433c377e3791471a9d9ac3cf4c84b4; wms-mobile: 9c9d6d6a5141d1a89b936e064d68ce003fe5b52d
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -217,16 +217,18 @@ Choices the spec left open, taken here (recommended):
 - **The composer is `AdjustmentSubmission`** (`src/modules/tenancy/adjustment-submission.ts`, A2), exported by `TenancyModule`; the controller only branches the session. `normalizeArms` also maps null FIELDS inside `batch` to absent (the handheld sends explicit nulls) — before 3-2b a null date 400'd, so no stored hash can change. The submission runs `InventoryFacade.assertAdjustmentShape` (new — the command's own shape checks, exported) first, so a device request without `occurredAt` answers 400 before any identity is minted.
 - **Authority** is one function, `assertAdjustAuthority(role)` in `tenancy/permissions.ts` (`adjust` | `request` | 403 naming `stock.adjust`), used by the command and the submission.
 - **Pend reason**: `threshold` whenever the strict-greater rule fired (also for an operator), else `approval-required` (also with no policy — threshold null). A second CHECK, `stock_adjustment_pendings_threshold_reason_check`, keeps a `threshold` pend's threshold non-null. Both CHECKs are added VALID (the table is small); the migration probes accepted and refused shapes. The 202 carries `pendReason`; the list carries `pendReason` + `sourceDeviceId`.
-- **The audit row's `occurred_at` is now `nowIso()`** on both adjust arms (was the request's business time — `expectAuditRow`'s one-minute bound refused a queued handheld op). Action, target and actor are unchanged. Recorded in IMPLEMENTATION-GUIDE §1.
+- **The audit row's `occurred_at` is `nowIso()` on the handheld** (code review: the web keeps its business time as before) — `expectAuditRow`'s one-minute bound refused a queued handheld op. Action, target and actor are unchanged. Recorded in IMPLEMENTATION-GUIDE §1.
 - **The `stock_adjustment.pending_approval` outbox payload is unchanged in shape**; its `thresholdQuantity` may now be null (no consumer reads it — notifications decode sku/delta/reason only).
 - **Review Apply** validates the stored payload's reasonCode (vocabulary via `InventoryFacade.adjustmentReasons()`), note (1–500), `batch` and `serials` shapes → 400 before any write.
-- **Mobile**: `conflict` is rejected (A5 lists it), unlike the move's queued arm. The confirm step is a "Review the adjustment" → summary → "Confirm the adjustment" pair. New-batch dates are offered on any batch Add (the device cannot tell a new code; PENDING). `adjustReasons` is optional on the type and parsed to `[]`.
+- **Mobile**: `conflict` stays queued (code review C1, see the Spec Change Log). The confirm step is a "Review the adjustment" → summary → "Confirm the adjustment" pair. New-batch dates are offered on any batch Add (the device cannot tell a new code; PENDING). `adjustReasons` is optional on the type and parsed to `[]`.
 - **FE**: the pend card shows the device as `from handheld …<last 8>` (the device list is not loaded by the queue). `adjustOutcome` reads an `approval-required` (or null-threshold) 202 as "Sent for approval".
 - **Retargeted tests (said openly):** `ledger.spec` "capability missing" now uses the accountant (the operator pends — a new test pins that); `batch-serial.spec`'s denied role is the accountant; `users.spec` 49 + the request grants + the A6 containment clause; `portal.spec` anyRoutes 5; `return-receipts.spec` names `stock.adjust`; FE `users.test.ts`; the FE pend card copy test.
 
 Verification: BE `lint`, `typecheck`, the full jest suite (see the report), `db:migrate` + `db:generate` "No schema changes"; new `test/handheld-adjustment.spec.ts` (22 cases: goldens, the matrix, A2/A4/A7, live-vs-apply parity, snapshot, CHECK pin, OpenAPI). Mutation checks: moving the device check after composition fails the A2 test; an always-present `surface` key fails both A8 goldens. Mobile `bun test` 887 pass + `typecheck`. FE `bun test` 2549 pass, `lint`, `typecheck`, `build`, `check:capability-mirror` (49 / 5).
 
 ## Spec Change Log
+
+- 2026-10-23 (code review C1): a replayed `stock.adjust` answered `409 conflict` (the same key still in flight) stays QUEUED (`unreachable`), as the move's does — supersedes A5's listing of `conflict` among the rejected codes.
 
 ## Review Triage Log
 
@@ -260,3 +262,27 @@ Design review, 2026-10-22 (D). Two layers: a claims check against the code (K) a
 | D24 | B | medium | Stale queued deltas, duplicate requests. → A14 (PENDING) |
 | D25 | B | low | Approval timing of FEFO and checks. → A10 (composed at request; re-checked at approval) |
 | D26 | B | low | Evidence photo for Remove. → A14 (file-storage story) |
+
+Code review, 2026-10-23 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routing per step-04; all choices recommended, taken autonomously. Migration 0090 proven on a copy of the dev database holding 16 pends (13 pending): `db:migrate:deploy` applied it, a re-run was a no-op, every existing row read `pend_reason = 'threshold'` with its threshold kept, both CHECKs validated.
+
+| ID | Source | Verdict | Finding → route |
+|---|---|---|---|
+| C1 | BH1, EC1 | medium | Mobile classifies a replay's 409 `conflict` (same key still in flight — nothing refused) as rejected → review row for an op about to commit. → patch: `unreachable`, as `classifyMoveRefusal` (supersedes A5's conflict arm; Spec Change Log). |
+| C2 | BH2, EC3 | medium | Audit `occurredAt` moved to `nowIso()` for every caller; a web caller sending a business `occurredAt` now gets a different audit time — a side-effect convention change. → patch: server clock on the device surface only; web keeps the business time; test both; reword the IMPLEMENTATION-GUIDE §1 bullet to the device case. |
+| C3 | BH3 | medium | The device route accepts `handlingUnitIds`, but Apply drops them (not in `PAYLOAD_FIELDS`), so live and replayed adjustments diverge. → patch: refuse `handlingUnitIds` on the device surface (400; catch-weight is refused on the handheld anyway). |
+| C4 | BH4, EC2, VG-other | medium | Apply checks stored batch/serials/override reason by type only — the DTO's 1–64 per serial, ≤ 1000 serials, ≤ 64 batch code, ≤ 200 override reason, trimmed dates and the quantity bound are skipped. → patch. |
+| C5 | EC7, EC8 | medium | `normalizeArms` turns an explicit `batch.overrideReason: null` into absent, so a web key stored with it hashes differently after deploy (422 on retry); A8's "web hashes byte-identical" fails for that shape. → patch: normalise on the device surface only; golden for the web null shape. |
+| C6 | EC4 | medium | Confirm double-tap before re-render enqueues two ops (two ULIDs). → patch: a `useRef` in-flight latch. |
+| C7 | BH6, EC5, EC6 | medium | A typed but un-committed date or batch code (no blur / Set not pressed) shows in the field but is not in the draft; the confirm step shows neither dates nor the override reason. → patch: block Confirm while an entry differs from the draft; show dates and the override reason on the confirm step. |
+| C8 | BH8 | low | A bare device credential without an Idempotency-Key gets 400 before the badge-in 401. → patch: badge-in check right after `assertOwnTenant`. |
+| C9 | BH11, VG-other | low | `stock_adjustment.pending_approval` carries no `pendReason`; a forced pend and a threshold pend look the same downstream. → patch: add `pendReason` to the payload (consumer ignores unknown keys). |
+| C10 | VG1 | medium | The submission's replay 403 for a request-only holder (A4) is never exercised on a batch/serial SKU (the plain-SKU test is answered by the command). → patch: tracked-SKU twin test. |
+| C11 | VG2 | low | The applied-arm device heartbeat (`touchDeviceInTx`) is untested. → patch: reset + assert in the manager-on-device test. |
+| C12 | VG3 | medium | Apply's note/batch/serials checks are untested. → patch: three malformed rows → 400, nothing written, row open. |
+| C13 | BH9 | low | Missing tests: web explicit `occurredAt` audit time (C2), mobile `conflict` (C1), revoked device through HTTP. → patch. |
+| C14 | BH5 | low | The approval card names the handheld by a UUID tail, not its label. → defer (deferred-work). |
+| C15 | BH7 | low | No sign/reason sanity check (`found` with Remove, `damaged` with Add). → defer (deferred-work). |
+| C16 | BH10 | low | Delivery risk of the stacked branch. Process, not code: the BE branch is rebased onto main after WMS-BE #125 merges before any PR; the FE client is regenerated then. → reject (handled in delivery). |
+| C17 | BH9 (probe) | false | "0090's probe never checks pre-existing rows": proven directly on a DB copy with 16 existing pends (above). → reject. |
+| C18 | VG-other | low | `withPendReason` on fresh results is redundant. Harmless. → reject. |
+| C19 | BH11 | low | Owner notifications grow with every operator request. → defer, with C9 making them distinguishable. |
