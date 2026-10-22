@@ -1019,6 +1019,13 @@
   evidence: 4-1a code review VG5; needs a non-superuser e2e harness, cross-cutting across portal writes.
 
 - source_spec: none
+  summary: 5-1b password reset by email (the 6.1 remainder) — a forgot-password request, a sealed single-use reset token mailed through 5-1a's queue, the reset page, rate limits, and session revocation on reset.
+  evidence: Split from roadmap 5.1 on 2026-10-23 (recommended, taken autonomously) — 5-1a ships the mail infrastructure with invites as its first sender.
+- source_spec: none
+  summary: 5-1c invoice delivery and alert emails — client invoices emailed to client contacts with the role, and alert mail (licence expiry, the PENDING entry) through 5-1a's queue, with per-recipient opt-out.
+  evidence: Split from roadmap 5.1 on 2026-10-23 (recommended, taken autonomously).
+
+- source_spec: none
   summary: 5-3b analytic reports — space utilisation (bin fill vs capacity), operator productivity (lines/units per operator per shift from the ledger), count accuracy (variance rate by class/zone), each with the 5-3a client filter and CSV/Excel export.
   evidence: Split from roadmap 5.3 on 2026-10-22 (recommended, taken autonomously) — the roadmap row lists them as a "then" second wave; 5-3a ships the five operational registers first.
 
