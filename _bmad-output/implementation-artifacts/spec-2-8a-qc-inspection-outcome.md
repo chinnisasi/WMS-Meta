@@ -3,7 +3,7 @@ title: '2-8a QC inspection outcome — inspect a QC hold per batch: passed units
 type: 'feature'
 created: '2026-10-22'
 baseline_commit: 'd700a52c0fe4e87da3eeaa679d3e5661660033f3'  # wms-be (feat/3-2b tip, stacked on 5-1a — 0089/0090; rebase onto main after WMS-BE #125 and the 3-2b BE PR merge); wms-fe: 2e145dbbfd433c377e3791471a9d9ac3cf4c84b4; wms-mobile: 9c9d6d6a5141d1a89b936e064d68ce003fe5b52d
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
