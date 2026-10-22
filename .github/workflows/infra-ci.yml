@@ -1,0 +1,84 @@
+# Story 6-2b — checks for the Terraform and the workflows. Never touches AWS:
+# no credentials, no backend (init -backend=false), mocked providers only.
+name: infra-ci
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/**"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/**"
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff infra
+
+  validate:
+    name: terraform validate (${{ matrix.root }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [bootstrap, global, envs/staging, envs/production, modules/environment]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - name: init (no backend; the committed lock file must already cover this platform)
+        working-directory: infra/${{ matrix.root }}
+        run: terraform init -backend=false -input=false -lockfile=readonly
+      - name: validate
+        working-directory: infra/${{ matrix.root }}
+        run: terraform validate
+      # The module's shape, and each env root's committed terraform.tfvars
+      # planned through it — mocked providers, no AWS.
+      - name: test (mocked providers — no AWS)
+        if: matrix.root == 'modules/environment' || startsWith(matrix.root, 'envs/')
+        working-directory: infra/${{ matrix.root }}
+        run: terraform test
+
+  deploy-script:
+    name: ecs-deploy.sh tests (stubbed aws)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: bash .github/scripts/tests/ecs-deploy.test.sh
+
+  actionlint:
+    name: actionlint + shellcheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: actionlint (shellcheck runs over every run block)
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+      - name: shellcheck the deploy script
+        run: docker run --rm -v "$PWD:/repo" -w /repo --entrypoint shellcheck rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 .github/scripts/ecs-deploy.sh .github/scripts/tests/ecs-deploy.test.sh

@@ -273,6 +273,7 @@ Backend first, always. A story spanning repos lands the additive backend change,
 - A new capability must be mirrored in `wms-fe/src/lib/users.ts`; `check:capability-mirror` reads the backend source and fails CI naming the drift
 - **The FE `generated-client` job stays red until the backend PR merges.** Expected, not a defect
 - Update the interface contract in `docs/repos/<repo>/README.md` when the change lands
+- **A new environment variable the code reads (wms-be or wms-fe) must also be added to the AWS task definitions** in meta `infra/modules/environment/ecs.tf` — on the api, worker, web or migrate container as it applies (a secret as a Secrets Manager `valueFrom`, never a literal), and to `DEPLOY.md` §2 and §8.2 — **or production runs without it**. `.env.example` and `test/env-example.spec.ts` (6-2a) do not reach the deployed environment; nothing fails until the code reads the missing value in production (story 6-2b). A variable whose default is right everywhere may be skipped, and the story says so
 - Meta repo last
 
 ---

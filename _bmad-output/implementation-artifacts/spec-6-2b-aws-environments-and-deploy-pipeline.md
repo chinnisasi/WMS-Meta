@@ -2,7 +2,8 @@
 title: '6-2b AWS environments and deploy pipeline — staging and production in ap-south-1 as Terraform, a GitHub Actions deploy (build → ECR → migrate → roll) that does nothing until configured'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'f23986de491c1d220df6e2959855602a5ce529ec'  # WMS-Meta (infra/ + .github/workflows); wms-be/wms-fe/wms-mobile: unchanged
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -231,13 +232,13 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `infra/bootstrap/*.tf`: the state bucket (versioning, SSE-KMS, public access block, deny non-TLS); outputs the bucket name.
-- [ ] `infra/global/*.tf`: ECR repos with lifecycle, the OIDC provider (`token.actions.githubusercontent.com`), and per-environment deploy roles. Each role's trust is limited to the `environment:<env>` sub claim. Its policy covers ECR push/pull, ECS register/run/update/describe on its environment, `iam:PassRole` for its environment's task and execution roles only, SSM read of `/wms/<env>/deploy`, and logs read.
-- [ ] `infra/modules/environment/*.tf`: network, ALB/ACM/Route 53, ECS cluster, services, task definitions, autoscaling, RDS, Valkey, secrets, IAM roles, logs, the SSM deploy parameter, the S3 anchor bucket (gated by `ledger_anchor_worm`), and the SES identity. Variables carry descriptions and validations (e.g. `environment` ∈ staging|production, `api_desired_count ≥ 2` when production).
-- [ ] `infra/envs/{staging,production}/{main.tf,backend.tf,terraform.tfvars}`: module calls with the sizes and flags from the decisions; backend `key = "<env>/terraform.tfstate"`.
-- [ ] `.github/workflows/deploy.yml`: as decision 9.
-- [ ] `.github/workflows/infra-ci.yml`: fmt, validate (for each root, matrix) and actionlint.
-- [ ] `infra/README.md` + `docs/design/DEPLOY.md` §AWS (Boundaries list), plus the C30 correction. `docs/design/SYSTEM-DESIGN.md` deploy section: the topology diagram (mermaid). PENDING / deferred-work updated and the 6-2c entry added. `docs/repos/` contracts note the required production env per service.
+- [x] `infra/bootstrap/*.tf`: the state bucket (versioning, SSE-KMS, public access block, deny non-TLS); outputs the bucket name.
+- [x] `infra/global/*.tf`: ECR repos with lifecycle, the OIDC provider (`token.actions.githubusercontent.com`), and per-environment deploy roles. Each role's trust is limited to the `environment:<env>` sub claim. Its policy covers ECR push/pull, ECS register/run/update/describe on its environment, `iam:PassRole` for its environment's task and execution roles only, SSM read of `/wms/<env>/deploy`, and logs read.
+- [x] `infra/modules/environment/*.tf`: network, ALB/ACM/Route 53, ECS cluster, services, task definitions, autoscaling, RDS, Valkey, secrets, IAM roles, logs, the SSM deploy parameter, the S3 anchor bucket (gated by `ledger_anchor_worm`), and the SES identity. Variables carry descriptions and validations (e.g. `environment` ∈ staging|production, `api_desired_count ≥ 2` when production).
+- [x] `infra/envs/{staging,production}/{main.tf,backend.tf,terraform.tfvars}`: module calls with the sizes and flags from the decisions; backend `key = "<env>/terraform.tfstate"`.
+- [x] `.github/workflows/deploy.yml`: as decision 9.
+- [x] `.github/workflows/infra-ci.yml`: fmt, validate (for each root, matrix) and actionlint.
+- [x] `infra/README.md` + `docs/design/DEPLOY.md` §AWS (Boundaries list), plus the C30 correction. `docs/design/SYSTEM-DESIGN.md` deploy section: the topology diagram (mermaid). PENDING / deferred-work updated and the 6-2c entry added. `docs/repos/` contracts note the required production env per service.
 
 **Acceptance Criteria:**
 - Given the Terraform image (`hashicorp/terraform`, pinned to the same minor as `required_version`), when `fmt -check -recursive` runs, and `init -backend=false && validate` runs on each of the four roots, then all pass.
@@ -263,6 +264,38 @@ context:
 - `docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:<pinned>` -- expected: exit 0
 
 ## Implementation Notes
+
+Implemented 2026-10-23 against `main` at `f23986d` (WMS-Meta #213/#214, WMS-BE #124 and WMS-FE #109 all merged, so A16's wait is satisfied; the PENDING and deferred-work entries were re-anchored by text, not line). Meta-only: no wms-be/wms-fe change, no migration.
+
+**Files.** `infra/{bootstrap,global,modules/environment,envs/staging,envs/production}/`, `infra/README.md`, `infra/modules/environment/tests/environment.tftest.hcl`, `.github/workflows/{deploy.yml,infra-ci.yml}`, `.github/scripts/ecs-deploy.sh`, `.gitignore`; docs: `DEPLOY.md` (§8 AWS; §1/§2/§3/§7 corrections), `SYSTEM-DESIGN.md` (topology), `PENDING.md`, `deferred-work.md`, `docs/repos/wms-{be,fe}/README.md`.
+
+**Resolved versions.** `hashicorp/aws` 6.70.0, `hashicorp/random` 3.9.1; Terraform 1.10.5 (CI and the docker commands). Actions pinned by SHA: `actions/checkout` v4.2.2 (`11bd719…`), `aws-actions/configure-aws-credentials` v4.3.1 (`7474bc4…`), `hashicorp/setup-terraform` v3.1.2 (`b9cd54a…`); `rhysd/actionlint:1.7.12` by digest. The build uses the runner's own `docker buildx` and AWS CLI (no build/ECR-login actions).
+
+**Choices the spec left open, taken (recommended, autonomously):**
+1. **Job vs step timeout (A4 × A8).** A8's `timeout-minutes: 60` was written for a migrate job; A4 merged migrate and roll into one `deploy` job. The 60-minute bound sits on the **Migrate step** (its poll is 45 minutes); the job's own is 170 (≤ 125 minutes of bounded work), below the deploy role's 180-minute session (`role-duration-seconds` = `max_session_duration` = 10800).
+2. **First production apply passes `-var api_autoscaling=false`** (an A13 extension). Registering the scalable target with floor 2 would start API tasks immediately, before any image exists; the services are created at 0. Apply again without the flag after the first production deploy (`infra/README.md`, DEPLOY.md §8.3, PENDING).
+3. **The ECS steps live in `.github/scripts/ecs-deploy.sh`** (migrate / roll / ready), shellchecked in CI, instead of 200 lines of inline YAML. `register_from_base` sets a global rather than echoing from a subshell, so a refusal's `::error::` reaches the log.
+4. **Three execution roles, not one:** app (api + worker: app secrets), migrate (owner URL + role passwords only — A9), web (no secrets). Every family has a named task role (empty except the worker's) so the A2 role assertion always has two ARNs to compare.
+5. **A dry run that would refuse (exit 2) fails the job** with "a real run WOULD REFUSE", so it shows red; a clean dry run succeeds and stops.
+6. **The gate job carries no `if:`** — it must run to print "not configured". A configured run off `main` fails there; `build` and `deploy` repeat the `refs/heads/main` check (A3).
+7. **The A6 privilege check runs through the migrate task** (no bastion): a dry run registers a revision with a real image, then a `run-task` override runs a `bun -e` postgres.js query. The exact command was run against the local `wms-be` image and Postgres 18 (`{"bypassrls":true,"read_all_stats_admin":true}` as a superuser) — DEPLOY.md §8.3. The first-time order therefore sets up the GitHub environments and role variables before the check (A13's order otherwise kept).
+8. **Unknown hosts get a 404** from the HTTPS listener's default action (the bare `*.elb.amazonaws.com` name included), and HTTP → HTTPS is a 301.
+9. **`EXPO_ACCESS_TOKEN`'s secret always exists** (no value); it is wired on the worker only when `push_gateway = "expo"`.
+10. **Container health checks:** interval 15 s, timeout 5 s, retries 3, start period 30 s (A7 fixed only the start period).
+11. **ACM validation records are keyed by the two static host names**, not by the certificate's computed options, so the instance keys never depend on an apply-time value.
+12. **Lock files** cover `linux_amd64`, `darwin_arm64` and also `linux_arm64` (the Terraform Docker image on Apple silicon; without it a second local `init -lockfile=readonly` fails its cache check). A superset of A16.
+13. **The bootstrap's first apply uses a git-ignored `local_override.tf`** (`backend "local" {}`) over its committed partial S3 backend, then `init -migrate-state` (A10).
+14. **A mocked `terraform test`** (`modules/environment/tests/`) applies the module against mock providers — no AWS — and pins the acceptance criteria that read the task definitions, the worker service, the trust policy, push-on-staging-only and liveness health; CI runs it. A mutation (a `*_POLL_MS` on the API, worker minimum healthy 50) makes it fail.
+
+**Recorded "verify at the first plan"** (AWS was not reachable): Postgres `18` / family `postgres18`, Valkey `8.1` / family `valkey8`, Performance Insights on `db.t4g.small`, the `aws:SourceArn` condition in the ECS task-role trust (applied to the execution roles too), and the RDS master user's privileges (A6). All in PENDING deploy and `infra/README.md`.
+
+**Verification (all local, Docker; nothing reached AWS):**
+- `terraform fmt -check -recursive` (1.10.5): exit 0.
+- `init -backend=false -lockfile=readonly && validate` on bootstrap, global, envs/staging, envs/production and modules/environment: "Success! The configuration is valid." ×5, twice (a second run proves the cache matches the lock).
+- `terraform test` in modules/environment: 3 passed (production shape, staging shape, the `api_desired_count ≥ 2` validation).
+- `rhysd/actionlint:1.7.12` over the repo: no findings; `shellcheck` over `ecs-deploy.sh`: clean.
+- `ecs-deploy.sh` against a stubbed `aws` CLI: migrate exit 0 / 2 / 137 / no exit code / `run-task` failures / dry run 0 and 2 / an injected `allow_locking`; roll first deploy (sets `--desired-count`), later deploy (does not), circuit-breaker rollback (PRIMARY on another revision), `FAILED`, a base revision with foreign roles, an unknown service. The copied revision drops the read-only fields and swaps only the image.
+- The SYSTEM-DESIGN mermaid diagram renders (`minlag/mermaid-cli`).
 
 ## Spec Change Log
 
@@ -298,3 +331,32 @@ Design review, 2026-10-22 (D). Two layers: a claims check against the code (K) a
 | D24 | B | low | Partial roll leaves mixed versions with no recovery. → A1 |
 | D25 | B | — | Cookies leak across environments on a shared domain. → R: the refresh cookie is host-only, with no Domain attribute (`session-cookie.ts:23-33`, verified by K) |
 | D26 | B | — | Private repos need a token for cross-repo checkout. → R: all three repos are public (K, `gh repo view`) |
+
+Code review, 2026-10-23 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routing per step-04; all choices recommended, taken autonomously. Nothing was run against AWS.
+
+| ID | Source | Verdict | Finding → route |
+|---|---|---|---|
+| C1 | VG1 | medium | `ecs-deploy.sh` (migrate exit mapping, rollback detection, first-deploy desired count, dry-run refusal) and the gate's input checks run in no CI test; the stub-`aws` harness used by hand is not committed. → patch: commit the harness and run it in `infra-ci.yml`. |
+| C2 | VG2 | medium | The `/wms/<env>/deploy` parameter's keys (and migrate's `log_stream_prefix`/`container` matching the container's log options) are unchecked; a rename merges green and loses the migrate log. → patch: tftest assertions. |
+| C3 | VG3 | medium | A9's execution-role secret split is untested, and the mocks give every secret and role one ARN, so no assertion could tell them apart. → patch: overrides with distinct ARNs + IAM-document assertions. |
+| C4 | EC1, BH3 | medium | Deploy job `timeout-minutes: 150` exceeds the 7200 s role session; credentials can expire mid-roll. → patch: session 10800 s on both sides (`role-duration-seconds`, `max_session_duration`), job timeout under it, arithmetic stated once in DEPLOY §8. |
+| C5 | EC2, EC9 | medium | A dry run drops a non-empty `allow_locking`, so it reports a refusal the real run would accept (A8 claim). → patch: pass `--allow-locking` to the dry run too. |
+| C6 | EC3 | low | Parameter groups have fixed names with `create_before_destroy`; a family change cannot create the replacement. → patch: `name_prefix`. |
+| C7 | EC4 | low | A production rollback with `skip_migrations` to a SHA older than staging's last deploy is refused. → patch (docs): DEPLOY §8 rollback — re-deploy staging at that SHA first, or use the ECS previous-revision rollback. |
+| C8 | EC5, BH2 | low | Staging anchor objects never expire (Object Lock retention ending only makes them deletable); no lifecycle rule, no `force_destroy`. → patch: lifecycle expiry (current + noncurrent) and `force_destroy` in staging only. |
+| C9 | EC6 | low | `api_max_count < api_desired_count` is caught only at apply. → patch: a variable validation. |
+| C10 | EC7 | medium | A migrate task past its deadline keeps running and holding the advisory lock. → patch: `aws ecs stop-task` before failing. |
+| C11 | EC8 | low | A missing deploy-parameter key reaches AWS calls as the literal `null`. → patch: `jq -er` + fail naming the key. |
+| C12 | BH1 | false | Lock files are present in all five roots (excluded from the review diff only). → reject. |
+| C13 | BH4 | false | The migrate log printing secrets: `provision-roles` prints role names only, `migrate-deploy` prints plan lines and error messages, never the URL or passwords (checked in wms-be). → reject. |
+| C14 | BH5 | low | Ticked task text names the old placement (deploy roles in global, gated bucket, SES in the module). The fix edits this build's spec. → reject (Implementation Notes already record the moves). |
+| C15 | BH6 | medium | The "new env var must be added to `ecs.tf`" rule lives only in the wms-be README, not in IMPLEMENTATION-GUIDE which specs load. → patch (docs); an automated drift check → defer. |
+| C16 | BH7 | medium | CI never evaluates the committed `envs/*/terraform.tfvars` against the module; a broken decision value merges green. → patch: a `terraform test` in each env root (mock providers, plan, the root's tfvars load automatically) asserting the decision values. |
+| C17 | BH8 | medium | The first production apply depends on remembering `-var api_autoscaling=false`. → defer (a precondition needs a source of truth for "an image exists"; DEPLOY §8 states the step). |
+| C18 | BH9 | medium | The state bucket's operator-only policy can lock everyone out; the ARN validation does not check the account; the SSO example path assumes ap-south-1; no recovery documented. → patch: validation pins `account_id`, README example and a break-glass (root user deletes the bucket policy). |
+| C19 | BH10 | low | Pipeline-registered task-definition revisions drop their tags (`describe` without `--include TAGS`); the jq strip list is verified against a stub only. → patch: carry tags; add the round-trip to the README's verify-at-first-deploy list. |
+| C20 | BH11 | false | "Only the worker calls S3": the API's only ledger-integrity route reads stored state (`inventoryFacade.ledgerIntegrity`); `put`/`get` run from the worker's `runLedgerIntegrity`. → reject. |
+| C21 | BH12 | medium | A6 has no fallback if the RDS master lacks BYPASSRLS/ADMIN on `pg_read_all_stats`. Already a recorded go-live blocker (PENDING deploy). → defer (no new entry; carried by 6-2c). |
+| C22 | BH13 | low | PENDING's header counts were not updated. → patch. |
+| C23 | BH14 | low | The global `wms-build` concurrency group can cancel a waiting staging run silently. → patch (docs, DEPLOY §8.5). |
+| C24 | VG-other | low | The deploy role's actions and the pipeline's AWS calls match only by hand. → patch: add to the README's verify-at-first-plan list. |

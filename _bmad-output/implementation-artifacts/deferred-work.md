@@ -1024,22 +1024,22 @@
   evidence: 3-5a decision 4 and code review BH4; editing moves/page.tsx before #103 merges would conflict with it.
 
 - source_spec: none
-  summary: 6-2b AWS environments + deploy pipeline — staging and production in ap-south-1 as IaC (ECS Fargate services for wms-be API + workers and wms-fe, RDS Postgres, ElastiCache Valkey, S3 buckets, SES identity, Secrets Manager, ALB + ACM, CloudWatch logs), and a GitHub Actions deploy (build → push ECR → migrate task → rolling deploy, staging auto, production on approval).
+  summary: ~~6-2b AWS environments + deploy pipeline — staging and production in ap-south-1 as IaC (ECS Fargate services for wms-be API + workers and wms-fe, RDS Postgres, ElastiCache Valkey, S3 buckets, SES identity, Secrets Manager, ALB + ACM, CloudWatch logs), and a GitHub Actions deploy (build → push ECR → migrate task → rolling deploy, staging auto, production on approval).~~ **DONE 2026-10-23 by story 6-2b** (`spec-6-2b-aws-environments-and-deploy-pipeline.md`) — Terraform in meta `infra/`, `.github/workflows/deploy.yml`; written and validated, not yet applied (placeholders until the operator runs `DEPLOY.md` §8). Staging deploys by dispatch, not automatically (recorded in PENDING deploy).
   evidence: Split from roadmap 6.2 on 2026-10-23 (recommended, taken autonomously) — 6-2a ships the container images, the CI build and the guarded migration runner that 6-2b deploys.
 - source_spec: spec-6-2a-container-images-and-safe-migrations.md
-  summary: 6-2b — a Bun in-image graceful-drain smoke (SIGTERM the wms-be image during a slow request; assert 200 and exit 0). The drain order is proven by jest on Node only; Bun was checked by hand.
+  summary: ~~6-2b~~ **→ 6-2c** (split by 6-2b decision 10) — a Bun in-image graceful-drain smoke (SIGTERM the wms-be image during a slow request; assert 200 and exit 0). The drain order is proven by jest on Node only; Bun was checked by hand.
   evidence: 6-2a code review C26 (X → 6-2b).
 - source_spec: spec-6-2a-container-images-and-safe-migrations.md
   summary: The deploy migrator guards index builds only — a foreign key or CHECK added without NOT VALID, SET NOT NULL, a volatile default and a rewriting type change still take a full-table lock unguarded. IMPLEMENTATION-GUIDE §3 carries the rule for new migrations; a guard is its own design.
   evidence: 6-2a code review C29 (X → PENDING deploy).
 - source_spec: spec-6-2a-container-images-and-safe-migrations.md
-  summary: 6-2b — wms-fe has no graceful drain: Next's standalone server.js exits on SIGTERM without waiting for in-flight renders; a drain wrapper around it.
+  summary: ~~6-2b~~ **→ 6-2c** (split by 6-2b decision 10) — wms-fe's drain: Next 16's standalone server.js does wait for in-flight renders on SIGTERM (corrected by 6-2b), but unbounded and exiting 143; a bounded drain that exits 0.
   evidence: 6-2a code review C30 (X → 6-2b; recorded in DEPLOY.md §1).
 - source_spec: spec-6-2a-container-images-and-safe-migrations.md
-  summary: 6-2b — a worker heartbeat (each job stamps its last tick; a staleness check the orchestrator reads), and no full API listener on the worker task (none, or health-only).
+  summary: ~~6-2b~~ **→ 6-2c** (split by 6-2b decision 10) — a worker heartbeat (each job stamps its last tick; a staleness check the orchestrator reads), and no full API listener on the worker task (none, or health-only).
   evidence: 6-2a code review C31 (X → 6-2b; recorded in PENDING deploy).
 - source_spec: spec-6-2a-container-images-and-safe-migrations.md
-  summary: 6-2b — the ALB/ECS values DEPLOY.md now states (target-group fail-open with readiness on shared dependencies, deregistration delay 20–25 s, stop timeout 30 s), digest-pinned base images, and the wms-fe writable cache under a root-owned image.
+  summary: ~~6-2b — the ALB/ECS values DEPLOY.md now states (target-group fail-open with readiness on shared dependencies, deregistration delay 20–25 s, stop timeout 30 s)~~ **ALB/ECS half DONE by 6-2b** (deregistration delay 25 s, stop timeout 30 s, fail-open kept; the target group checks liveness and readiness became the pipeline's gate — 6-2b A7). **The rest → 6-2c:** digest-pinned base images, and the wms-fe writable cache under a root-owned image.
   evidence: 6-2a code review C28 and C19 (the X halves → 6-2b).
 
 - source_spec: none
@@ -1067,3 +1067,20 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
   summary: 6-2c runtime hardening. Covers BE keepAliveTimeout 65 s / headersTimeout 66 s, above the ALB's 60 s idle timeout, verified under Bun (a go-live gate), a worker heartbeat (C31), a bounded web drain with exit 0 (C30), a Bun in-image drain smoke (C26), digest-pinned bases with a root-owned FE image and writable cache (C19), and the RDS CA bundle with sslmode verify-full.
   evidence: These are wms-be/wms-fe code changes on top of 6-2a (WMS-BE #124, WMS-FE #109), so they can't branch from main until those merge; 6-2b is meta-only IaC and pipeline.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
+  summary: Verify the RDS master user's BYPASSRLS and ADMIN OPTION on pg_read_all_stats at the first staging deploy (DEPLOY.md §8.3, through a dry run). If either is false, provision-roles cannot run — a go-live blocker with no designed fallback.
+  evidence: 6-2b A6 — AWS was unreachable when the story was written; recorded in PENDING deploy.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
+  summary: Move the generated DB and Valkey credentials out of Terraform state with write-only attributes (password_wo / secret_string_wo, Terraform >= 1.11), with a rotation design; and automate the Valkey AUTH token rotation (ElastiCache ROTATE strategy).
+  evidence: 6-2b A10 (accepted risk) and A16.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
+  summary: Platform follow-ups recorded by 6-2b — separate AWS accounts and a region SCP (6.4), WAF and CloudFront (6.4/security), alarms incl. the t4g CPU-credit alarm and a tested restore (6.3), staging auto-deploy on app-repo merge, an internal path for the web's server-side API calls (WMS_API_INTERNAL_BASE_URL).
+  evidence: 6-2b A11, A14, A5, the Never list and the design notes; each listed in PENDING deploy.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
+  summary: Automated drift check between the env vars wms-be/wms-fe read (`.env.example`) and the ECS task definitions in `infra/modules/environment/ecs.tf`, so a new variable cannot reach production unset.
+  evidence: 6-2b code review C15 (BH6); today only a README/IMPLEMENTATION-GUIDE rule.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
+  summary: Enforce the first production apply's `api_autoscaling=false` (a precondition tied to whether an image or `/wms/production/deployed` exists) instead of relying on the operator remembering the flag.
+  evidence: 6-2b code review C17 (BH8); forgetting it starts 2 API tasks on a missing image and loops the circuit breaker.
