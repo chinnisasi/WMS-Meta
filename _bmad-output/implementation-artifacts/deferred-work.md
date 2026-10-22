@@ -1055,6 +1055,15 @@
 - source_spec: none
   summary: 5-1c invoice delivery and alert emails — client invoices emailed to client contacts with the role, and alert mail (licence expiry, the PENDING entry) through 5-1a's queue, with per-recipient opt-out.
   evidence: Split from roadmap 5.1 on 2026-10-23 (recommended, taken autonomously).
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1a-email-service-and-invite-emails.md`
+  summary: Surface email config faults (SES paused, sender unverified, credentials) to the owner and ops — a notification-panel entry and an alert — instead of "Queued to send…" for 24 h then a silent expiry.
+  evidence: 5-1a code review C20 (BH8); today the only signal is a once-per-tick worker log line. Natural home: 6.3 (alerts) or 5-1c.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1a-email-service-and-invite-emails.md`
+  summary: Rate-limit resend invite — a minimum interval per user and a per-tenant daily cap — so a stolen or careless owner session cannot burn the shared SES sending reputation.
+  evidence: 5-1a code review C21 (BH10).
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-1a-email-service-and-invite-emails.md`
+  summary: Strip `token` from the accept-invite URL with history.replaceState once read, so it does not stay in the address bar and browser history.
+  evidence: 5-1a code review C22 (BH11); pre-existing since the accept page shipped.
 
 - source_spec: none
   summary: 5-3b analytic reports — space utilisation (bin fill vs capacity), operator productivity (lines/units per operator per shift from the ledger), count accuracy (variance rate by class/zone), each with the 5-3a client filter and CSV/Excel export.
@@ -1067,13 +1076,3 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
   summary: 6-2c runtime hardening. Covers BE keepAliveTimeout 65 s / headersTimeout 66 s, above the ALB's 60 s idle timeout, verified under Bun (a go-live gate), a worker heartbeat (C31), a bounded web drain with exit 0 (C30), a Bun in-image drain smoke (C26), digest-pinned bases with a root-owned FE image and writable cache (C19), and the RDS CA bundle with sslmode verify-full.
   evidence: These are wms-be/wms-fe code changes on top of 6-2a (WMS-BE #124, WMS-FE #109), so they can't branch from main until those merge; 6-2b is meta-only IaC and pipeline.
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-5-1a-email-service-and-invite-emails.md`
-  summary: Surface email config faults (SES paused, sender unverified, credentials) to the owner and ops — a notification-panel entry and an alert — instead of "Queued to send…" for 24 h then a silent expiry.
-  evidence: 5-1a code review C20 (BH8); today the only signal is a once-per-tick worker log line. Natural home: 6.3 (alerts) or 5-1c.
-- source_spec: `_bmad-output/implementation-artifacts/spec-5-1a-email-service-and-invite-emails.md`
-  summary: Rate-limit resend invite — a minimum interval per user and a per-tenant daily cap — so a stolen or careless owner session cannot burn the shared SES sending reputation.
-  evidence: 5-1a code review C21 (BH10).
-- source_spec: `_bmad-output/implementation-artifacts/spec-5-1a-email-service-and-invite-emails.md`
-  summary: Strip `token` from the accept-invite URL with history.replaceState once read, so it does not stay in the address bar and browser history.
-  evidence: 5-1a code review C22 (BH11); pre-existing since the accept page shipped.
