@@ -1008,6 +1008,10 @@
 - source_spec: none
   summary: 3-5b full stock take with freeze — a warehouse- or zone-wide count of every bin, a freeze that refuses every stock-moving command (putaway, pick, move, transfer, adjustment, receipt into the frozen scope) while it runs, and a close that posts the variances and lifts the freeze.
   evidence: Split from roadmap 3.5 on 2026-10-22 (recommended, taken autonomously) — the freeze is a cross-cutting guard in every movement command, independently shippable from 3-5a (blind handheld counts + the count-admin web surface).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-8a-qc-inspection-outcome.md`
+  summary: 2-8b return to vendor — a return-to-vendor document drawing from DAMAGED, covering both QC-fail units (2-8a `qc.failed`) and 2-4a receipt damage (`grn.damaged`). It needs the vendor snapshot (`VendorSnapshotV1`), lines tied to `grnLineId`, an RTV outbound ledger type out of DAMAGED (metering `['from']`), a printable note, and the RTV fee decision.
+  evidence: It is a new outbound document type, needed for receipt damage independent of QC; split from 2.8 at the scope gate. 13-3 and 4.7's "return to vendor" build on it.
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
   summary: Cancel a pending count task (web, counts.manage) — needs a status widening migration (after 0087/WMS-BE #116 merges), a refusal or reopen when the task is a variance's recount target, a decision on the scheduler re-creating a cancelled scheduled task, and a discard-only review path for a device submit that lands after the cancel.
   evidence: 3-5a design review B3/B5/B12/B13/B14 — deferred so 3-5a ships without a migration.
