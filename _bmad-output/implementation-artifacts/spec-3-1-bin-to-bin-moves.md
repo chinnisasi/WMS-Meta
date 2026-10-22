@@ -2,7 +2,8 @@
 title: '3-1 bin-to-bin moves — move stock between two bins of one warehouse, from the handheld (queued op) and the web Moves page'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'e1771c7fc88b060ac998c0bf2c113058b9859c1d'  # wms-be; wms-fe: 3a5a14ff1150780d13bb002d05800a63b7e3dd3b; wms-mobile: d8df154903f908f31432e47aaaec4971a5efb3cc
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -225,8 +226,8 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: registry, DTO, capability, audit, reasons, the command, the route, the sync-report op, the snapshot fields; OpenAPI.
-- [ ] BE `test/moves.spec.ts`:
+- [x] BE: registry, DTO, capability, audit, reasons, the command, the route, the sync-report op, the snapshot fields; OpenAPI.
+- [x] BE `test/moves.spec.ts`:
   - every matrix row;
   - the same-key lock race (`raceTwice`/`waitParked`);
   - opposite concurrent moves A→B and B→A do not deadlock;
@@ -234,14 +235,14 @@ context:
   - device replay and review Apply/Discard;
   - a hash golden for each surface;
   - reconcile replays to the projections.
-- [ ] Mobile: draft, screen, op, sender, classification, snapshot and inbox, plus tests:
+- [x] Mobile: draft, screen, op, sender, classification, snapshot and inbox, plus tests:
   - every resolver branch and the pinned copy;
   - the payload shape with nulls;
   - the putaway copy unchanged after the extraction;
   - legacy seal;
   - FIFO across op types, including a re-plannable putaway followed by a move from the same bin.
-- [ ] Web: page, form, list, mapper, labels, mirror, batch `binId`, plus tests; regenerated client.
-- [ ] Meta docs:
+- [x] Web: page, form, list, mapper, labels, mirror, batch `binId`, plus tests; regenerated client.
+- [x] Meta docs:
   - `API-SURFACE.md`;
   - `modules/movements.md` (the move command), `inventory.md` (`stock.moved`, the reference doc), `putaway.md` (relationship);
   - frontend SYSTEM-DESIGN `:49`/`:60` (route table, placeholder count);
@@ -266,6 +267,13 @@ context:
 - `bun run lint && bun run typecheck` (wms-be, wms-fe); `bun test` + typecheck (wms-mobile, wms-fe); `bun run check:capability-mirror` (wms-fe): pass.
 
 ## Implementation Notes
+
+Implemented 2026-10-22 against the frozen sections above. Where the code departs from a literal reading of the Code Map, the reason is recorded here.
+
+- **Backend.** `MoveCommand.moveStock` follows the 18-step order exactly; the same-key race test fails with `409 conflict` when the second replay is deleted (mutation-checked). `InventoryFacade.assertPlacementGatesInTx` gained an optional `subject: 'transfer' | 'move'` that changes only the refusal WORDING (the transfer's details stay byte-identical by default); the codes and statuses are shared. New facade read `openQuarantinedBinsInTx`. `CatalogFacade.getSkuSummariesInTx` reads the tenant's kit set by tenant (never an id list) for `isKit`. `stock.move` also joins `SKU_NAMING_OP_TYPES` (`client-wind-down.ts`): its payload names a `skuId`, so an open move row blocks a client's departure like a putaway row does. Two enumeration pins grew (named, not retargeted): `test/portal.spec.ts` (4 `AnySessionGuard` routes) and `test/return-receipts.spec.ts` (`stock.move` → apply + discard).
+- **Mobile.** `isKit` and `moveReasons` are OPTIONAL on the TS types (`CatalogSku`, `CatalogSnapshot`) to spare every hand-built fixture; `parseCatalogSnapshot` always sets them (false / null) and the legacy-seal tests pin both by equality. `bin-retired` is excluded from the move's re-plannable set (the decision 9 / M1 rejected list names it; a retired bin never re-opens), while every other target gate code is re-plannable. The engine's own "Attempt N of 3 — it stays queued." suffix follows the move's "The move did not land — {detail}" words. `settledNote` gained an optional `binCodeOf` lookup (device-store passes `binCodeLookup(catalog)`). The SyncReportRowPayload op-type union gained `stock.move`.
+- **Web.** The form reads SKU facts through `useSkuCatalog` — the `ResourceState` twin of `useSkuMap` (`use-inventory.ts`) — rather than `useSkuMap`, whose failure reads as loading forever (guide §1.1); the kits read is `useKits` as in the PO form. The recent moves resolve batch codes with one batch read per SKU on the page (`useBatchCodes`). The review queue gained a `stock.move` summary and guidance (`lib/review-queue.ts`), and the ledger reference label shows `move …` for the `bin-move` arm.
+- **Verification run.** wms-be: the full jest suite (110 suites, 2795 tests) — a first run failed only the two enumeration pins above; after updating them, a second full run passed 2794/2795, the one failure `test/sessions.spec.ts` (a badge-in rate-limit case untouched by 3-1, green in the first full run) passing alone (38/38) — a load flake; lint, typecheck, build clean; OpenAPI exported. wms-mobile: `bun test` 818 pass, typecheck clean. wms-fe: lint, typecheck, `bun run test` 2305 pass, build, `check:capability-mirror` (47 capabilities) clean.
 
 ## Spec Change Log
 
@@ -306,3 +314,33 @@ Design review, 2026-10-22 (backend B, mobile M, web W). Every accepted finding i
 | W9 | medium | The list would duplicate the ledger and risk local time. Reuse the IST formatter and user map. |
 | W11 | medium | Billing and portal decided only implicitly. Decision 8; PENDING. |
 | W12 | low | Reason vocabulary and docs. `client-request` added; mirror check; doc lines named. |
+
+Code review, 2026-10-22 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routes were taken autonomously (recommended).
+
+| ID | Verdict | Finding → resolution |
+|---|---|---|
+| BH2 + EC1 + EC13 + EC14 | medium | Patch: a concurrent debit after the on-hand read makes the ledger answer 422 `insufficient-on-hand`, which is undocumented and rejected on the device. The command maps it to 409 `move-source-short`; the device also lists `insufficient-on-hand` as re-plannable. |
+| BH1 + EC2 | medium | Patch: 409 `conflict` (same key in flight) was rejected on the device. Kept queued (retry). |
+| BH3 | low | Patch: `MOVE_REJECTED_CODES` was unused. Wired as the explicit rejected set, pinned per code. |
+| BH5 | medium | Patch: `note`/`batchCode`/serials were hashed untrimmed and looked up untrimmed. Trimmed before both. |
+| BH6 | low | Patch: the `note` DTO validated 1000 but documented 200. Aligned to 200. |
+| BH7 | medium | Patch: the web silently dropped duplicate serials, changing qty. Duplicates reported, no silent dedupe. |
+| BH8 | low | Patch: secure origins were offered to roles without `secure.move`. Filtered like targets. |
+| BH10 | low | Patch: a new origin on the handheld kept the old reason and note. Reset. |
+| BH11 | low | Patch: an orphaned doc comment. Restored. |
+| BH12 (part) | medium | Patch: missing tests for a secure target, a serial-only SKU, a malformed device `occurredAt`, and ATP/reservations unchanged by a move. Added. (Capacity, weight, volume and size gates are pinned by the gate runner's own suites.) |
+| EC3 + EC4 | medium | Patch: float drift in the stepper and pack-scan sums produces an over-precise qty, rejected at replay. Rounded to precision. |
+| EC5 + EC6 | low | Patch: batch or serial codes over 100 characters, or a SKU barcode scanned as a serial, were not refused offline. Refused offline. |
+| EC7 | low | Patch: an all-malformed `moveReasons` array offered a dead flow. Parsed as null. |
+| EC8 | low | Patch: a missing tenant id at confirm. Refused with "Badge in again". |
+| EC9 | low | Patch: non-array `payload.serials` on Apply was silently dropped. 400. |
+| EC11 | medium | Patch: a serial move split across ledger pages showed as several rows. The list fetches until the `moveId` changes. |
+| EC12 | medium | Patch: submit while the kits read is loading or failed let a kit through unseen. Submit is blocked, and the read failure is shown. |
+| VG1 | medium | Patch: the bare device credential 401 is untested. Test added. |
+| VG2 | medium | Patch: "an edit mints a new key" is untested. Test added. |
+| VG3 | medium | Patch: Apply keeping the handheld's `occurredAt` is untested. Assertion added. |
+| BH4 | medium | Deferred: moving allocated stock leaves a pick to re-plan with no warning (decision 5 allows it). A web warning and a supervisor signal go to PENDING. |
+| BH14 | maybe-false | Deferred: recent moves may show raw ids for batches with no stock if the batch list omits them. Settle by checking the route's zero-quantity rows. |
+| BH9 | low, rejected | A SKU the origin never held retries until the budget runs out. Bounded retries, then review; decision 9. |
+| BH13 | low, rejected | The tests share fixtures in order. The repo's suite convention is `beforeAll` fixtures; no false failure was shown. |
+| EC10 | low, rejected | A future `occurredAt` from device clock skew. Pre-existing class (PENDING "occurredAt drift needs a bound decision"). |
