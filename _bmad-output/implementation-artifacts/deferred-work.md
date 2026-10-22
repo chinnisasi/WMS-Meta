@@ -1017,3 +1017,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-1a-portal-order-entry.md`
   summary: No runtime test proves portal write commands (placePortalOrder, ASN announce) run their transactions under the client stamp — the suites connect as a superuser, so RLS is inert; only a source scan and the hand-written wms_rls_probe check it.
   evidence: 4-1a code review VG5; needs a non-superuser e2e harness, cross-cutting across portal writes.
+
+- source_spec: none
+  summary: 5-3b analytic reports — space utilisation (bin fill vs capacity), operator productivity (lines/units per operator per shift from the ledger), count accuracy (variance rate by class/zone), each with the 5-3a client filter and CSV/Excel export.
+  evidence: Split from roadmap 5.3 on 2026-10-22 (recommended, taken autonomously) — the roadmap row lists them as a "then" second wave; 5-3a ships the five operational registers first.
