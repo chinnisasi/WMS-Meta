@@ -1007,3 +1007,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
   summary: Cancel a pending count task (web, counts.manage) — needs a status widening migration (after 0087/WMS-BE #116 merges), a refusal or reopen when the task is a variance's recount target, a decision on the scheduler re-creating a cancelled scheduled task, and a discard-only review path for a device submit that lands after the cancel.
   evidence: 3-5a design review B3/B5/B12/B13/B14 — deferred so 3-5a ships without a migration.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
+  summary: Link the Moves page to /moves/counts (and its tabs) once WMS-FE #103 (the real /moves page) merges — until then the count-admin surface is reachable only by URL.
+  evidence: 3-5a decision 4 and code review BH4; editing moves/page.tsx before #103 merges would conflict with it.

@@ -2,7 +2,8 @@
 title: '3-5a blind counts and count admin — the handheld counts without seeing expected quantities; supervisors create, schedule and inspect counts on the web'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'e1771c7fc88b060ac998c0bf2c113058b9859c1d'  # wms-be; wms-fe: 3a5a14ff1150780d13bb002d05800a63b7e3dd3b; wms-mobile: d8df154903f908f31432e47aaaec4971a5efb3cc
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -222,3 +223,30 @@ Design review, 2026-10-22 (backend B, clients C). Every accepted finding is fold
 | C10 | medium | Client filter and IST helper undecided. Exempt, with `AllClientsNote`; the ledger formatter. |
 | C11 | low | Key lifetimes, system zones and the cap. Stated. |
 | C12 | low | Missing docs. Listed. |
+
+Code review, 2026-10-22 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routes taken autonomously (recommended).
+
+| ID | Verdict | Finding → resolution |
+|---|---|---|
+| BH3 + EC13 | high | Patch: the device cannot refuse a found kit, because the snapshot has no kit flag. The server's 400 drops the whole queued count, which breaks zero scan loss and departs from decision 7. Snapshot SKUs gain an optional `isKit` (the same field and shape as WMS-BE #118, so it merges cleanly on rebase), and the device refuses found kits offline. A SKU that turns kit or tracked between the snapshot and the replay stays a residual (PENDING). |
+| BH7 + EC8 | medium | Patch: a mis-scanned found line cannot be removed on the device. `removeFoundLine` plus a Remove control. |
+| BH2 | medium | Patch: the detail route (expected beside counted) is readable by an operator in a browser. It is gated on `counts.manage` or `variances.resolve`; test. |
+| BH1 + EC5 | medium | Patch: the recount created by an epoch conflict is invisible in the detail. The detail derives it as the bin's first `origin = 'recount'` task created at or after the source's completion (no migration), and shows the epoch-conflict flag. |
+| BH6 | medium | Patch: bulk create runs ~4 statements per bin under the warehouse lock. Task, line and audit inserts are batched. |
+| EC1 + EC2 + EC4 | medium | Patch: `binIds: null` causes a 500, `zoneId`/`binId: null` reach lookups, and `binIds` is unbounded in the DTO. Null counts as absent; `@ArrayMaxSize(500)`. |
+| EC3 | low | Patch: a zone bin can be retired or moved between the read and the lock. Re-filtered under the lock. |
+| EC9 | medium | Patch: the camera's 1.5 s same-value dedupe drops repeated item scans. Bypassed for item scans (re-acquire required). |
+| EC10 | low | Patch: no camera-permission prompt on the count step. Added. |
+| BH5 | low | Patch: zone mode has no 500 cap on the web. Zones over 500 disabled with a note. |
+| BH8 + EC7 | low | Patch: `blindSubmitResponse` turns a malformed stored snapshot into the string "undefined". It fails loudly. |
+| BH10 | low | Patch: the empty-lines copy is wrong for pending tasks. Pending-specific copy. |
+| BH11 + EC12 | low | Patch: the task list collapses to page 1 on any change. Loaded depth kept. |
+| BH12 | low | Patch: policy Remove has no confirmation. Inline confirm. |
+| BH13 | low | Patch: the planner column always shows an id fragment. `useUserMap` supplied. |
+| BH14 | low | Patch: the recount pick is unstable on ties. Tie-break by id. |
+| EC11 | low | Patch: a failed zones read leaves an empty dropdown. ReadFailure with retry. |
+| VG1 | medium | Patch: no server test for a listed tracked SKU being accepted. Test added. |
+| VG2 | medium | Patch: the replay under lock in policy delete is untested. Concurrency test added. |
+| BH4 + VG-o | low | Deferred: `/moves/counts` has no inbound link (decision 4). It waits for WMS-FE #103; deferred-work. |
+| BH9 + EC6 | false | Tasks for deleted bins vanish. Bins are never deleted (merge and retire keep the row); there is no hard-delete path. |
+| BH5 (zone read cost) | low, rejected | The zone picker reads every zone's bins. Bounded by the warehouse's bin count; reused hook; no user-visible harm shown. |

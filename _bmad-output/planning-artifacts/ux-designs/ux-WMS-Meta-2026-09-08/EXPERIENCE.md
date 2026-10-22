@@ -30,7 +30,7 @@ sources:
 | Inventory | Sidebar | Stock by bin/SKU, batch/serial detail, ledger viewer (AD-1 projections) |
 | Inbound | Sidebar | POs (open quantities), GRNs, blind-GRN flags, QC holds |
 | Outbound | Sidebar | Orders, waves, picklists, pack/dispatch pipeline; carrier-cutoff pressure visible (amber at-risk waves) (FR-13) |
-| Moves | Sidebar | Transfers (in-transit), adjustments + approvals, cycle counts + variances |
+| Moves | Sidebar | Transfers (in-transit), adjustments + approvals, cycle counts + variances (cycle counts at `/moves/counts` since 3-5a: Tasks + Schedule tabs; variances stay in the `/conflicts` queue) |
 | Conflicts & Reviews | Sidebar | The human-review queue: quarantined replay conflicts (AD-14 case 4), over-receipt approvals, escalated variances — one place, never buried in a module |
 | Notifications | Bell (web) / system push (mobile) | Single notification panel: task assignments, approvals awaiting, reorder alerts within 5 min of breach (FR-22's only specified latency); expiry (FR-23) and QC alerts surface per their FRs with no latency spec. Amber-treatment entries, no badge-count spam |
 | Replenishment | Sidebar | Reorder points, suggested POs (draft, editable), expiry dashboard |
