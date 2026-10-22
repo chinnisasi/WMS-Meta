@@ -12,7 +12,7 @@ All paths below are relative to `workspace/core/frontend/wms-fe`.
 
 Next.js 16.3 App Router, React 19, Tailwind 4, TypeScript 6, bun. Five runtime dependencies total (`package.json`): `@hey-api/client-fetch`, `geist`, `next`, `react`/`react-dom`, and — story 6-1b — `qrcode` (pinned, loaded by `import()` in the enrolment QR component only). No state library, no data-fetching library, no component library package — shadcn/ui is a *token* inheritance, not an installed dependency; the primitives in `src/components/` are hand-written against the CSS variables in `src/app/globals.css`.
 
-Dev server is :3001 so the backend keeps :3000 (`package.json:12`).
+Dev server is :3001 so the backend keeps :3000 (`package.json:12`). **Production (story 6-2a):** `output: 'standalone'`; the image (`Dockerfile`) installs and builds with Bun on `node:22-alpine` and runs `.next/standalone/server.js` on Node as the non-root `node` user, port `PORT` (default 3001); `bun run start` is `next start -p ${PORT:-3001}`. The API base comes from the environment at run time (below).
 
 Users: **Owner, Ops Manager, Accountant** on a desk — and, since story 21-7, a **client brand's own user** (role `client`) in the client portal (read-only in 21-7; since 21-7b read-mostly plus ASN — it can announce its own inbound shipment; since 4-1a it can also place an outbound order of its own SKUs), which has its own shell and never mounts an operator surface. The floor uses `wms-mobile`; this app has no scan path, no offline queue, no service worker.
 
@@ -153,7 +153,15 @@ Two global interceptors do the session work:
 - **Request** (`client.ts:126`): attaches `Authorization: Bearer` from `readSession()`, and calls `ensureSessionHint()` so a page rendered on an expired hint cookie re-asserts it rather than bouncing on the next hard navigation.
 - **Response** (`client.ts:143`): a **401 clears the stored session immediately**. The backend's verdict is authoritative — expired, revoked or tampered all read the same.
 
-Base URL: `process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000/api/v1'`. The `||` rather than `??` is deliberate (`client.ts:114`) — a set-but-empty variable still falls back.
+Base URL — **resolved at call time (story 6-2a, decision 8 / A7)**, `getApiBaseUrl()` in `src/lib/api/base-url.ts`:
+
+- **browser:** `window.__WMS_CONFIG__.apiBaseUrl`, which `GET /runtime-config.js` assigns — a dynamic route handler (`src/app/runtime-config.js/route.ts`, `force-dynamic`, `Cache-Control: no-store`, never prerendered) that serves the server's `WMS_API_BASE_URL` as escaped JSON (`runtimeConfigScript`: `<`, `>`, `&`, U+2028/9 escaped). The root layout loads it with a **blocking** `<script src="/runtime-config.js">`, first in `<head>`, before the theme script and every app chunk; the proxy matcher excludes the path (a signed-out page needs it, and a `/login` redirect would hand the browser HTML);
+- **server** (a server component's request — the Overview's health line): `WMS_API_INTERNAL_BASE_URL`, else `WMS_API_BASE_URL`;
+- **otherwise** the build default, `process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000/api/v1'` (`||`, not `??` — a set-but-empty variable still falls back). Trailing slashes are dropped.
+
+**Two bases, two uses (code review C7):** `getApiBaseUrl()` is for REQUESTS (on the server it prefers `WMS_API_INTERNAL_BASE_URL`); `getPublicApiBaseUrl()` is for anything RENDERED — the channel webhook rows — and on the server reads only `WMS_API_BASE_URL`, so the server render and the browser's hydration print the same URL and the internal address never reaches a page. A value that is not an absolute http(s) URL is ignored everywhere (`isAbsoluteHttpUrl`): `/runtime-config.js` serves `{}` rather than a bad base, and the image's start (`scripts/start-standalone.mjs`, the CMD) refuses to run without a valid `WMS_API_BASE_URL` (C6).
+
+Nothing freezes the base at import: the generated client's request methods are wrapped to re-sync `baseUrl` (`syncClientBaseUrl`) before each request builds its URL (the client reads its config per request), and `session-refresh.ts` and the channel webhook rows (`channels-view.tsx`) call `getApiBaseUrl()` per use. One image therefore serves every environment (`DEPLOY.md`). There is no CSP yet; a nonce for these scripts is PENDING (deploy).
 
 ### Error unwrapping — three distinct outcomes
 

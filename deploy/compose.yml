@@ -1,0 +1,139 @@
+# Story 6-2a — a production-like local stack (decision 9), built from the
+# child repos' own Dockerfiles at their workspace paths:
+#
+#   cp deploy/.env.example deploy/.env      # optional: every value has a local default
+#   docker compose -f deploy/compose.yml up --build
+#
+# then open http://localhost:3001 (the web) — the API is http://localhost:3000.
+#
+# The deploy order is the real one (docs/design/DEPLOY.md): `migrate` (the
+# guarded deploy migrator, then the role provisioning) runs to completion
+# first; the API and the ONE worker start only after it, and connect as the
+# non-superuser app role, so RLS binds exactly as in production.
+#
+# Every credential below is a LOCAL PLACEHOLDER (the `.env.example` kind):
+# override them in deploy/.env, which git ignores. Nothing here is a secret.
+
+name: wms
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://wms_app:${WMS_APP_PASSWORD:-local-app-password}@db:5432/wms
+  DATABASE_AUTH_URL: postgres://wms_auth:${WMS_AUTH_PASSWORD:-local-auth-password}@db:5432/wms
+  VALKEY_URL: redis://valkey:6379/0
+  # The browser origin the API admits (CORS, with credentials for the refresh cookie).
+  CORS_ORIGIN: ${WMS_WEB_ORIGIN:-http://localhost:3001}
+  # Nothing proxies this stack; behind an ALB it is 1 (DEPLOY.md).
+  TRUSTED_PROXY_HOPS: "0"
+  # Chrome and Firefox accept a Secure cookie on http://localhost.
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  JWT_SECRET: ${JWT_SECRET:-local-only-jwt-secret-change-me}
+  MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-local-only-mfa-encryption-key-change-me-32}
+  DEVICE_ENCRYPTION_KEY: ${DEVICE_ENCRYPTION_KEY:-local-only-device-encryption-key-change-me}
+  CARRIER_ENCRYPTION_KEY: ${CARRIER_ENCRYPTION_KEY:-local-only-carrier-encryption-key-change-me}
+  CHANNEL_ENCRYPTION_KEY: ${CHANNEL_ENCRYPTION_KEY:-local-only-channel-encryption-key-change-me}
+  PUSH_GATEWAY: unconfigured
+  EWAY_GATEWAY: unconfigured
+  LEDGER_ANCHOR_WORM: none
+
+x-be-build: &be-build
+  context: ../workspace/core/backend/wms-be
+  dockerfile: Dockerfile
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: wms
+      POSTGRES_PASSWORD: ${WMS_DB_OWNER_PASSWORD:-local-owner-password}
+      POSTGRES_DB: wms
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wms -d wms"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  valkey:
+    image: valkey/valkey:9.1-alpine
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot, as the database OWNER: the guarded migrator, then the role
+  # provisioning with the app and auth passwords applied out of band.
+  migrate:
+    build: *be-build
+    image: wms-be:local
+    command: ["sh", "-c", "bun run db:migrate:deploy && bun run db:provision-roles"]
+    environment:
+      DATABASE_URL: postgres://wms:${WMS_DB_OWNER_PASSWORD:-local-owner-password}@db:5432/wms
+      WMS_APP_PASSWORD: ${WMS_APP_PASSWORD:-local-app-password}
+      WMS_AUTH_PASSWORD: ${WMS_AUTH_PASSWORD:-local-auth-password}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # The API task: no *_POLL_MS — it runs no background job.
+  api:
+    build: *be-build
+    image: wms-be:local
+    environment:
+      <<: *app-env
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  # The ONE worker task (DEPLOY.md: exactly one, stop-then-start): the same
+  # image, every job switched on by its poll interval.
+  worker:
+    build: *be-build
+    image: wms-be:local
+    environment:
+      <<: *app-env
+      OUTBOX_RELAY_POLL_MS: "2000"
+      OUTBOX_RECONCILE_POLL_MS: "2000"
+      RESERVATION_REAPER_POLL_MS: "2000"
+      COUNT_SCHEDULER_POLL_MS: "3600000"
+      REPLENISHMENT_SCHEDULER_POLL_MS: "60000"
+      CHANNELS_SYNC_POLL_MS: "60000"
+      STORAGE_SNAPSHOT_POLL_MS: "300000"
+      PUSH_SENDER_POLL_MS: "5000"
+      WAVE_CUTOFF_SWEEP_POLL_MS: "60000"
+      AUDIT_EXPORT_POLL_MS: "10000"
+      LEDGER_INTEGRITY_POLL_MS: "3600000"
+      SESSION_PURGE_POLL_MS: "86400000"
+      LICENCE_EXPIRY_POLL_MS: "3600000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  web:
+    build:
+      context: ../workspace/core/frontend/wms-fe
+      dockerfile: Dockerfile
+    image: wms-fe:local
+    environment:
+      # What the BROWSER calls (served as /runtime-config.js) …
+      WMS_API_BASE_URL: ${WMS_API_BASE_URL:-http://localhost:3000/api/v1}
+      # … and what the web server's own requests use inside this network.
+      WMS_API_INTERNAL_BASE_URL: http://api:3000/api/v1
+    ports:
+      - "3001:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  db-data:
