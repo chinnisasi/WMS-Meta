@@ -1025,3 +1025,7 @@
 - source_spec: none
   summary: 4-1c staff CSV/Excel order import — upload orders (client, warehouse, client order number, ship-to, SKU lines) reusing src/shared/import/sheet-reader.ts with Check file (dry run) / Import, one createOrder per order with a derived key, deduped by the client order number (4-1b's per-client unique ref).
   evidence: Split from 4-1b on 2026-10-23 (recommended, taken autonomously) — the import is independently shippable and depends on the client order number landing first.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
+  summary: 6-2c runtime hardening. Covers BE keepAliveTimeout 65 s / headersTimeout 66 s, above the ALB's 60 s idle timeout, verified under Bun (a go-live gate), a worker heartbeat (C31), a bounded web drain with exit 0 (C30), a Bun in-image drain smoke (C26), digest-pinned bases with a root-owned FE image and writable cache (C19), and the RDS CA bundle with sslmode verify-full.
+  evidence: These are wms-be/wms-fe code changes on top of 6-2a (WMS-BE #124, WMS-FE #109), so they can't branch from main until those merge; 6-2b is meta-only IaC and pipeline.
