@@ -1021,3 +1021,7 @@
 - source_spec: none
   summary: 5-3b analytic reports — space utilisation (bin fill vs capacity), operator productivity (lines/units per operator per shift from the ledger), count accuracy (variance rate by class/zone), each with the 5-3a client filter and CSV/Excel export.
   evidence: Split from roadmap 5.3 on 2026-10-22 (recommended, taken autonomously) — the roadmap row lists them as a "then" second wave; 5-3a ships the five operational registers first.
+
+- source_spec: none
+  summary: 6-2b AWS environments + deploy pipeline — staging and production in ap-south-1 as IaC (ECS Fargate services for wms-be API + workers and wms-fe, RDS Postgres, ElastiCache Valkey, S3 buckets, SES identity, Secrets Manager, ALB + ACM, CloudWatch logs), and a GitHub Actions deploy (build → push ECR → migrate task → rolling deploy, staging auto, production on approval).
+  evidence: Split from roadmap 6.2 on 2026-10-23 (recommended, taken autonomously) — 6-2a ships the container images, the CI build and the guarded migration runner that 6-2b deploys.
