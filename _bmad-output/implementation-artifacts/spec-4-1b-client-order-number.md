@@ -2,7 +2,8 @@
 title: '4-1b client order number — a per-client order reference set at staff and portal create, shown and searchable wherever an order is named'
 type: 'feature'
 created: '2026-10-23'
-status: 'ready-for-dev'
+baseline_commit: '2b9ae6cda37900a0b869715a3f847af1dadb2f02'  # wms-be; wms-fe: 02d4489e59511c931ec11dc233727a603e9c8785; wms-mobile: unchanged
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -162,9 +163,9 @@ None (PENDING: handheld order labels).
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: migration 0088 (probes), the command (both arms), the DTOs, the readers, the search filters; OpenAPI; tests.
-- [ ] Web: staff form, table, search and detail; portal form, list and search; `orderLabel`; mappers, plus tests; regenerated client.
-- [ ] Meta docs:
+- [x] BE: migration 0088 (probes), the command (both arms), the DTOs, the readers, the search filters; OpenAPI; tests.
+- [x] Web: staff form, table, search and detail; portal form, list and search; `orderLabel`; mappers, plus tests; regenerated client.
+- [x] Meta docs:
   - `API-SURFACE.md` (recount from openapi);
   - `outbound.md` (the ref, the label rule, the `orderRefsInTx` note `:579`);
   - `clients.md` (portal);
@@ -189,30 +190,16 @@ None (PENDING: handheld order labels).
 
 ## Implementation Notes
 
-## Spec Change Log
+Implemented 2026-10-22 against the baselines above (uncommitted on `feat/4-1b-client-order-number` in wms-be and wms-fe). Verification: wms-be full jest suite **124 suites / 3000 tests green**, `lint`, `typecheck`, `build`, `db:generate` ("No schema changes"), `db:verify`; the new suite's key tests mutation-checked (dropping the insert-catch mapping fails the race test; dropping the arm's `status <> 'cancelled'` fails the EXPLAIN and the re-use test). wms-fe `bun test` **2454 pass / 0 fail**, `lint`, `typecheck`, `build`, `api:generate` (no drift). Where the build departs from, or settles, a line of this spec:
 
-## Review Triage Log
-
-Design review, 2026-10-23 (backend B, web W). Every accepted finding is folded into the spec above; all choices are recommended, taken autonomously.
-
-| ID | Verdict | Finding → resolution |
-|---|---|---|
-| B1 | high | A cancelled order burned its number, though cancel-and-re-create is the only fix path. The index excludes cancelled orders (decision 3). |
-| W1 + B7 | high | Staff search missed channel orders; the portal channel arm had no index. One `reference` param matching both columns; a new partial index; `EXPLAIN`. |
-| W2 | high | Search interplay with the client filter, drill and cursor was unspecified. Code Map: search box rules. |
-| W3 | high | The portal `reference` showed an unseen short id. Raw `clientOrderRef`, composed on the web. |
-| B2 | medium | Racing duplicates both reserve. Accepted cost; the test asserts one row and a 409. |
-| B3 | medium | Guard order unstated. After `client-departed`, before the licence checks. |
-| B4 | medium | Ingest assert location; hash-stage and portal threading. 400 at `:391`; `OrderHashStage`; the rebuilt command. |
-| B5 | medium | Stored snapshots lack the field. Optional, nullable; absent reads as null. |
-| B6 + W10 | medium | `OrderListQuery` is shared. Orders-only subclass. |
-| B8 + W9 | medium | RMA label changed a stored column's meaning. `coalesce(client_order_ref, external_event_id)`, null otherwise; facts named. |
-| W4 | medium | Partial labelling. Five more cheap screens added; the rest in PENDING. |
-| W5 + B10 | medium | The short id was undefined, and the two repos disagree. Last 8 in both, pinned. |
-| W6 | medium | "Channel ref" headers become wrong. Renamed "Order". |
-| W7 | medium | No client-side validation. A shared `parseClientOrderRef`. |
-| W8 | medium | Duplicate copy unwritten. Decision 9. |
-| B9 | low | Invoice-record sources and the tax invoice reference. Named; the tax invoice is in PENDING. |
-| B11 | low | Matrix vs decision 2; CHECK and search caps. Fixed. |
-| B12 | low | Register column position. After `channel_order_ref`; assertions listed. |
-
+1. ~~The search's number arm is LIVE orders only~~ — **superseded by the Spec Change Log's BH5 entry:** 0088 adds the non-unique `orders_client_order_ref_idx` and the arm matches any status.
+2. **Index name:** one name everywhere, `orders_client_order_ref_live_unique` (decision 3); the Code Map's `orders_client_order_ref_unique` in the insert catch was a stale spelling.
+3. **The phase-1 duplicate check excludes cancelled orders** (decision 3), not "any status" as the Code Map line read.
+4. **The portal row carries the raw `clientOrderRef`** (decision 7, W3); the Code Map's "`portal-orders.ts` adds `reference` (the label)" predates W3. The web search param is `reference` (decision 8), not `clientOrderRef`.
+5. **New responses always carry `clientOrderRef`** (null when none) — `OrderDto`, `OrderEntryDto`, `PackDto`, `DispatchDto`, `PortalPlacedOrderResponse`, portal rows. The hash goldens are unchanged; the two response-SHAPE pins (`test/portal-orders-create.spec.ts` staff key list and placed body, `test/portal.spec.ts` portal row) were deliberately extended by the one key, with a comment saying so. Older stored replays stay absent (the portal controller never invents the key).
+6. **The create banner** names the order only when it has a client number ("Order SO-1042 accepted", "SO-1042 accepted with a shortfall"); without one the pre-4-1b words stand (the label's short-id fallback would add nothing the list does not show).
+7. **The EXPLAIN** runs the shared predicate (`orderReferenceMatch`, the function `listOrders` and `portalOrdersInTx` both call) inside a query of the list's shape built with the same query builder — the facade's own statement cannot be captured from outside, and the two arms are `InitPlan`s planned independently of the outer query.
+8. **Fixtures:** `test/support/dispatched-order.ts` takes extra order body fields and `packAndDispatch` returns the pack and dispatch bodies (additive; existing callers unchanged).
+9. **Unrelated fix, needed for `typecheck`:** `main` (2b9ae6c) failed `tsc` — 5-3a's never-checked `ledgerReferenceLabel` switch (`reporting/registers.ts`) did not know 3-1's `bin-move` reference arm (a semantic conflict between #118 and #121). One `case 'bin-move'` added.
+10. **Labels changed beyond the list** (all the Code Map's sites): the ledger link label is now `orderLabel` (was the full id — `outbound-orders.test.tsx` updated), a return with no reference shows the short id, the drill banner's `Order …` takes the tail.
+11. **Code review round (2026-10-23), amended into wms-be and wms-fe:** the third index and the any-status number arm; `reference` capped at 200 (a channel reference's ceiling) on both lists; the staff 409 carries `extensions {orderId, warehouseId}` of the holder and names its warehouse code (the race path throws a marker out of the aborted transaction, releases the grants, and names the holder from a fresh read); the portal copy says "another of your orders (a cancelled order frees its number)"; a blank number on an ingested order reads as absent (`normalizeClientOrderRef`); the character rule is tested before the length; `OrderEntryDto.clientOrderRef` is required + nullable (the stored-replay DTOs stay optional); OpenAPI `maxLength` + `pattern` on every `clientOrderRef`; the register's `client_order_ref` moved to the LAST column; billing line records keep `Channel ref` / `channel_ref` exactly and append an `Order` / `order` column; new tests: the portal duplicate race, a pre-4-1b stored snapshot replayed unchanged, the pack/dispatch and wave-picker labels, the drill banner's `Order <last 8>`, the portal search cursor reset and the search cleared on place. Decision recorded in `outbound.md`: uniqueness lasts for the order's life except a cancel.
