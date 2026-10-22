@@ -2,7 +2,8 @@
 title: '2-8a QC inspection outcome — inspect a QC hold per batch: passed units release, failed units move to DAMAGED with a reason; the hold closes as inspected'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: 'd700a52c0fe4e87da3eeaa679d3e5661660033f3'  # wms-be (feat/3-2b tip, stacked on 5-1a — 0089/0090; rebase onto main after WMS-BE #125 and the 3-2b BE PR merge); wms-fe: 2e145dbbfd433c377e3791471a9d9ac3cf4c84b4; wms-mobile: 9c9d6d6a5141d1a89b936e064d68ce003fe5b52d
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -198,9 +199,9 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: the migration + schema; the `qc.failed` registry entry; the inspect command; the detail and list reads; routes and DTOs; tests; OpenAPI.
-- [ ] FE: the Inspect dialog and the inspected result; client regen; tests.
-- [ ] Meta docs, as in the Code Map.
+- [x] BE: the migration + schema; the `qc.failed` registry entry; the inspect command; the detail and list reads; routes and DTOs; tests; OpenAPI.
+- [x] FE: the Inspect dialog and the inspected result; client regen; tests.
+- [x] Meta docs, as in the Code Map.
 
 **Acceptance Criteria:**
 - Given a receipt hold of 10 units on batch B, when inspected as 7 pass / 3 fail `damaged`, then Receiving +7, DAMAGED +3, QC-HOLD 0, ATP excludes the 3, and the hold reads `inspected` with one inspection line.
@@ -215,7 +216,21 @@ context:
 
 ## Implementation Notes
 
+Implemented 2026-10-23 (uncommitted, on `feat/2-8a-qc-inspection-outcome` in wms-be and wms-fe, `docs/2-8a-qc-inspection-outcome` here).
+
+- **Branches.** wms-be stays on the baseline (`d700a52`, the 3-2b tip — 0089/0090 unmerged); the migration is **0091**. wms-fe was reset (it had no commits) onto `feat/3-2b-handheld-stock-adjustment` (`cf01884`), because the regenerated client from this BE carries 3-2b's nullable threshold and main's FE would not compile against it. Both rebase onto `main` once WMS-BE #125 / the 3-2b PRs merge.
+- **BE.** `drizzle/0091_qc_inspection.sql` (+ snapshot, journal): fail-fast guard, the two tables, `qc_holds_status_check` / `qc_holds_release_pairing` dropped and re-added, the line CHECKs, RLS on both tables, the probe block. `qc.command.ts`: `QC_HOLD_STATUSES`, `QC_FAIL_REASONS`, `QC_INSPECTION_OUTCOMES`, `normaliseInspection` (the shape tier), `inspectHold` (A6's order), `lockOriginBinInTx` (extracted unchanged from the release core), `emitReceiptClearedInTx(…, 'inspected')`, the release's 409 wording. `qc.facade.ts`: `inspectHold`, `getQcHold`, the list's `inspected`/`closed` filter and `failedQuantity` (shared `entriesInTx`). `ledger-registry.ts`: `qc.failed`; the `qc-hold` arm's optional `grnLineId` / `inspectionId`. Putaway (`failedReceiptQtyByLine`, `failedReceiptQtyOfLineInTx`) and `kpis.ts`: §7f's third term. Notifications: `qc_hold.inspected` resolves `qc-hold`; `receipt_cleared` reads `resolution`; both sources gain `inspected`. Audit: `qc_hold.inspected`. `damaged-bin-write-off-only` wording. DTOs, controller routes, OpenAPI.
+- **BE tests.** `test/qc-inspection.spec.ts` (13: the AC with a second unheld same-batch line, putaway/tile/placement bound, ledger reference bytes, notifications, audit + replay, list/detail; all-pass manual; mixed reasons across two batches; all-fail past a retired origin vs the 409 when passing; four mismatch shapes with nothing written; the 400 shapes, precision and 403; fractional kg; receipt placement cleared by a release after an inspection; the same-key race — mutation-checked by deleting the second replay, which fails with `409 qc-hold-released`; tuples vs CHECKs; RLS probes for both tables; decoders; OpenAPI paths). `test/qc-inspection-migration.spec.ts` (0091 over an open manual, a released and an open receipt hold — rows byte-identical, an inspected close admitted, the guard refuses a re-run). `test/metering.spec.ts` SHAPES `qc.failed: ['both']`. The two new tables joined the cleanup lists of the eight suites that delete `qc_holds`.
+- **FE.** `lib/qc-inspection.ts` (+ test), `components/inbound/qc-inspect-dialog.tsx`, `inbound-cards.tsx` (Open/Closed tabs, the three-state status cell, Inspect), `lib/api/client.ts` (`fetchApiGetQcHold`, `fetchApiInspectQcHold`, the widened filter), `lib/use-inbound.ts` (`QcHoldStatusFilter`), `lib/excursion.ts` (`holdLabel`), `lib/drill.ts` (`qc.failed` → "QC failed"), `lib/over-receipt.ts` (`qcReason`), the regenerated client; tests in `inbound-cards.test.tsx`, `over-receipt.test.ts`, `notifications.test.ts`, `excursion.test.ts`.
+
 ## Spec Change Log
+
+- **The list's `closed` filter value (added at implementation).** A3 makes the web's tabs Open / Closed with Closed covering released AND inspected; decision 9 only named `inspected`. A single-status filter cannot page a two-status tab, so `status` also takes `closed` (= `status <> 'open'`, on the existing `(tenant_id, status, created_at, id)` index). Additive.
+- **AC 1's "one inspection line" reads as A4's rows.** Under A4 an arm with 7 passed and 3 failed is two rows (`passed 7`, `failed damaged 3`); the test asserts exactly those.
+- **The 0091 pairing names no status list** (code review): `("status" = 'open') = (released_by IS NULL AND released_at IS NULL) AND (released_by IS NULL) = (released_at IS NULL)` — the second conjunct keeps 0014's "a closed row carries BOTH" (the first alone would admit half a closer; probed). The unknown-status probe is now refused by `qc_holds_status_check`.
+- **Code review fixes:** a placement's `receipt_cleared` resolves `inspected` when ANY of its holds was inspected (not the last closer); `qc_hold.inspected` carries `lines [{batchId, outcome, reason, quantity (string)}]`; an inspected hold with no inspection row, no lines or no closer is `500 data-fault` (logged) on the detail and the list; the web dialog keeps one key per draft, treats `409 qc-hold-released` as closed elsewhere (close + reload), disables the hold's Release while open, is `aria-modal` with initial focus, Escape and focus return, says when the session expired or the hold has no held stock, and warns on an expired batch by the server's instant rule (expired from the IST midnight that begins its expiry day).
+- **`inspectionId` rides the inspection's `qc.released` events too** (A7 added the key to the arm without saying which types carry it); `grnLineId` rides `qc.failed` only, as A9 needs. Both omitted when absent.
+- **Fingerprint:** no `arm:` discriminator — A5's field list is followed exactly; the body (lines + note) cannot collide with release's `{tenantId, holdId}`.
 
 ## Review Triage Log
 
@@ -248,3 +263,26 @@ Design review, 2026-10-22 (D). Two layers: a claims check against the code (K) a
 | D23 | B | low | Physical move not tasked. → A10 |
 | D24 | B | medium | Thin ACs. → A13 |
 | D25 | K | — | Side finding: origin/main fails tsc (registers bin-move). → Already fixed by WMS-BE #122 (open); not this story |
+
+Code review, 2026-10-23 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routing per step-04; all choices recommended, taken autonomously. Migration 0091 proven on a copy of the dev database (21 holds: 18 open, 3 released): rolled back, applied by `db:migrate:deploy`, re-run a no-op, holds intact, both new tables under tenant RLS (a foreign tenant sees no rows). Re-proven after C6.
+
+| ID | Source | Verdict | Finding → route |
+|---|---|---|---|
+| C1 | BH2, EC1 | medium | The dialog mints a new idempotency key per click; a retry after a lost response gets 409 "already closed", shown as an error, and the list is never reloaded. → patch: one key per dialog draft (useRef, re-minted when the draft changes); a 409 `qc-hold-released` closes the dialog and reloads the list. |
+| C2 | BH5, EC5, EC6 | medium | An `inspected` hold with no inspection row (or null closer columns) reads as `inspection: null` / "0 fail" — a broken invariant reported as clean data. → patch: the read throws an integrity error (500, logged) instead. |
+| C3 | BH4 | medium | A receipt placement's cleared notification takes the LAST closer's resolution, so mixed placements mislabel. → patch: resolution is `inspected` when any hold of the placement was inspected, else `released`; tests for both orders. |
+| C4 | BH7, VG2 | medium | The §7f failed-units subquery is copied three times (`failedReceiptQtyByLine`, `failedReceiptQtyOfLineInTx`, `kpis.ts`) and the tile's term is untested (an all-fail line is not exercised). → patch: one mixed fixture (all-fail line beside an unheld line of the same SKU/batch, two inspected holds on one line, an over-receipt hold, a released hold) pinning the task list, the placement limit and the tile to the same answer. |
+| C5 | VG1 | medium | `status=closed` is tested only with an inspected hold. → patch: released + inspected appear, open does not. |
+| C6 | BH6 | low | The widened `qc_holds_release_pairing` repeats the status list, so the status CHECK is never reached by the probe and each new status must be added twice. → patch: pairing = `(status = 'open') = (released_by IS NULL AND released_at IS NULL)`; the unknown-status probe then hits `qc_holds_status_check`. |
+| C7 | BH9 | medium | No e2e for `409 damaged-bin-conflict`, the 12-3 secure-origin gate on passed units, `GET …/qc-holds/{id}` 404 (unknown / other tenant), malformed `holdId` 400 on both routes, an `other` failure with a note, or an over-receipt receipt hold through the failed-units and cleared paths. → patch. |
+| C8 | BH10, VG-other | low | The test titled "release one, inspect the other → resolved inspected" runs the opposite order. → patch: both orders as two tests (with C3). |
+| C9 | BH11 | low | The `qc_hold.inspected` outbox payload carries only totals; 2-8b needs per-batch outcome and reason. → patch: add `lines[{batchId, outcome, reason, quantity}]`. |
+| C10 | BH3 | low | Release stays clickable while that hold's Inspect dialog is open. → patch: disable it. |
+| C11 | EC2, EC3 | low | A null session leaves the dialog loading forever; an empty-arms detail submits `lines: []` for an unexplained 400. → patch: explicit messages. |
+| C12 | EC7 | low | The pass-expired warning compares `expiryDate < today`; on the expiry day it does not warn. → patch: match the server's `isBatchExpiredAt` boundary exactly (verify which). |
+| C13 | BH12 | low | The dialog lacks `aria-modal`, initial focus, focus return and Escape. → patch. |
+| C14 | VG3 | low | The two new `qcReason` codes are untested. → patch (two assertions). |
+| C15 | BH1 | low | The web offers one fail reason per batch; mixed reasons are API-only. → defer (deferred-work; documented in the wms-fe contract). |
+| C16 | BH8 | low | The change log's claim that `status=closed` uses the existing index is unproven. The fix edits this build's spec. → reject (fine at QC-hold volume). |
+| C17 | EC4 | low | A hold with > 500 arms could never be inspected (DTO `ArrayMaxSize(500)`). Arms are batches in one hold; > 500 is not a real case. → reject. |
+| C18 | EC8, EC9, VG-other | low | Spec text (A6 lock chain, AC's "one inspection line", release 409 wording vs the Never list) differs from the code. Fixes edit this build's spec. → reject (Implementation Notes record the actual behaviour). |
