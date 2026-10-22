@@ -82,6 +82,8 @@ Built from a grep of every `process.env.*` the backend reads — `test/env-examp
 | `DEVICE_ENCRYPTION_KEY` | A W | ≥ 32, device enrollment |
 | `CARRIER_ENCRYPTION_KEY` | A W | ≥ 32, carrier credentials. Losing it loses every stored carrier credential |
 | `CHANNEL_ENCRYPTION_KEY` | A W | ≥ 32, sales-channel credentials. Losing it loses every stored channel credential |
+| `EMAIL_SEAL_KEY` | A W | ≥ 32 (5-1a). **Required with `EMAIL_PROVIDER=ses` or `log` — the process refuses to boot without it.** Seals a queued invite's token until it is sent; losing it fails only queued, unsent mail |
+| `EMAIL_SEAL_KEY_PREVIOUS` | A W | only while rotating the email seal key |
 | `EXPO_ACCESS_TOKEN` | W | only with `PUSH_GATEWAY=expo` |
 | `WMS_APP_PASSWORD`, `WMS_AUTH_PASSWORD` | **M only** | applied by `db:provision-roles` as a SCRAM-SHA-256 verifier computed in the process (the plaintext never reaches the server); **required when `NODE_ENV=production`** — the image sets it, and the script exits 1 without both (C2). Never on the API or worker |
 
@@ -94,7 +96,13 @@ Built from a grep of every `process.env.*` the backend reads — `test/env-examp
 | `EWAY_GATEWAY` | A W | `unconfigured` (default) \| `sandbox` |
 | `CHANNEL_HTTP_TIMEOUT_MS` | A W | default 10000 |
 | `LEDGER_ANCHOR_WORM` | W | `none` (default) \| `s3` (needs `LEDGER_ANCHOR_S3_BUCKET`; S3 Object Lock bucket, `PENDING.md` inventory) |
-| `LEDGER_ANCHOR_S3_BUCKET`, `AWS_REGION`, `LEDGER_ANCHOR_RETENTION_DAYS` | W | with `s3` only; region default `ap-south-1`, retention default 2557 days |
+| `LEDGER_ANCHOR_S3_BUCKET`, `LEDGER_ANCHOR_RETENTION_DAYS` | W | with `s3` only; retention default 2557 days |
+| `AWS_REGION` | A W | default `ap-south-1`. Read by the worker with `LEDGER_ANCHOR_WORM=s3`, and by **the API and the worker with `EMAIL_PROVIDER=ses`** (every API task builds the SES client at boot; the API task role needs no SES permission — it never sends, only the worker does) |
+| `EMAIL_PROVIDER` | A W | `off` (default — invite mail `skipped`) \| `log` (captured, ids logged) \| `ses` (SES v2 in `AWS_REGION`; SDK credential chain). `ses`/`log` need `EMAIL_FROM`, `WEB_BASE_URL` and `EMAIL_SEAL_KEY` — the boot fails naming the missing one (5-1a). The API queues the mail in the invite transaction, so it needs the provider settings as well as the worker |
+| `EMAIL_FROM`, `EMAIL_REPLY_TO` | A W | the verified SES sending address (bare); the fallback Reply-To |
+| `WEB_BASE_URL` | A W | the web app's absolute base URL (`https` in production) — the invite response's `inviteUrl` and the emailed link |
+| `EMAIL_MAX_PER_TICK` | W | default 10. The cap is **per worker process**, and each message makes **two** SES calls (the suppression pre-check, then the send): keep (processes × cap × 2) ÷ poll seconds under the SES rate |
+| `EMAIL_ALLOWLIST_DOMAINS` | A W | **staging only** — other domains are `skipped` |
 
 ### wms-be — the worker's jobs (W only; unset = off)
 
@@ -114,6 +122,7 @@ Built from a grep of every `process.env.*` the backend reads — `test/env-examp
 | `LEDGER_INTEGRITY_POLL_MS` | 3600000 | ledger anchoring and re-verify; plus `MAX_LEDGER_INTEGRITY_SCOPES_PER_TICK` (50), `LEDGER_ANCHOR_MAX_RANGE` (10000), `LEDGER_ANCHOR_CHUNKS_PER_TICK` (10) |
 | `SESSION_PURGE_POLL_MS` | 86400000 | purge ended sessions and counters — without it they grow without bound |
 | `LICENCE_EXPIRY_POLL_MS` | 3600000 | drug/FSSAI licence expiry warnings |
+| `EMAIL_SEND_POLL_MS` | 5000 | the email sender (5-1a) — off, invite mail queues and is never sent |
 
 ### wms-be — the migrator (M only)
 
