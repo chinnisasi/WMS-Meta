@@ -70,6 +70,16 @@ Two sources, both authoritative:
 - **The order's short id is not searchable** *(4-1b decision 8)* — `reference` matches the client order number and the channel reference only; finding an order by the last 8 characters its label shows needs a suffix search (an index on `right(id::text, 8)`)
 - **Client order number uniqueness is for the order's life (except cancel)** *(4-1b code review)* — a client whose numbering resets yearly must prefix the year; a scoped rule (uniqueness per period, or released some time after dispatch) is its own decision
 - **Live-deploy runbook for 0088's three `orders` indexes (plain builds)** *(4-1b)* — `orders_client_order_ref_live_unique`, `orders_client_order_ref_idx` and `orders_external_event_client_idx` are built non-concurrently inside the migrator's one transaction (the 0081 precedent: `CONCURRENTLY` is refused in a transaction), each holding a SHARE lock on `orders` while it scans — order creation and every status flip wait. Accepted pre-launch. The 0081 trick (pre-build by hand, let `IF NOT EXISTS` skip it) does not apply as written: the indexes are on the column 0088 itself adds, and its fail-fast guard refuses a pre-existing column. For a live deploy over a large tenant: run it in a low-traffic window (the column add and the CHECK are cheap; the three builds are the cost), or split it — 0088 as column + CHECK, then the three indexes built `CONCURRENTLY` by hand under the same names and recorded by a follow-up migration using `CREATE … IF NOT EXISTS`
+- **Amend order fields — refuse an amend once packed (the slip is printed)** *(4-2a decision 6/11)* — type, priority, ship-by and COD are create-only (no order edit command exists, beside 4-1b's client-number amend). The slip, dispatch, shipment and manifest read the fields through because they never change; an amend must refuse once the order is packed (and once labelled: the carrier holds the COD), and must re-run the 4-2a value checks behind its replay
+- **No list sort or filter by priority, ship-by, type or COD** *(4-2a decision 14)* — the staff list stays on its `(created_at, id)` keyset; urgency is visible by chip only. A "due today" filter needs a predicate and an index
+- **Channel priority, ship-by and B2B are not mapped** *(4-2a decision 8, A7)* — Shopify has no ship-by; Amazon's `LatestShipDate` lands with its transport; a Shopify B2B order (a non-null `company`) is ingested as `b2c` (the parse carries no GSTIN)
+- **Consume Shopify `orders/updated` for COD drift** *(4-2a A6)* — a redelivery whose COD differs resolves to the original order and only logs a warn (ids and amounts); an edited COD amount on the channel never reaches the order
+- **Manual repair for a refused COD webhook** *(4-2a A5)* — a COD body whose amount cannot be read (`cod-amount-unmappable`: currency, status or `total_outstanding`) is metered and answered 400; the channel re-delivers and re-refuses. The repair today is staff entering the order by hand with its COD; no operator surface lists the refused deliveries
+- **COD is not on the tax invoice or the e-way bill** *(4-2a decision 11)* — invoicing and e-way are untouched
+- **COD remittance reconciliation** *(4-2a)* — the manifest freezes the courier's hand-over figure (`codShipmentCount`, `codTotalPaise`); nothing records what the courier remitted, or reconciles it per AWB
+- **COD on multi-carton shipments rides the first carton's label only** *(4-2a A17)* — today one shipment per order for life; roadmap 4.5 (multi-carton) must keep the COD on exactly one label. And 4-2c's backorder follow-on order must not carry the original's COD again
+- **VALIDATE the three 0093 CHECKs** *(4-2a A21)* — `orders_order_type_check`, `orders_priority_check`, `orders_cod_amount_paise_check` are `NOT VALID` (no scan under the ADD COLUMN's lock). Every existing row satisfies them by construction; a later migration (in its own deploy) runs `VALIDATE CONSTRAINT` under SHARE UPDATE EXCLUSIVE
+- **The wave policy's own `priority` stays display-only** *(4-2a decision 9)* — order priority drives the urgency key; the policy integer is never a scheduler
 - **`orders` list has no status filter** — `OrderListQuery` carries only `cursor`/`limit`, so the FE's status filter is page-scoped *(4-2b)*
 - **The cutoff at-risk window does not wrap IST midnight** *(9-2b code review BE6)* — `sweepCutoffRisk` computes `r` as a difference of minutes-of-day, so a cutoff in the first hour after IST midnight (00:00–00:59) is never at risk the evening before (`r` reads negative), and the wave raises no `wave.cutoff_at_risk`. Fix with the cutoff instant on the next IST date when `r < 0`
 
@@ -174,7 +184,7 @@ Two sources, both authoritative:
 
 ## partners (story 1-3)
 
-- **Consignee and transporter pickers** — the partner master holds them, but orders and e-way bills keep their free-text fields until roadmap 4.1/4.2 (order consignee + several ship-to addresses) and 4.9 (B2B freight) add pickers *(1-3 decision 6)*. ~~Gate-in transporter (2.3)~~ **done in 2-3a** — the gate-in picks an active transporter partner (`assertTransporterInTx`) or takes a typed name
+- **Consignee and transporter pickers** — the partner master holds them, but orders and e-way bills keep their free-text fields *(1-3 decision 6; re-pointed at 4-2a, A22 — neither roadmap 4.1 nor 4.2 owns them)*: the **transporter** picker → roadmap 4.9 (B2B freight); the **consignee** picker and several ship-to addresses per consignee → **unowned (no roadmap row) — flagged for planning**. ~~Gate-in transporter (2.3)~~ **done in 2-3a** — the gate-in picks an active transporter partner (`assertTransporterInTx`) or takes a typed name
 - **A contact list and several ship-to addresses per partner** — one contact and two addresses sit on the row today *(1-3 decision 3, roadmap 4.2)*
 - **Portal reads of a client's own links** — `partner_client_links` already carries the 0041 client clause; no portal route reads it *(1-3 decision 8)*
 - **Not built, by decision:** lead time on a link, a vendor import, a GSTIN checksum check, a capability rename (`vendor.manage` guards the whole partner master) *(1-3 Never list)*
@@ -296,6 +306,7 @@ Two sources, both authoritative:
 
 ## billing (stories 21-3, 21-4, 21-5, 21-5b)
 
+- **COD handling charge and portal high-priority charge** *(4-2a decision 6, A22)* — the portal may mark an order `high`, and the warehouse handles COD cash; neither is a charge code on a rate card yet
 - **Tiered / volume pricing, minimum charges, proration** — a card is flat per-unit rates only (the 3PL SPEC's non-goal for tiers; minimums and proration were raised in design review and deliberately left out). A minimum monthly charge is the most likely first ask *(21-3 Never list, design review #22)*
 - **Per-warehouse rates** — a card prices a client tenant-wide; a client in two buildings pays one price list *(21-3 Never list)*
 - **Portal visibility of rate cards** — whether a client user sees its own card (SPEC open question: self-service disputes vs constant renegotiation pressure). **21-7 decided: not yet** (decision 3 — the invoice and its lines only, no rate card id); the tables already carry the AD-24 client clause, so a later portal read needs only its DTO *(21-3 Never list; 21-7 decision 3)*
@@ -337,6 +348,7 @@ Two sources, both authoritative:
 ## carriers
 
 - **`openCredentialForAdapterUse` has no caller and no test** — the module's only envelope-opening read. Deleting its `tenantId` predicate would let any tenant open any other tenant's credential **with the full suite still green**. 4-6c brings the first caller; **pin the tenant predicate first** *(4-6b review)*
+- **Per-carrier `supportsCod` when transports land** *(4-2a A18)* — `delhivery`, `blue_dart` and `ecom_express` declare `supportsCod: false` (their arms are the typed 501), so a COD order on them is 409 `carrier-cod-unsupported`. Each real transport story declares its own flag and sends `CarrierLabelRequest.codAmountPaise` / `CarrierRateRequest.codAmountPaise` (the sandbox ignores both)
 - **Rotating `CARRIER_ENCRYPTION_KEY` is unsupported** — every stored blob becomes unopenable and idempotent replay breaks. Needs a key id in the blob and a re-seal path *(4-6b review)*
 
 ## compliance
