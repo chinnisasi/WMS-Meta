@@ -1133,6 +1133,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-7a-batch-recall.md`
   summary: 3-7f pick a scanned lot from a bin holding a recalled lot — an optional scanned batch on the pick payload (conditional-key hash rule), checked active and not recalled, so a mixed bin can be picked without first moving the recalled units out; handheld lot scan on the pick screen.
   evidence: 3-7a design review B3 — the pick payload has no batch field (`RecordPickCommand`), so 3-7a refuses `recalled-lot-in-bin` outright; the override needs a device scan and a payload change of its own.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-3a-batch-block-and-unpromisable-stock.md`
+  summary: Handheld batch status — carry blocked/expired on the device snapshot, show it on pick/putaway, a named `batch-blocked` replay refusal, and a floor QC block action.
+  evidence: 3-3a code review C15 (BH12); today blocking is web-only and an offline pick of a blocked lot replays as insufficient-on-hand.
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
   summary: Link the Moves page to /moves/counts (and its tabs) once WMS-FE #103 (the real /moves page) merges — until then the count-admin surface is reachable only by URL.
   evidence: 3-5a decision 4 and code review BH4; editing moves/page.tsx before #103 merges would conflict with it.
