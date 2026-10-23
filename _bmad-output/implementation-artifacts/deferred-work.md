@@ -93,6 +93,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-4-batch-and-serial-traceability.md`
   summary: The adjustment endpoint's OpenAPI failure surface is under-documented — the new 400/404/409 `serial-elsewhere`/422 `@ApiResponse` descriptions (and the batch/serial arms' error semantics) are not in `openapi/openapi.json`.
   evidence: Verified — only the request-body schemas gained properties; no response-documentation additions were made. Deferred because frozen CHECKPOINT 1 pins the 2.4 openapi diff to request-body-additive only; HTTP error-surface documentation belongs to story 2.5, which owns the inventory HTTP read/response surfaces.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: Serial lookup and history on the web — search by serial number (or IMEI) to see its SKU, client, current bin, receipt (GRN line) and full ledger history, plus a serial register export of what was received, put away and dispatched per client and period.
+  evidence: Split from 2-6a (recommended, taken autonomously). 2-6a records serials on GRN lines and the ledger but adds no read beyond the GRN lines panel; the existing `GET …/inventory/serials/{serialId}` takes the internal id, never the printed number (PENDING cross-cutting "No serial lookup by serial number").
 
 ## Deferred from: review of spec-3-1 (2026-09-09)
 
@@ -117,6 +120,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-3-scan-based-receiving-and-grn.md`
   summary: The mobile repo's real HTTP transport is never executed by any test — every suite injects fake senders, so a transport regression in `submitGoodsReceipt` (wrong path, dropped `Idempotency-Key` header, payload serialization drift) would quarantine every offline device receipt at replay with all test suites green.
   evidence: Verified — `src/api.ts:213` defines the real sender; `op-dispatch.test.ts` and `engine.test.ts` both inject fakes; the payload shape is pinned on both sides (`draft.test.ts` payload `toEqual`, wms-be e2e) but the transport wrapping is not. Settle with a stubbed-`fetch` transport test in the mobile repo — a test harness convention that repo does not have today; a separate initiative, not this story's patch.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: Persist the in-progress drafts of the other handheld screens (pick, putaway, return-receive, moves, counts) on the 2-6a `drafts` table, so an app kill mid-task does not lose the scans taken before confirm.
+  evidence: 2-6a design review B3 / A12 persists only the receive draft (its serial lists are the long captures); the other screens still hold their drafts in memory, and each needs its own resume rule against a changed snapshot.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: A server-side minimum handheld build — the server refuses (with a typed problem the device shows as "update the app") ops from a build older than a configured minimum, so a rollout like 2-6a's (serial-tracked lines refused `serials-required` from old builds) is enforced rather than drained by runbook.
+  evidence: 2-6a design review B10 / A17: 2-6a mitigates with a DEPLOY.md drain step and a new-build refusal on a pre-2-6a snapshot; no build identity is sent with ops today.
 
 ## Deferred from: review of spec-3-4 (2026-09-10, review iteration 1)
 
@@ -204,6 +213,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-3-scan-verified-picking.md`
   summary: A SKU that is BOTH batch- and serial-tracked cannot be picked — the command refuses it with a 400 rather than guessing which batch each serial belongs to.
   evidence: Introduced by the review pass on 4.3. The pick payload carries serial numbers but no batch; `serials` (schema.ts) holds no `batch_id`; and the ledger's serial guard validates LOCATION only. The original code paired FEFO arms to serials positionally, so a unit put away under batch Y could be drawn labelled batch X and `batch_on_hand` would mis-fold with nothing to catch it. Refusing is honest and cheap; the real fix is a `serialBatchInTx` read on `InventoryFacade` that resolves each serial's batch from the `batch_ref` on its latest ledger event (the putaway per-serial events carry it), which is a new inventory seam and its own change. No fixture in either codebase is currently both-tracked, so nothing regresses today.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: Serial-level pack verification — pack scans do not verify the unit's serial against the serials picked for the order (`pack.command.ts:661` appends `serialRef: null`), so a swapped unit between pick and pack goes unnoticed; plus the both-tracked (batch + serial) pick refusal above.
+  evidence: Split from 2-6a (recommended, taken autonomously). Pick already verifies serial location (`pick.command.ts:823-858`); pack is its own outbound change with its own device step.
 
 - source_spec: none
   summary: Tenant-scoped carrier API credentials under envelope encryption — referenced by id, rotation first-class, disconnect deletes, secret material never in logs or ledger events (AD-15, FR-17).
@@ -632,6 +644,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-6b-handheld-asn-receiving.md`
   summary: Receive-draft line resolution with the same SKU on two PO/ASN lines — every scan resolves to the first open line, so its overflow pends as an over-receipt while the second line stays open; resolve against draft-remaining open qty instead.
   evidence: `resolveLineRefs` in wms-mobile `src/receiving/draft.ts` keeps the pre-21-6b `resolvePoLineId` rule (first line with cached openQty > 0, ignoring units already in the draft); found by 21-6b code review (C9).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: Approve a subset of a serial-tracked over-receipt — the reviewer picks which pending serials to book (the rest rejected), instead of approving or rejecting the excess whole.
+  evidence: 2-6a design review B8 / A5: pending excess serials are shown on the review and refused elsewhere while pending, but `review.decide` stays all-or-nothing on `excess_qty`; a partial decision needs a split over-receipt row and its own audit.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-7-client-portal.md`
   summary: 21-7b — a client user announces an ASN from the portal (SPEC CAP-9's "a client can announce"), a client-side write onto 21-6's ASN command with per-client idempotency, the SKU/client match and per-client code uniqueness.
@@ -856,6 +871,9 @@
 - source_spec: none
   summary: Purchase-order import from a CSV or Excel file, reusing the ASN import machinery (WMS-BE #99 sheet reader, grouping, per-group savepoints; WMS-FE #84 Import from file).
   evidence: Split from po-create-and-import on 2026-10-18 at the user's choice — the web PO create form ships first, and its vendor/SKU/quantity rules become the import's rules.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: ASN serial pre-announcement — a client announces the serials (or IMEIs) per ASN line, by ASN import column or the portal, and receiving checks scanned serials against the announced set (unannounced or missing serials surfaced per client policy).
+  evidence: Split from 2-6a (recommended, taken autonomously). 2-6a captures serials at the dock with no expected list; the announced set needs an `asn_line_serials` store, import/portal fields and a per-client policy, each beyond the receipt.
 
 - source_spec: none
   summary: 6.1b owner two-factor sign-in — authenticator-app (TOTP) codes and backup codes for owner accounts, setup and prompt on the web; the handheld needs none (PIN badge-in on an owner-enrolled device).
@@ -914,6 +932,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-sku-master-on-the-web.md`
   summary: A handheld receipt or return queued offline under a SKU's old tracking flags replays after the flags change (1.4 decision 7 guards only server-side stock), so the replay is refused or books stock without the now-required batch/serial.
   evidence: `skuStockHoldingsInTx` counts on-hand, pending over-receipts and pending positive adjustments only; nothing knows about a device's WAL. Same class as any master change racing the offline queue — settle with a replay fate for a flag mismatch or a flag version in the snapshot.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: IMEI follow-ons — a second IMEI per dual-SIM unit, an identity-level IMEI uniqueness rule (2-6a A7 refuses an IMEI in stock or pending under another `imei` SKU at receipt, but other intake paths — adjustment, returns — still judge per SKU), and a `serial_format` column in the catalog import (2-6a sets it only through the web SKU forms; imported SKUs default to `free`).
+  evidence: Split from 2-6a decision 2 / design review B7. Serial identity stays per (tenant, SKU, number) (`serials_tenant_sku_serial_unique`); a tenant-wide IMEI identity is a catalog and ledger-guard rule of its own.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: Serialise in place the legacy anonymous serial-tracked units already in a Receiving bin (received before 2-6a with `serialRef: null`) — a guarded web action that attaches scanned serials to N anonymous units (a draw of N anonymous units plus N per-serial intakes in one transaction), so putaway can move them.
+  evidence: 2-6a design review B10. Putaway, pick and moves all need located serials and the adjustment needs serials on a serial-tracked SKU, so such units cannot leave Receiving today; production has none yet, but every test/UAT tenant that received a serial SKU does.
 
 - source_spec: none
   summary: 1.5b dedicated client bins — a bin can be dedicated to one client, and putaway, moves and merge refuse to place another client's stock in it (web bin admin + handheld refusals).
@@ -982,6 +1006,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
   summary: A write-off out of DAMAGED is a plain stock.adjusted with no reference to the GRN line or vendor, so a vendor claim cannot be reconciled from the ledger once units are written off.
   evidence: 2-4a code review BH9; grn.damaged carries grnLineId but the disposition does not. Belongs with 2.8 (QC fail disposition / return to vendor).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
+  summary: Damage and QC holds on serial-tracked receipt lines — open the serial arm on `grn.damaged` (capturing which serials arrived damaged into DAMAGED) and per-serial QC-on-receipt holds (`qc.held`/`qc.released` serial arms), closing 2-4a decision 9 and the 1-2b `qcSkippedLines` gap.
+  evidence: Split from 2-6a decision 7. 2-6a books good serial units only; damage on a serial line stays a whole-op 400 (`receiving.command.ts:872-886`) and QC still skips serial lines (`:1771`).
 
 - source_spec: none
   summary: 2-10b pallet/carton (LPN) labels at receiving — an LPN (licence plate) record for what a pallet or carton holds, its label (ZPL + PDF, reusing 2-10a's renderer) printed at receiving, and the LPN carried through putaway.
