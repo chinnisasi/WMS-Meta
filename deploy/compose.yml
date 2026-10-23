@@ -123,6 +123,12 @@ services:
       LEDGER_INTEGRITY_POLL_MS: "3600000"
       SESSION_PURGE_POLL_MS: "86400000"
       LICENCE_EXPIRY_POLL_MS: "3600000"
+      # Story 5-1a's sender: safe with EMAIL_PROVIDER unset (= off) — every
+      # invite is queued `skipped` (mail.config.ts needs no EMAIL_FROM,
+      # WEB_BASE_URL or EMAIL_SEAL_KEY under `off`), the provider is never
+      # called, and a tick finds nothing to send — it only purges old final
+      # rows. All 14 jobs then report on /api/v1/health/worker.
+      EMAIL_SEND_POLL_MS: "5000"
     # The command 6-2d's ECS health check runs (A17).
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/worker',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
