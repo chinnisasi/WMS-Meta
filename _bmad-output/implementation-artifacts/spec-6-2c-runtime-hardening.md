@@ -2,7 +2,8 @@
 title: '6-2c runtime hardening — keep-alive above the ALB (proven under Bun), a worker heartbeat on a health-only listener, a bounded web drain, a Bun in-image drain smoke, digest-pinned root-owned images, the RDS CA with verify-full'
 type: 'feature'
 created: '2026-10-23'
-status: 'ready-for-dev'
+baseline_commit: '9a246e768d4c6e71a9218a5537209a23e5712163'  # wms-be (origin/main); wms-fe: 2e145dbbfd433c377e3791471a9d9ac3cf4c84b4; wms-mobile: unchanged
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -352,12 +353,12 @@ FE signal mapping: only SIGTERM's 143 maps to 0; SIGINT stays 130. Recorded in D
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] wms-be `src/app.factory.ts`, `src/main.ts` — timeouts, role, the boot-refusal chain (78), worker init and registration flag.
-- [ ] wms-be `src/shared/lifecycle/{shutdown,http-drain,worker-heartbeat,worker-health-server}.ts`, `src/jobs/jobs.module.ts` — track, beat, the staleness rules, `Connection: close` on drain, the listener, 13 workers.
-- [ ] wms-be `src/shared/db/{pg-tls,db,migrate-deploy,provision-roles}.ts` — the helper, the boot validation, the strict flag.
-- [ ] wms-be `certs/rds-global-bundle.pem` — download once from `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` and record its sha256, certificate count and the target CA's expiry in Implementation Notes.
-- [ ] wms-be `Dockerfile`, `.env.example`, `runtime-contract.json`, `scripts/image-smoke.mjs`, `.github/{workflows/ci.yml,dependabot.yml}`.
-- [ ] wms-be tests:
+- [x] wms-be `src/app.factory.ts`, `src/main.ts` — timeouts, role, the boot-refusal chain (78), worker init and registration flag.
+- [x] wms-be `src/shared/lifecycle/{shutdown,http-drain,worker-heartbeat,worker-health-server}.ts`, `src/jobs/jobs.module.ts` — track, beat, the staleness rules, `Connection: close` on drain, the listener, 13 workers.
+- [x] wms-be `src/shared/db/{pg-tls,db,migrate-deploy,provision-roles}.ts` — the helper, the boot validation, the strict flag.
+- [x] wms-be `certs/rds-global-bundle.pem` — download once from `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem` and record its sha256, certificate count and the target CA's expiry in Implementation Notes.
+- [x] wms-be `Dockerfile`, `.env.example`, `runtime-contract.json`, `scripts/image-smoke.mjs`, `.github/{workflows/ci.yml,dependabot.yml}`.
+- [x] wms-be tests:
   - `test/http-timeouts.spec.ts` — the values, and `runtime-contract.json` matching them.
   - `test/worker-heartbeat.spec.ts` — every row of A3, plus parse.
   - `test/worker-health-server.spec.ts` — 200 body, pinned 503 problem, `not-ready` before registration, 404, close on shutdown, `EADDRINUSE` → exit 1.
@@ -367,7 +368,7 @@ FE signal mapping: only SIGTERM's 143 maps to 0; SIGINT stays 130. Recorded in D
   - `test/postgres-sites.spec.ts` — `postgres(` only in the three files.
   - `test/dockerfile.spec.ts` — digest, `-alpine`, tag = `.bun-version`.
   - Extend `test/shutdown.spec.ts` — force exit 75, `Connection: close` on in-flight responses, a role-worker exit 0.
-- [ ] wms-fe `scripts/start-standalone.mjs` plus its test. Spawn it with `WMS_STANDALONE_SERVER` set to a fixture that copies Next's cleanup and serves through the captured `http.createServer`, and check:
+- [x] wms-fe `scripts/start-standalone.mjs` plus its test. Spawn it with `WMS_STANDALONE_SERVER` set to a fixture that copies Next's cleanup and serves through the captured `http.createServer`, and check:
   - a keep-alive in-flight request at SIGTERM → `Connection: close`, exit 0 in under 5 s;
   - hung → 75 at a short bound;
   - early SIGTERM → 0;
@@ -451,6 +452,40 @@ FE signal mapping: only SIGTERM's 143 maps to 0; SIGINT stays 130. Recorded in D
 
 ## Implementation Notes
 
+Implemented 2026-10-23 on `feat/6-2c-runtime-hardening` in wms-be and wms-fe, and in this worktree for meta (all uncommitted at hand-off; nothing pushed, no AWS call).
+
+**The RDS CA bundle** (`certs/rds-global-bundle.pem`, downloaded once from `https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`, 2026-10-23): sha256 `90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b`, **114** certificates; the target CA `CN=Amazon RDS ap-south-1 Root CA RSA2048 G1` is valid to **2061-05-19 18:40:34 GMT**.
+
+**Base-image digests** (multi-arch OCI index, `docker buildx imagetools inspect`, 2026-10-23): `oven/bun:1.4.0-alpine@sha256:07235578f79ef8c6f97d94aee7938e76f5cdba5f21ae5dbfdd3d3d38058437eb` (wms-be), `oven/bun:1.4.2-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f` and `node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914` (wms-fe).
+
+**Interpretations taken where the spec left a choice** (each the smallest reading that keeps the intent):
+- **One more file: `src/shared/lifecycle/process-role.ts`** holds `parseProcessRole`, `ConfigRefusal`, the exit-code constants, `JOB_POLL_VARIABLES`, `assertApiRunsNoJobs` and `parsePort` (moved from `app.factory.ts`, re-exported there): `worker-health-server.ts` needs `parsePort`, and importing `app.factory` from `shared/lifecycle` would cycle through `AppModule`.
+- **`InFlightTick.track(job, pollMs, noProgressMs = DEFAULT_NO_PROGRESS_MS[job])`** — the per-job default lives in `worker-heartbeat.ts`; `WORKER_HEARTBEAT_STALE_MS` raises it inside `track`. The registry is module-level with a reset seam (`resetWorkerHeartbeats`), the `shutdownDrainDeadline` pattern; a re-registration under the same name replaces the entry (a suite boots many apps). The clock is `heartbeatClock` (assigned, the `rateCardClock` precedent).
+- **"Non-zero" `*_POLL_MS` (A9)** = set, not blank, and not numerically 0 — a malformed value counts as on (the worker's own parser would refuse it anyway).
+- **`PGSSLMODE` / `PGSSL` "set"** = defined, even empty (postgres.js reads `PGSSL` as a default `ssl` value). The **strict flag** refuses in every environment, not only production. A refusal of an `ssl*` URL parameter is case-insensitive (`SSLMODE` would also be forwarded as a startup parameter).
+- **The migrate and provision CLIs** judge the TLS configuration before connecting and exit **78** on a refusal (A4's "the same"); a connect failure (wrong CA, host outside the SAN) stays exit 1.
+- **`/health/worker` before registration** answers `503 not-ready` with `failing: ['worker-registration']` (the readiness problem's shape). Every other path and method on the worker listener answers `404 not-found` as problem+json.
+- **The drain's `Connection: close` (A2)** is set from `HttpDrain.onModuleDestroy` (the first hook after `prepareClose`) on every tracked response whose headers are unsent, and on any response that starts after it; `closeIdleConnections()` runs one `setImmediate` after each response finishes, so the server has marked the socket idle first.
+- **Dependabot (A19)** proposes digest refreshes only: tag bumps are ignored in `dependabot.yml`, because the Bun tag must equal `.bun-version` (the Dockerfile test would fail a Dependabot tag bump); an upgrade is its own change.
+- **The FE web-drain smoke holds a request in flight** with a server-action `POST /login` (`Next-Action` header) whose body is half sent — Next reads the whole body before it answers (it answers 404, unknown action, after the rest arrives). That is the only way found to hold a request open in the real image without a test route; the deterministic in-flight proof is the fixture test (`scripts/start-standalone.test.ts`). Next logs one "Server Reference ID did not match" error per run — harmless.
+- **The smoke script** is byte-identical in both repos (`process.stdout.write`, no `console.log`, so neither repo's lint needs a disable).
+- **CI runs Postgres and Valkey as `docker run` containers** on the job's own network (`wms-smoke`) instead of `services:` (service containers do not join a user network); the image job's `services:` were removed.
+
+**Spec facts that did not hold:**
+- **A8's "ALB idle_timeout below 65 − 5"** is an equality with #219's 60 s (60 = 65 − 5), not "below". `test/http-timeouts.spec.ts` asserts `≤`; 6-2d's tftest should too (or the ALB idle can drop to 55 s).
+- **Bun loads `.env` from the working directory by default**, so a spawned `bun src/main.ts` in a developer's checkout inherits the repo's `.env` (jobs on, a key set). The spawned tests run `bun --no-env-file`.
+
+**Verified:**
+- wms-be: `test/http-timeouts`, `worker-heartbeat`, `worker-health-server`, `boot-refusals`, `pg-tls`, `rds-ca-bundle`, `postgres-sites`, `dockerfile`, `shutdown`, `env-example` pass; lint, typecheck, build clean; `openapi:export` leaves `openapi/` unchanged. Mutation checks: dropping the drain's `Connection: close` fails the shutdown A2 case; staleness measured from the start instead of the last progress fails the beating-tick case; not stamping `lastStartedAt` fails four heartbeat cases.
+- wms-be image (`docker build`, then the `image` job's steps run locally by a script that executes the workflow's `run:` blocks in order — natively on arm64, CI is amd64): ownership; migrate + provision twice under `--read-only`; `/health`, `/health/ready` 200 as `wms_app`; `/health/worker` 404 on the API; **keepalive: 200 on the same socket after 61 s, `Keep-Alive: timeout=65`**; **negative control (5 s) fails the smoke**; **drain under Bun: the in-flight echo 200 with `Connection: close`, a new connection refused, the idle socket closed at the signal, exit 0** (the same smoke FAILS against the 6-2a image — `Connection: keep-alive`); the worker role: `/health/worker` 200 listing `outbox-relay`, `/api/v1/tenants/me` 404, the ECS health command exits 0, SIGTERM → 0; no job → 78, role `foo` → 78; **TLS**: the bundled RDS CA and a host outside the SAN both refuse (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `ERR_TLS_CERT_ALTNAME_INVALID`) with nothing applied; verify-full with the CI CA migrates, provisions, and the API answers `/health/ready` 200 with both pools' sessions on TLS (`pg_stat_ssl`); the strict flag with `require` → 78.
+- wms-be full suite: **137 suites, 3144 / 3144 tests pass** (one run).
+- **AC2, run** (`docker compose up --build`, ports remapped to 13000/13001 with an override — the dev servers hold 3000/3001): `docker compose exec worker` → `/api/v1/health/worker` 200 with all 13 jobs; `/api/v1/tenants/me` on the worker 404; the worker's compose health check turned `healthy`; the API's `/health/ready` and the web's `/login` 200; `docker compose stop api worker web` → each exit 0.
+- wms-fe: `bun test` 2554 pass; lint, typecheck, `bun run build` clean. Mutation check: without the A1 drain the keep-alive in-flight fixture case fails. Image job run locally: ownership (code root-owned, `.next/cache` node-owned and writable), refusal 78, `--read-only` run, `/login` 200, runtime config, keepalive reuse after 61 s, in-flight request answered `Connection: close` and exit 0 in 2 s (the same smoke FAILS against the 6-2a image: `keep-alive`, exit 143), idle SIGTERM → 0.
+
+**Implementation review fixes (2026-10-23):** rule (a) is measured from max(lastStartedAt, lastSettledAt) (a long tick that just settled is not loop-dead); the negative controls (BE and FE) run with `--timeout=5` and must fail at the 61 s reuse; every CI refusal greps its reason; a SIGTERM during boot exits 0 (a provisional handler until the shutdown hooks); a bad `PORT` / `*_POLL_MS` is a `ConfigRefusal` (78) — which needed `abortOnError: false` on `NestFactory.create` (Nest's own init error path is `process.exit(1)`); the three job lists are pinned as one set; the bundle's sha256 and its 114 certificates are pinned; `WEB_SHUTDOWN_FORCE_EXIT_MS` is capped at 25 000; the BE HEALTHCHECK follows the role; compose runs read-only with tmpfs; the operator scripts' auth pools are named `auth`; a repeated `sslmode` is refused and `sslnegotiation` allowed; the FE identifies Next's cleanup listener by identity (closing the server itself when there is none) and warns on a capture miss; the smoke's connect has a 10 s timeout; the worker listener logs post-listen errors.
+
+**Not done here — blocked on #219 (decision 13):** DEPLOY.md (§1 processes / health / graceful shutdown / exit codes, §2 env, §8.8 gate, the A5 ordering and the A22 interim note), PENDING (deploy: close C26/C30/C31/C19; add the digest-refresh review, CA bundle refresh, runtime-contract and smoke-copy sync, Bun not enforcing `headersTimeout`, the audit-export / ledger-integrity per-page beat, RDS Proxy trust; mobile: uploads bounded by the ALB's 60 s), SYSTEM-DESIGN "Processes, readiness and deploys", IMPLEMENTATION-GUIDE §8's worker rule (track/beat), and `docs/repos/wms-be|wms-fe/README.md` — every one of those files is also edited by the open #219, so they are written after it merges, rebased onto it. Done in this worktree now (files #219 does not touch): `deploy/compose.yml` (worker role, its health check, `stop_grace_period: 35s` on api/worker/web), `deploy/runtime-contract.json`, API-SURFACE's `/health/worker` row, frontend SYSTEM-DESIGN's production paragraph.
+
 ## Spec Change Log
 
 ## Review Triage Log
@@ -494,3 +529,32 @@ Design review, 2026-10-23. K = claims check against origin/main (with experiment
 | B18 | low | `/health/worker` before registration, and on the api role. → A10 |
 
 **Not applied as asked.** Per-page beats inside the audit-export and ledger-integrity facades need a seam across a module boundary. They beat per tenant or scope with a 60 min bound instead, and PENDING records the deeper beat.
+
+Code review, 2026-10-23 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routing per step-04; all choices recommended, taken autonomously.
+
+| ID | Source | Verdict | Finding → route |
+|---|---|---|---|
+| C1 | BH2, EC1, EC2 | high | Rule (a) measures loop-dead from `lastStartedAt`; right after a tick longer than pollMs + 60 s settles, a healthy job reads `loop-dead` until the next fire (an hourly job for up to ~59 min) → restart storm. Shed starts leave the old start in place. → patch: stamp `lastSettledAt`; rule (a) measures from max(lastStartedAt, lastSettledAt); a shed start does not re-arm; test a long beating tick that settles stays fresh. |
+| C2 | BH1, EC3, EC-claim | medium | The keep-alive negative control fails on the header regex before idling, so it never shows the 61 s reuse probe can fail (AC1). → patch: run it with `--timeout=5` and require the failure from the reuse probe. |
+| C3 | BH3, EC8 | medium | A SIGTERM during `app.init()` (before shutdown hooks and the force-exit arm) dies 143 mid-tick. → patch: a provisional handler before `createApp` that exits 0 (the wms-fe A12 equivalent); spawned test. |
+| C4 | BH4, EC6, EC7 | medium | `parsePort` and the `*_POLL_MS` parsers throw plain errors → exit 1 (retried) instead of 78. → patch: `ConfigRefusal`; boot-refusal cases. |
+| C5 | BH5, VG3 | medium | `JOB_POLL_VARIABLES`, `WORKER_JOBS` and the shutdown spec's `POLLS` are hand-kept with no cross-check. → patch: assert set equality. |
+| C6 | BH6 | medium | CI refusal checks pass on any non-zero exit. → patch: grep the reason (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `ERR_TLS_CERT_ALTNAME_INVALID`, the 78 messages). |
+| C7 | BH7 | medium | The committed CA bundle has no integrity pin. → patch: pin its sha256 (and certificate count) in `rds-ca-bundle.spec.ts`. |
+| C8 | BH8 | low | wms-fe has no keep-alive negative control. → patch (same shape as C2). |
+| C9 | BH9, EC9 | medium | `WEB_SHUTDOWN_FORCE_EXIT_MS` is unbounded (60000 is SIGKILLed first; > 2^31 overflows to 1 ms). → patch: refuse above 25000 with 78. |
+| C10 | VG1 | medium | Per-unit `beat()` placement is checked only by source text. → patch: run a looping worker's real tick (StorageSnapshot or LedgerIntegrity, both loops) and assert `lastProgressAt` follows each unit and `staleJobs()` stays empty. |
+| C11 | VG2 | low | `db:provision-roles` exit 78 on a TLS refusal is untested. → patch: spawned case. |
+| C12 | BH11 | low | `app.factory.ts` comment says `<` where the code and test say `≤`. → patch. |
+| C13 | BH12 | low | The image HEALTHCHECK ignores the role. → patch: probe `/api/v1/health/worker` when `WMS_PROCESS_ROLE=worker`. |
+| C14 | BH13 | low | Compose runs the app containers writable while CI/ECS run them read-only. → patch: `read_only: true` + tmpfs (`/tmp`, `/app/.next/cache`). |
+| C15 | VG-other | low | Auth scripts create the auth pool without `pool: 'auth'`, mislabelling and suppressing TLS warnings. → patch. |
+| C16 | EC4 | low | A repeated `sslmode` is judged by the first value while postgres.js uses the last. → patch: refuse repeats. |
+| C17 | EC5 | low | `sslnegotiation` is refused as a startup parameter, though postgres.js reads it. → patch: allow it. |
+| C18 | EC10, EC11 | medium | If the createServer capture misses or `NEXT_MANUAL_SIG_HANDLE` is set, a SIGTERM is treated as "early" and exits 0 dropping requests; the listener-count test is fooled by any other listener. → patch: warn when the capture missed; detect Next's own cleanup listener by identity. |
+| C19 | EC12 | low | The smoke's connect has no timeout. → patch: socket timeout. |
+| C20 | EC13 | low | The worker health server has no `'error'` listener after listen. → patch. |
+| C21 | BH10, VG4 | low | Meta's `deploy/runtime-contract.json` and the two `image-smoke.mjs` copies have no drift check. → defer (already PENDING A16; meta has no CI until 6-2d). |
+| C22 | BH14 | low | The Dependabot digest-only config is unexercised. → defer (verify on the first weekly run; PENDING). |
+| C23 | BH15, EC-claim | low | Spec bookkeeping / Intent text vs amendments. The fixes edit this build's spec. → reject (amendments supersede; the change log is written at finalize). |
+| C24 | BH16 | false | "3144 suggests a stale base": the branch is cut from origin/main, which does not carry 5-1a/3-2b/2-8a. → reject. |

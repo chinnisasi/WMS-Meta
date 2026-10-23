@@ -470,6 +470,7 @@ Return authorizations (FR-46) and receipts (FR-47). Every web route: `TenantSess
 |---|---|---|
 | GET | `/api/v1/health` | anonymous. Liveness only — touches nothing |
 | GET | `/api/v1/health/ready` | anonymous, tenant-free (story 6-2a). 200 `{status: 'ready', migration}` when both pools answer `select 1`, Valkey `PING`s and the schema is **at or after** the image's bundled journal; else `503 not-ready` with `failing` ∈ `database`, `auth-database`, `valkey`, `migrations-unreadable`, `migrations-behind` (names only). The load balancer's probe (`DEPLOY.md`) |
+| GET | `/api/v1/health/worker` | **The worker role only — not a Nest route, not in `openapi.json`** (story 6-2c). With `WMS_PROCESS_ROLE=worker` the process has no API listener; a health-only `node:http` listener on `PORT` answers `/api/v1/health` (the liveness body) and this route — 200 `{status:'ok', jobs:[{job, pollMs, inFlight, lastStartedAt, lastProgressAt, noProgressMs}]}`, or `503 worker-stale` (`failing`: the stale jobs; `detail` `Stale: <jobs>`), or `503 not-ready` (`failing: ['worker-registration']`) during boot — and `404 not-found` to everything else. The API role answers 404 here (the catch-all). The worker task's health check (`DEPLOY.md`) |
 | POST | `/api/v1/echo` | anonymous |
 | GET | `/api/v1/openapi.json` | The contract. Swagger UI at `/api/docs` |
 | ALL | `/api/v1/{*path}` | `NotFoundController` catch-all — **must map last**, which is why `ApiModule` registers after the spine modules |

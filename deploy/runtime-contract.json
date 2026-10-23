@@ -1,0 +1,12 @@
+{
+  "wms-be": {
+    "httpKeepAliveTimeoutMs": 65000,
+    "httpHeadersTimeoutMs": 66000,
+    "shutdownForceExitMs": 25000,
+    "shutdownDrainMs": 20000
+  },
+  "wms-fe": {
+    "keepAliveTimeoutMs": 65000,
+    "shutdownForceExitMs": 25000
+  }
+}
