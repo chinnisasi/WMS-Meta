@@ -155,7 +155,7 @@ variables {
 run "production_task_definitions" {
   command = apply # against the mocks: computed values become known
 
-  # No *_POLL_MS on the API; every one of compose's thirteen on the worker.
+  # No *_POLL_MS on the API; every one of compose's fourteen on the worker.
   assert {
     condition     = length([for e in jsondecode(aws_ecs_task_definition.this["api"].container_definitions)[0].environment : e if endswith(e.name, "_POLL_MS")]) == 0
     error_message = "The API task must set no *_POLL_MS."
@@ -166,10 +166,21 @@ run "production_task_definitions" {
       ["OUTBOX_RELAY_POLL_MS", "OUTBOX_RECONCILE_POLL_MS", "RESERVATION_REAPER_POLL_MS", "COUNT_SCHEDULER_POLL_MS",
         "REPLENISHMENT_SCHEDULER_POLL_MS", "CHANNELS_SYNC_POLL_MS", "STORAGE_SNAPSHOT_POLL_MS", "PUSH_SENDER_POLL_MS",
         "WAVE_CUTOFF_SWEEP_POLL_MS", "AUDIT_EXPORT_POLL_MS", "LEDGER_INTEGRITY_POLL_MS", "SESSION_PURGE_POLL_MS",
-      "LICENCE_EXPIRY_POLL_MS"],
+      "LICENCE_EXPIRY_POLL_MS", "EMAIL_SEND_POLL_MS"],
       [for e in jsondecode(aws_ecs_task_definition.this["worker"].container_definitions)[0].environment : e.name],
     )) == 0
     error_message = "The worker must set every *_POLL_MS from deploy/compose.yml."
+  }
+
+  # 6-2c: the worker task runs the worker role, health-checked on /health/worker.
+  assert {
+    condition     = contains([for e in jsondecode(aws_ecs_task_definition.this["worker"].container_definitions)[0].environment : "${e.name}=${e.value}"], "WMS_PROCESS_ROLE=worker")
+    error_message = "The worker task must set WMS_PROCESS_ROLE=worker (a ≥ 6-2c image refuses otherwise)."
+  }
+
+  assert {
+    condition     = strcontains(join(" ", jsondecode(aws_ecs_task_definition.this["worker"].container_definitions)[0].healthCheck.command), "/api/v1/health/worker")
+    error_message = "The worker's health check must probe /api/v1/health/worker."
   }
 
   # Migrate alone gets the owner URL and the role passwords.

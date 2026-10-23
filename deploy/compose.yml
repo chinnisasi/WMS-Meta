@@ -83,6 +83,10 @@ services:
     image: wms-be:local
     environment:
       <<: *app-env
+    # Story 6-2c (A15): the root filesystem is read-only, as in ECS; /tmp is the writable path.
+    read_only: true
+    tmpfs:
+      - /tmp
     ports:
       - "3000:3000"
     depends_on:
@@ -90,15 +94,22 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
-    stop_grace_period: 30s
+    # Story 6-2c (A13): the app's 25 s bound + 5 s, with margin.
+    stop_grace_period: 35s
 
   # The ONE worker task (DEPLOY.md: exactly one, stop-then-start): the same
-  # image, every job switched on by its poll interval.
+  # image, every job switched on by its poll interval. Story 6-2c: the worker
+  # role — no API listener; a health-only listener on 3000 answers
+  # /api/v1/health/worker (503 `worker-stale` when a job's loop stops).
   worker:
     build: *be-build
     image: wms-be:local
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
       <<: *app-env
+      WMS_PROCESS_ROLE: worker
       OUTBOX_RELAY_POLL_MS: "2000"
       OUTBOX_RECONCILE_POLL_MS: "2000"
       RESERVATION_REAPER_POLL_MS: "2000"
@@ -112,18 +123,36 @@ services:
       LEDGER_INTEGRITY_POLL_MS: "3600000"
       SESSION_PURGE_POLL_MS: "86400000"
       LICENCE_EXPIRY_POLL_MS: "3600000"
+      # Story 5-1a's sender: safe with EMAIL_PROVIDER unset (= off) — every
+      # invite is queued `skipped` (mail.config.ts needs no EMAIL_FROM,
+      # WEB_BASE_URL or EMAIL_SEAL_KEY under `off`), the provider is never
+      # called, and a tick finds nothing to send — it only purges old final
+      # rows. All 14 jobs then report on /api/v1/health/worker.
+      EMAIL_SEND_POLL_MS: "5000"
+    # The command 6-2d's ECS health check runs (A17).
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/worker',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       migrate:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
-    stop_grace_period: 30s
+    stop_grace_period: 35s
 
   web:
     build:
       context: ../workspace/core/frontend/wms-fe
       dockerfile: Dockerfile
     image: wms-fe:local
+    # Story 6-2c (A15): read-only; writable: /tmp and Next's cache (owned by node, uid 1000).
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=1000,gid=1000
     environment:
       # What the BROWSER calls (served as /runtime-config.js) …
       WMS_API_BASE_URL: ${WMS_API_BASE_URL:-http://localhost:3000/api/v1}
@@ -134,6 +163,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    stop_grace_period: 35s
 
 volumes:
   db-data:

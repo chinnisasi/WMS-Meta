@@ -138,20 +138,24 @@ All poll on configurable intervals and **take explicit tenant context** — AD-3
 
 ---
 
-## Processes, readiness and deploys (story 6-2a)
+## Processes, readiness and deploys (stories 6-2a, 6-2c)
 
-The backend is **one image** (`wms-be/Dockerfile`, Bun, non-root) run as three kinds of process that differ only by environment (`DEPLOY.md` §1):
+The backend is **one image** (`wms-be/Dockerfile`, Bun, non-root, digest-pinned base, read-only root filesystem) run as three kinds of process that differ only by environment — chiefly `WMS_PROCESS_ROLE` (6-2c; `DEPLOY.md` §1):
 
 | Process | What it runs |
 |---|---|
 | **migrate** (one-shot per deploy) | `db:migrate:deploy` — the guarded migrator — then `db:provision-roles`, as the database owner |
-| **api** (1..N) | the HTTP surface; every `*_POLL_MS` unset, so no background job |
-| **worker** (exactly one) | the same process with the jobs above switched on by their `*_POLL_MS`; deployed stop-then-start, because seven jobs are not proven safe twice |
+| **api** (1..N) | role `api` (the default): the HTTP surface; every `*_POLL_MS` unset, so no background job — in production a set one refuses the boot unless `WMS_API_RUNS_JOBS=1` |
+| **worker** (exactly one) | role `worker`: the fourteen jobs (`JOB_POLL_VARIABLES` — 5-1a's email sender is the fourteenth) switched on by their `*_POLL_MS`, Nest initialised with **no API listener**, and a health-only listener answering `/health` and `/health/worker`; deployed stop-then-start, because seven jobs are not proven safe twice |
 
 The web is its own image (`wms-fe/Dockerfile`, the Next standalone server on Node); its API base is read at **run time** (`WMS_API_BASE_URL`, served as `/runtime-config.js`), so one image serves every environment.
 
 - **Liveness** is `GET /health` (touches nothing). **Readiness** is `GET /health/ready`: both Postgres pools, Valkey `PING`, and the schema **at or after** the image's bundled journal (`max(__drizzle_migrations.created_at)` ≥ the last `when`) — never "equal", so the old tasks stay ready while the migrator moves the schema ahead of them. Migrations are additive by assumption; that is what makes "ahead" safe.
-- **Graceful shutdown** follows Nest's hook order (`src/shared/lifecycle/shutdown.ts`): stop accepting → workers await their in-flight tick and in-flight requests finish (one 20 s drain deadline) → the server closes → the pools close; a 25 s force exit bounds it under a 30 s stop timeout.
+- **The worker heartbeat** (6-2c) is in process, never in Valkey — the check must judge this task's loops, and a Valkey outage must not restart the worker. `InFlightTick` stamps each enabled job's tick start, every `beat()` (one per unit: a tenant, a scope) and settle; `/health/worker` answers 503 `worker-stale` when a job's loop is dead (nothing for `pollMs + 60 s`) or a tick makes no progress past its bound (20 min; 60 for audit export and ledger integrity). It is the worker's container health check, not a target group's.
+- **Graceful shutdown** follows Nest's hook order (`src/shared/lifecycle/shutdown.ts`): stop accepting → workers await their in-flight tick and in-flight requests finish (one 20 s drain deadline) → the server closes → the pools close; a 25 s force exit (exit 75) bounds it under a 30 s stop timeout. From the signal on, every unsent response carries `Connection: close` and idle sockets are closed, so a load balancer never reuses a socket the task is about to drop. The web's start wraps Next's own drain the same way, bounded at 25 s.
+- **Keep-alive above the ALB** (6-2c): both servers keep idle sockets 65 s against the ALB's 60 s — the go-live gate, proven in the built images under Bun. The values live in each repo's `runtime-contract.json` and the meta `deploy/runtime-contract.json`, for the infrastructure's tests.
+- **Exit codes** say whether to retry: 0 graceful, **78** a boot or configuration refusal (do not retry), **75** the drain timeout, 1 a crash.
+- **Database TLS** (6-2c): every pool is created through one helper (`src/shared/db/pg-tls.ts`) that, for `sslmode=verify-full`, verifies the server's certificate and host against the RDS CA bundle the image carries (`PGSSLROOTCERT`), and refuses at boot — before connecting — any configuration postgres.js would silently mishandle. The switch from `require` is 6-2d's (`DEPLOY.md` §8.8).
 - **The deploy migrator** (`src/shared/db/migrate-deploy.ts`) wraps drizzle's own runner: one migrator at a time (a session advisory lock on a reserved connection), and a refusal of any pending index build on a large existing table unless the index was pre-built `CONCURRENTLY` and is valid — the runbook in `DEPLOY.md` §5, enforced rather than trusted. `db:migrate` (dev, the tests' template) is unchanged.
 
 ### Where it runs (story 6-2b)
