@@ -1075,6 +1075,12 @@
 - source_spec: none
   summary: 4-1c staff CSV/Excel order import — upload orders (client, warehouse, client order number, ship-to, SKU lines) reusing src/shared/import/sheet-reader.ts with Check file (dry run) / Import, one createOrder per order with a derived key, deduped by the client order number (4-1b's per-client unique ref).
   evidence: Split from 4-1b on 2026-10-23 (recommended, taken autonomously) — the import is independently shippable and depends on the client order number landing first.
+- source_spec: none
+  summary: 4-2b cancel / unpack a packed order — a keyed command that takes a ready_to_dispatch (packed, not yet labelled or dispatched) order back: reverses the zero-quantity pack.packed events, returns the picked units to a bin (or a staging location) through the ledger, releases the committed reservation, and either cancels the order or returns it to accepted for re-picking; closes PENDING outbound "a packed-but-abandoned order understates ATP indefinitely"; web pack/dispatch + handheld.
+  evidence: Split from roadmap 4.2 on 2026-10-23 (recommended, taken autonomously) — 4-2a ships the order fields (type, COD, priority, ship-by); the packed-order reversal is a separate stock-moving state-machine change with its own ledger and reservation design.
+- source_spec: none
+  summary: 4-2c backorder follow-on — when an order dispatches short (or a backordered line never reserved), a queryable short-shipment record and a follow-on order (or a re-reservation of the open shortfall when stock arrives), per client policy; closes PENDING outbound "a short shipment leaves no queryable trace and schedules no backorder follow-on".
+  evidence: Split from roadmap 4.2 on 2026-10-23 (recommended, taken autonomously) — independent of the order fields; needs its own policy and reservation design. Handoff from 4-2a (design review B2/A17): an order's COD amount rides its one shipment; a follow-on order must not carry the original's COD again — decide whether the COD is split, or held to the follow-on.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-2b-aws-environments-and-deploy-pipeline.md`
   summary: 6-2c runtime hardening. Covers BE keepAliveTimeout 65 s / headersTimeout 66 s, above the ALB's 60 s idle timeout, verified under Bun (a go-live gate), a worker heartbeat (C31), a bounded web drain with exit 0 (C30), a Bun in-image drain smoke (C26), digest-pinned bases with a root-owned FE image and writable cache (C19), and the RDS CA bundle with sslmode verify-full.
