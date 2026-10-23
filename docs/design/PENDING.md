@@ -345,7 +345,7 @@ Two sources, both authoritative:
 - **Brands sharing one licence** — a licence has one client holder; two brands under one group licence need two rows (each with the same number would collide on the family index — only one may be active). A shared-holder model is a later decision
 - **A departed client's open upcoming warning stays open until expiry** — the sweep raises nothing for a departed client's licences and resolves an entry raised before the departure only once `validUntil` passes (`expired`), or on a renewal or withdraw
 - **No dashboard tile** for the gaps or the expiring licences — the Compliance → Licences tab and the owner's panel entries are the surfaces
-- **No email or push** for an expiry — the panel entry only (5.1's email service, then 5.2's client notifications, could add both)
+- **No email or push** for an expiry — the panel entry only (5-1a built the email service; alert mail is **5-1c**, then 5.2's client notifications)
 - **No portal view** — a client cannot see its own licences or gaps (staff-only reads; the RLS clause is in place for when it can)
 - **No licence documents** — the scanned licence certificate waits for the file-storage story with 2.5 (damage photos), and nothing prints a licence number on a GRN, invoice or challan yet
 - **Epic 18 (controlled & licensed goods)** extends THIS `licences` table and its master rather than adding its own licence admin
@@ -476,6 +476,23 @@ Two sources, both authoritative:
 - **Cross-tenant token ownership can regress** *(9-2b code review BE3)* — ownership is "the latest `push_registered_at` among the rows holding the token" (`pushTokenOwners`). When the newer owner (tenant B) clears its token — DELETE, revoke, `DeviceNotRegistered` — tenant A's older row, still holding the token because no write may cross tenants, becomes the latest again and is sent to — the phone now in tenant B receives tenant A's pushes. A's row is only cleared when one of its own rows is claimed and found `superseded`; if B clears first, that never happens. A tombstone of superseded tokens closes it
 - **Expo refuses a mixed-project batch** *(9-2b code review BE7)* — a request whose tokens belong to more than one Expo project is refused whole with `PUSH_TOO_MANY_EXPERIENCE_IDS`; the gateway reads it as `http-400` → permanent, so every row of that batch fails. Harmless with one app build per deployment; two (a dev and a store build) need batching by project
 - **The sweep tests depend on the date** *(9-2b code review)* — `test/push.spec.ts`'s cutoff tests freeze `WAVE_CLOCK` and `pushClock` at 2026-10-12 while the sweep's outbox append mints a real-time uuidv7, so the enqueue's staleness check compares a frozen "now" with a real append time (negative after that date, stale if run well before it). Mint the append id from the frozen clock
+
+## mail (story 5-1a)
+
+*(5-1a built the email queue, the SES gateway and the invite emails — `modules/mail.md`. Entries below are its known-not-done.)*
+
+- **5-1b — password reset by email** *(5-1a decision 1)* — the 6.1 remainder: a forgot-password flow queuing a reset mail through `queueEmailInTx` (a new template, the reset token as the sealed secret)
+- **5-1c — invoice and alert emails** *(5-1a decision 1; deferred-work)* — invoice delivery to a client's billing contact, and the panel's alerts (licence expiry, ledger chain break, …) by mail
+- **No SNS bounce / complaint intake** *(5-1a decision 5, design review B1)* — a message reads `sent` once SES accepted it; a later bounce or complaint is never recorded, so it still reads "Sent to the mail service". Account-level suppression stops the next send to that address (`suppressed`). The fix is an SNS → HTTPS endpoint (needs 6.2's deployability) writing the bounce onto the row by `provider_message_id`
+- **The invite token still sits in the idempotency snapshot** *(5-1a decision 3, design review B6)* — pre-existing since 1.5 (a replay re-serves the link); 5-1a's resend and reactivate snapshots carry it the same way. Sealing the queue is defence in depth. Redacting the snapshot (store a sealed token, or re-mint on replay) is the fix
+- **English only** *(5-1a decision 6)* — templates have no locale; a per-tenant or per-user language would pick the template's copy
+- **No resend of the same link** *(5-1a)* — Resend invite always mints a fresh token (the safe default: an old link may have leaked). Re-sending a failed or expired email with the SAME token is not offered
+- **Delivery is at-most-once** *(5-1a decision 5)* — a `sending` row that outlived its process, or a send that timed out after the request left, is `failed 'stale'` and never re-sent; the owner sees "Not sent — resend or copy the link". By design (SES has no idempotency key)
+- **The worker's discovery query scans `email_messages`** *(5-1a; code review)* — it is cross-tenant, and every arm (due, expired, stale, purge) filters on `status` while both indexes lead with `tenant_id`, so each tick is a sequential scan; fine at invite volume. Add a `(status, next_attempt_at)` index (and one serving `status, updated_at` for the stale and purge arms) if the table grows with 5-1c's mail
+- **The SES sandbox reads as a config fault** *(5-1a)* — an unverified recipient is `address-not-verified` → config: the row waits and expires after 24 h. Staging must run with `EMAIL_ALLOWLIST_DOMAINS` (or verified test recipients)
+- **`email_messages` has no worker-audit proof** *(6-2a A8 class)* — the claim is `FOR UPDATE SKIP LOCKED` with `sending` committed before the send, so two worker processes are safe by design; it is not on the seven-worker list, but no two-instance test exists
+- **Password reset needs email** *(6-1a; see the 6.1 entry under auth)* — the mailer it was blocked on exists since 5-1a; the reset flow itself is **story 5-1b**. Until then the owner deactivates and re-invites.
+- **5-1a's SES prerequisites** *(owned with 6.2)* — a domain identity in ap-south-1 with Easy DKIM, a custom MAIL FROM (SPF) and DMARC; production access; account-level suppression (bounces, complaints); IAM `ses:SendEmail` + `ses:GetSuppressedDestination`; `EMAIL_SEAL_KEY` (≥ 32 characters) in the secrets manager; `EMAIL_PROVIDER`, `EMAIL_FROM`, `WEB_BASE_URL`, `EMAIL_SEND_POLL_MS` on the worker (and `EMAIL_PROVIDER`/`EMAIL_FROM`/`WEB_BASE_URL`/`EMAIL_SEAL_KEY` on every API task — the invite queues the mail and answers the link); staging with `EMAIL_ALLOWLIST_DOMAINS`
 
 ## reporting
 
