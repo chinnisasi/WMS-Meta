@@ -1,0 +1,339 @@
+# Story 6-2b — deploy wms-be and wms-fe to an AWS environment (decision 9,
+# amendments A1–A4, A8, A13). Run by hand: Actions → deploy → Run workflow.
+#
+#   gate    no environment, so an unconfigured run needs no approval. Prints
+#           "not configured" and succeeds — every later job skipped — until
+#           the repository variable AWS_DEPLOY_ROLE_ARN_<ENV> is set (A4).
+#   build   staging only: build each image at its ref and push :<full sha> to
+#           ECR, skipping a SHA already there. Production never builds (A3).
+#   deploy  one job under `environment: <env>` — one approval, no gap between
+#           migrate and roll (A4): the one-shot migrate task, then api →
+#           readiness gate → worker (stop-then-start) → web.
+#
+# Runbook: docs/design/DEPLOY.md §AWS. The repositories and this workflow's
+# logs are public: nothing here prints a task definition, an environment or a
+# secret (A8, A9).
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+      be_ref:
+        description: "wms-be ref. Staging: a branch, tag or SHA. Production: the full 40-character SHA staging deployed"
+        type: string
+        default: main
+        required: true
+      fe_ref:
+        description: "wms-fe ref. Staging: a branch, tag or SHA. Production: the full 40-character SHA staging deployed"
+        type: string
+        default: main
+        required: true
+      skip_migrations:
+        description: "Rollback: roll the given images only — no migrate task"
+        type: boolean
+        default: false
+      dry_run_migrations:
+        description: "Run the migrator with --dry-run (no provisioning) and stop: nothing changes, nothing rolls"
+        type: boolean
+        default: false
+      allow_locking:
+        description: "Accept these named migrator refusals (--allow-locking=…): index names or migration tags, comma-separated. DEPLOY.md §5"
+        type: string
+        default: ""
+        required: false
+
+permissions: {}
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.gate.outputs.configured }}
+    steps:
+      - name: Check configuration and inputs
+        id: gate
+        env:
+          TARGET: ${{ inputs.environment }}
+          ROLE_STAGING: ${{ vars.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          ROLE_PRODUCTION: ${{ vars.AWS_DEPLOY_ROLE_ARN_PRODUCTION }}
+          GIT_REF: ${{ github.ref }}
+          BE_REF: ${{ inputs.be_ref }}
+          FE_REF: ${{ inputs.fe_ref }}
+          SKIP_MIGRATIONS: ${{ inputs.skip_migrations }}
+          DRY_RUN: ${{ inputs.dry_run_migrations }}
+          ALLOW_LOCKING: ${{ inputs.allow_locking }}
+        run: |
+          if [[ "$TARGET" == "production" ]]; then role=$ROLE_PRODUCTION; else role=$ROLE_STAGING; fi
+          var="AWS_DEPLOY_ROLE_ARN_${TARGET^^}"
+          if [[ -z "$role" ]]; then
+            echo "::notice::$TARGET is not configured: the repository variable $var is unset (docs/design/DEPLOY.md §AWS). Nothing to do."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$GIT_REF" != "refs/heads/main" ]]; then
+            echo "::error::Deploys run from main only (A3); this run is on $GIT_REF."
+            exit 1
+          fi
+          if [[ ! "$ALLOW_LOCKING" =~ ^[A-Za-z0-9_,-]*$ ]]; then
+            echo "::error::allow_locking may hold only letters, digits, _ , and - (index names or migration tags)."
+            exit 1
+          fi
+          if [[ "$SKIP_MIGRATIONS" == "true" && "$DRY_RUN" == "true" ]]; then
+            echo "::error::skip_migrations and dry_run_migrations contradict each other."
+            exit 1
+          fi
+          if [[ "$TARGET" == "production" ]]; then
+            for ref in "$BE_REF" "$FE_REF"; do
+              if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::Production promotes what staging deployed: be_ref and fe_ref must be full 40-character SHAs (got \"$ref\")."
+                exit 1
+              fi
+            done
+          else
+            for ref in "$BE_REF" "$FE_REF"; do
+              if [[ ! "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+                echo "::error::Not a git ref: \"$ref\"."
+                exit 1
+              fi
+            done
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build
+    needs: gate
+    if: needs.gate.outputs.configured == 'true' && github.ref == 'refs/heads/main' && inputs.environment == 'staging'
+    runs-on: ubuntu-24.04
+    environment: staging
+    timeout-minutes: 60
+    # One build at a time across every run (A4): two runs pushing one SHA
+    # would otherwise race on the immutable tag.
+    concurrency:
+      group: wms-build
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      be_sha: ${{ steps.sha.outputs.be }}
+      fe_sha: ${{ steps.sha.outputs.fe }}
+    steps:
+      - name: Check out wms-be
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: chinnisasi/WMS-BE
+          ref: ${{ inputs.be_ref }}
+          path: be
+          persist-credentials: false
+
+      - name: Check out wms-fe
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: chinnisasi/WMS-FE
+          ref: ${{ inputs.fe_ref }}
+          path: fe
+          persist-credentials: false
+
+      - name: Resolve SHAs
+        id: sha
+        run: |
+          echo "be=$(git -C be rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "fe=$(git -C fe rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: AWS credentials (staging deploy role)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          role-session-name: wms-build-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build and push (skip a SHA already in ECR)
+        env:
+          BE_SHA: ${{ steps.sha.outputs.be }}
+          FE_SHA: ${{ steps.sha.outputs.fe }}
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          registry="$account.dkr.ecr.$AWS_REGION.amazonaws.com"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+
+          exists() { aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$2" >/dev/null 2>&1; }
+
+          push() {
+            local repo=$1 dir=$2 sha=$3
+            if exists "$repo" "$sha"; then
+              echo "$repo:$sha is already in ECR — promoted as is, not rebuilt."
+              return 0
+            fi
+            if docker buildx build --platform linux/amd64 --provenance=false \
+                 --tag "$registry/$repo:$sha" --push "$dir"; then
+              echo "$repo:$sha pushed."
+              return 0
+            fi
+            # An immutable tag another run pushed first (ImageTagAlreadyExists)
+            # is the same commit: success (A4).
+            if exists "$repo" "$sha"; then
+              echo "$repo:$sha was pushed by another run — using it."
+              return 0
+            fi
+            echo "::error::Building or pushing $repo:$sha failed."
+            return 1
+          }
+
+          push wms-be be "$BE_SHA"
+          push wms-fe fe "$FE_SHA"
+
+  deploy:
+    name: deploy (${{ inputs.environment }})
+    needs: [gate, build]
+    if: >-
+      !cancelled()
+      && needs.gate.result == 'success'
+      && needs.gate.outputs.configured == 'true'
+      && github.ref == 'refs/heads/main'
+      && (needs.build.result == 'success'
+          || (needs.build.result == 'skipped' && inputs.environment == 'production'))
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    # migrate step ≤ 60 + three rolls ≤ 20 each + readiness ≤ 5 = 125 min of
+    # bounded work, plus margin; below the role session's 180 (DEPLOY.md §8.5).
+    timeout-minutes: 170
+    # One deploy per environment at a time, never cancelled in flight. GitHub
+    # keeps only the NEWEST pending run in a group (DEPLOY.md §AWS).
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET: ${{ inputs.environment }}
+    steps:
+      - name: Check out the deploy script
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: AWS credentials (${{ inputs.environment }} deploy role)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ inputs.environment == 'production' && vars.AWS_DEPLOY_ROLE_ARN_PRODUCTION || vars.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          role-session-name: wms-deploy-${{ inputs.environment }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 10800
+
+      - name: Read the deploy parameter
+        run: |
+          # Outside the workspace; read by every later step through DEPLOY_JSON.
+          DEPLOY_JSON="$RUNNER_TEMP/deploy-parameter.json"
+          echo "DEPLOY_JSON=$DEPLOY_JSON" >> "$GITHUB_ENV"
+          aws ssm get-parameter --name "/wms/$TARGET/deploy" --query Parameter.Value --output text > "$DEPLOY_JSON"
+          jq -e '.cluster and .migrate and .services.api and .services.worker and .services.web' "$DEPLOY_JSON" > /dev/null
+
+      - name: Resolve the images
+        id: images
+        env:
+          BUILT_BE: ${{ needs.build.outputs.be_sha }}
+          BUILT_FE: ${{ needs.build.outputs.fe_sha }}
+          BE_REF: ${{ inputs.be_ref }}
+          FE_REF: ${{ inputs.fe_ref }}
+        run: |
+          if [[ "$TARGET" == "production" ]]; then
+            be=$BE_REF fe=$FE_REF
+            # A3: production promotes exactly what staging last deployed.
+            staged=$(aws ssm get-parameter --name /wms/staging/deployed --query Parameter.Value --output text)
+            if [[ "$(jq -r .be <<<"$staged")" != "$be" || "$(jq -r .fe <<<"$staged")" != "$fe" ]]; then
+              echo "::error::Production promotes only what staging deployed last: be=$(jq -r .be <<<"$staged") fe=$(jq -r .fe <<<"$staged"). Deploy these SHAs to staging first."
+              exit 1
+            fi
+          else
+            be=$BUILT_BE fe=$BUILT_FE
+          fi
+          for pair in "wms-be:$be" "wms-fe:$fe"; do
+            if ! aws ecr describe-images --repository-name "${pair%%:*}" --image-ids "imageTag=${pair#*:}" > /dev/null 2>&1; then
+              echo "::error::${pair} is not in ECR; nothing was changed."
+              exit 1
+            fi
+          done
+          {
+            echo "be_sha=$be"
+            echo "fe_sha=$fe"
+            echo "be_image=$(jq -r '.repositories["wms-be"]' "$DEPLOY_JSON"):$be"
+            echo "fe_image=$(jq -r '.repositories["wms-fe"]' "$DEPLOY_JSON"):$fe"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Migrate
+        id: migrate
+        if: ${{ !inputs.skip_migrations }}
+        timeout-minutes: 60
+        env:
+          BE_IMAGE: ${{ steps.images.outputs.be_image }}
+          DRY_RUN: ${{ inputs.dry_run_migrations }}
+          ALLOW_LOCKING: ${{ inputs.allow_locking }}
+        run: .github/scripts/ecs-deploy.sh migrate
+
+      - name: Roll api → readiness → worker → web
+        id: roll
+        if: ${{ !inputs.dry_run_migrations }}
+        env:
+          BE_IMAGE: ${{ steps.images.outputs.be_image }}
+          FE_IMAGE: ${{ steps.images.outputs.fe_image }}
+          STATUS_FILE: ${{ runner.temp }}/roll-status
+        run: |
+          printf '%s\n' "api|not attempted" "worker|not attempted" "web|not attempted" > "$STATUS_FILE"
+          mark() { sed -i "s/^$1|.*/$1|$2/" "$STATUS_FILE"; }
+          roll() {
+            if .github/scripts/ecs-deploy.sh roll "$1" "$2"; then mark "$1" rolled; else mark "$1" failed; exit 1; fi
+          }
+          roll api "$BE_IMAGE"
+          # A7: readiness is the deploy gate before the worker moves.
+          if ! .github/scripts/ecs-deploy.sh ready; then mark api "rolled, not ready"; exit 1; fi
+          roll worker "$BE_IMAGE"
+          roll web "$FE_IMAGE"
+
+      - name: Record what staging deployed
+        if: ${{ inputs.environment == 'staging' && !inputs.dry_run_migrations }}
+        env:
+          BE_SHA: ${{ steps.images.outputs.be_sha }}
+          FE_SHA: ${{ steps.images.outputs.fe_sha }}
+        run: |
+          aws ssm put-parameter --name /wms/staging/deployed --type String --overwrite \
+            --value "$(jq -nc --arg be "$BE_SHA" --arg fe "$FE_SHA" '{be: $be, fe: $fe}')" > /dev/null
+          echo "Production may now promote be=$BE_SHA fe=$FE_SHA."
+
+      - name: Summary
+        if: ${{ always() && steps.images.outcome == 'success' }}
+        env:
+          BE_SHA: ${{ steps.images.outputs.be_sha }}
+          FE_SHA: ${{ steps.images.outputs.fe_sha }}
+          MIGRATE: ${{ inputs.skip_migrations && 'skipped (rollback)' || steps.migrate.outcome }}
+          DRY_RUN: ${{ inputs.dry_run_migrations }}
+          STATUS_FILE: ${{ runner.temp }}/roll-status
+        run: |
+          {
+            echo "### Deploy to $TARGET"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| wms-be | \`$BE_SHA\` |"
+            echo "| wms-fe | \`$FE_SHA\` |"
+            echo "| migrate | $MIGRATE$([[ "$DRY_RUN" == "true" ]] && echo " (dry run)") |"
+            if [[ -f "$STATUS_FILE" ]]; then
+              while IFS='|' read -r svc state; do echo "| $svc | $state |"; done < "$STATUS_FILE"
+            else
+              for svc in api worker web; do echo "| $svc | not attempted |"; done
+            fi
+            echo
+            echo "A failed later roll leaves api newer than the worker or web: safe, migrations are additive. Re-run with skip_migrations and the same SHAs (docs/design/DEPLOY.md §AWS)."
+          } >> "$GITHUB_STEP_SUMMARY"

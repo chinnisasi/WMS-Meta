@@ -31,3 +31,15 @@ _bmad-output/**/.memlog.md
 
 # Story 6-2a — local compose overrides (deploy/.env.example is the template).
 deploy/.env
+
+# Story 6-2b — Terraform: commit the provider lock files
+# (.terraform.lock.hcl), never local state, plans or the provider cache.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+# The bootstrap stack's first-apply local backend (infra/README.md).
+*_override.tf
+*_override.tf.json

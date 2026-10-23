@@ -150,6 +150,48 @@ The web is its own image (`wms-fe/Dockerfile`, the Next standalone server on Nod
 - **Graceful shutdown** follows Nest's hook order (`src/shared/lifecycle/shutdown.ts`): stop accepting → workers await their in-flight tick and in-flight requests finish (one 20 s drain deadline) → the server closes → the pools close; a 25 s force exit bounds it under a 30 s stop timeout.
 - **The deploy migrator** (`src/shared/db/migrate-deploy.ts`) wraps drizzle's own runner: one migrator at a time (a session advisory lock on a reserved connection), and a refusal of any pending index build on a large existing table unless the index was pre-built `CONCURRENTLY` and is valid — the runbook in `DEPLOY.md` §5, enforced rather than trusted. `db:migrate` (dev, the tests' template) is unchanged.
 
+### Where it runs (story 6-2b)
+
+AWS Mumbai (`ap-south-1`), one account, two environments — staging and production — built from one Terraform module (`infra/`), deployed by a meta-repo GitHub Actions workflow. Runbook: `DEPLOY.md` §8.
+
+```mermaid
+flowchart LR
+  browser(["browser / handheld"]) -->|HTTPS| alb
+  subgraph vpc["VPC per environment · 2 AZs"]
+    subgraph public["public subnets"]
+      alb["ALB<br/>app.#lt;domain#gt; → web<br/>api.#lt;domain#gt; → api"]
+      nat["NAT"]
+    end
+    subgraph app["app subnets · ECS Fargate"]
+      web["web × 1..N<br/>wms-fe"]
+      api["api × 1..N<br/>wms-be, no jobs"]
+      worker["worker × exactly 1<br/>wms-be, every *_POLL_MS"]
+      migrate["migrate<br/>one-shot per deploy"]
+    end
+    subgraph data["data subnets · no route out"]
+      rds[("RDS Postgres 18")]
+      valkey[("ElastiCache Valkey 8")]
+    end
+  end
+  alb --> web
+  alb --> api
+  api --> rds
+  api --> valkey
+  worker --> rds
+  worker --> valkey
+  migrate -->|owner| rds
+  worker -->|anchors| s3[("S3 Object Lock")]
+  worker -->|push, channels, e-way| nat
+  gha["GitHub Actions deploy.yml<br/>OIDC role per environment"] -->|push :sha| ecr[("ECR")]
+  gha -->|run-task, update-service| app
+  secrets[("Secrets Manager<br/>wms/#lt;env#gt;/…")] -.->|valueFrom| app
+```
+
+- **One image per commit, promoted.** Staging builds `wms-be:<sha>` / `wms-fe:<sha>` (immutable tags); production deploys only the SHAs staging last deployed (`/wms/staging/deployed`), never rebuilding.
+- **Terraform owns the shape, the pipeline owns the image.** Task definitions (env, secrets, sizes, roles) are Terraform's; the pipeline copies the base revision Terraform names in SSM `/wms/<env>/deploy`, swaps only the image, runs the migrate task, then rolls api → readiness gate → worker → web, each verified by its own bounded poll.
+- **Health:** the ALB checks liveness (`/health`); readiness (`/health/ready`) is the pipeline's gate after the api roll — on the target group it would recycle every task in a shared-dependency outage.
+- **Secrets:** generated credentials (DB, Valkey) are Terraform's; the JWT secret and encryption keys are set out of band and never in state. The migrate task alone can read the owner URL and the role passwords.
+
 ---
 
 ## Where state lives
