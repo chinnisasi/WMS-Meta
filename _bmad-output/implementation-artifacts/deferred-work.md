@@ -1209,7 +1209,7 @@
 
 - source_spec: none
   summary: 4-1c staff CSV/Excel order import — upload orders (client, warehouse, client order number, ship-to, SKU lines) reusing src/shared/import/sheet-reader.ts with Check file (dry run) / Import, one createOrder per order with a derived key, deduped by the client order number (4-1b's per-client unique ref).
-  evidence: Split from 4-1b on 2026-10-23 (recommended, taken autonomously) — the import is independently shippable and depends on the client order number landing first.
+  evidence: Split from 4-1b on 2026-10-23 (recommended, taken autonomously) — the import is independently shippable and depends on the client order number landing first. Designed 2026-10-24 in `spec-4-1c-order-import.md` (staff and client-portal surfaces).
 - source_spec: none
   summary: 4-2b cancel / unpack a packed order — a keyed command that takes a ready_to_dispatch (packed, not yet labelled or dispatched) order back: reverses the zero-quantity pack.packed events, returns the picked units to a bin (or a staging location) through the ledger, releases the committed reservation, and either cancels the order or returns it to accepted for re-picking; closes PENDING outbound "a packed-but-abandoned order understates ATP indefinitely"; web pack/dispatch + handheld.
   evidence: Split from roadmap 4.2 on 2026-10-23 (recommended, taken autonomously) — 4-2a ships the order fields (type, COD, priority, ship-by); the packed-order reversal is a separate stock-moving state-machine change with its own ledger and reservation design.
