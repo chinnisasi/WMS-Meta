@@ -1087,6 +1087,9 @@
   summary: 3-5b full stock take with freeze — a warehouse- or zone-wide count of every bin, a freeze that refuses every stock-moving command (putaway, pick, move, transfer, adjustment, receipt into the frozen scope) while it runs, and a close that posts the variances and lifts the freeze.
   evidence: Split from roadmap 3.5 on 2026-10-22 (recommended, taken autonomously) — the freeze is a cross-cutting guard in every movement command, independently shippable from 3-5a (blind handheld counts + the count-admin web surface).
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-2a-order-fields.md`
+  summary: Pin that a picklist's device urgency counts only its planned lines — a batch picklist whose urgent order is already picked must not outrank another picklist on that order's priority (test with a multi-order batch picklist and partial picks).
+  evidence: 4-2a code review C10 (VG2) — dropping `eq(urgencyLines.status, 'planned')` in `getPickTasksInTx` passes every existing fixture.
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-8a-qc-inspection-outcome.md`
   summary: 2-8b return to vendor — a return-to-vendor document drawing from DAMAGED, covering both QC-fail units (2-8a `qc.failed`) and 2-4a receipt damage (`grn.damaged`). It needs the vendor snapshot (`VendorSnapshotV1`), lines tied to `grnLineId`, an RTV outbound ledger type out of DAMAGED (metering `['from']`), a printable note, and the RTV fee decision.
   evidence: It is a new outbound document type, needed for receipt damage independent of QC; split from 2.8 at the scope gate. 13-3 and 4.7's "return to vendor" build on it.

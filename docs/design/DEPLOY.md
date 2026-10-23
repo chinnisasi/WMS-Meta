@@ -247,6 +247,8 @@ Run by `bun run db:provision-roles` (`src/shared/db/provision-roles.ts`), on eve
 
 ## 5. Index builds on large tables
 
+**A lock that cannot be taken fails the deploy cleanly (story 4-2a, A21).** The deploy migrator sets `lock_timeout` on every connection (`MIGRATE_LOCK_TIMEOUT_MS`, default 5 s). An `ALTER TABLE orders …` (0093's four ADD COLUMNs and NOT VALID CHECKs) that cannot take its ACCESS EXCLUSIVE lock in that time — a long transaction holding `orders` — rolls the whole pending set back with nothing applied. The remedy is to **re-run the deploy** (in a quieter moment if it keeps timing out); nothing needs undoing.
+
 drizzle applies every pending migration in **one transaction**, where `CREATE INDEX CONCURRENTLY` is illegal, so an index build in a migration holds a SHARE lock on its table for the whole build — on `ledger_events` every pick, putaway, receipt and adjustment waits. The runbook: **build the index CONCURRENTLY by hand under the same name, check it is valid, then deploy** — the migration's `CREATE INDEX IF NOT EXISTS` is then a no-op.
 
 `bun run db:migrate:deploy` (`src/shared/db/migrate-deploy.ts`) **enforces** it (decision 7, A3–A6):

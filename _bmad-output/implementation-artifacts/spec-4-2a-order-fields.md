@@ -2,7 +2,8 @@
 title: '4-2a order fields — order type (B2B/B2C), cash on delivery, priority and ship-by date, set at staff, portal and channel create, shown on every order surface and used by wave planning, pack and the carrier handover'
 type: 'feature'
 created: '2026-10-23'
-status: 'ready-for-dev'
+baseline_commit: '2950e61efff2a8e07b2aed6901f6690e8160ab98'  # wms-be (feat/3-3a tip, stacked 5-1a→3-2b→2-8a→3-3a — 0089–0092); wms-fe: ce9f0ba890306f89bd0fdc2213100f825dcab449 (feat/3-3a tip); wms-mobile: 0221424dcf52edea6b07b978616c1c13d137a700 (feat/3-2b tip)
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -538,42 +539,42 @@ They add to, or supersede, the frozen matrix.
 ## Tasks & Acceptance
 
 **Execution — wms-be:**
-- [ ] `drizzle/NNNN_order_fields.sql`, journal and snapshot, `schema.ts`: A21 → matrix "Bad values", AC1.
-- [ ] `ids.ts`, `ids.spec.ts`: A2 → row "uuidv7 wrap".
-- [ ] `order-urgency.ts`: A8, A10 → AC2.
-- [ ] `order.command.ts`, `outbound.dto.ts` (`CreateOrderDto`, the read DTOs), `portal.dto.ts`: decisions 2–7, A1, A3, A11, A12, A13 → rows "Staff full", "Defaults", "Contradiction", "Bad types", "Blank", "Explicit default", "Bounds", "Portal urgent", "Ingested manual fields"; AC1.
-- [ ] `wave.command.ts`: A1, A8, A9, A23 → rows "Wave sweep", "Wave allocation", "Wave key", "Sweep lost all", "Shortfall"; AC2.
-- [ ] `pick.command.ts`, `outbound.facade.ts`, `receiving.dto.ts`, `receiving.controller.ts`: A2, A16 → AC3.
-- [ ] `pack.command.ts`, `dispatch.command.ts`, `shipment.command.ts`, `manifest.command.ts`, `rate.service.ts`, `carrier-registry.ts`, `carrier-label-port.ts`: A17, A18, A19 → rows "Pack/dispatch/manifest", "Manifest no COD", "Carrier no COD"; AC4, AC5.
-- [ ] `portal-orders.ts`: the four keys → row "Portal isolation".
-- [ ] `channel-registry.ts`, `channel-shopify-port.ts`, `channels.ingest.command.ts`, `channels.facade.ts`, `webhooks.controller.ts`: A4–A7 → the Shopify rows, "COD drift".
-- [ ] `registers.ts`, `outbound-register.ts`: A20 → AC1.
-- [ ] Tests as in the Code Map; OpenAPI regenerated.
+- [x] `drizzle/NNNN_order_fields.sql`, journal and snapshot, `schema.ts`: A21 → matrix "Bad values", AC1.
+- [x] `ids.ts`, `ids.spec.ts`: A2 → row "uuidv7 wrap".
+- [x] `order-urgency.ts`: A8, A10 → AC2.
+- [x] `order.command.ts`, `outbound.dto.ts` (`CreateOrderDto`, the read DTOs), `portal.dto.ts`: decisions 2–7, A1, A3, A11, A12, A13 → rows "Staff full", "Defaults", "Contradiction", "Bad types", "Blank", "Explicit default", "Bounds", "Portal urgent", "Ingested manual fields"; AC1.
+- [x] `wave.command.ts`: A1, A8, A9, A23 → rows "Wave sweep", "Wave allocation", "Wave key", "Sweep lost all", "Shortfall"; AC2.
+- [x] `pick.command.ts`, `outbound.facade.ts`, `receiving.dto.ts`, `receiving.controller.ts`: A2, A16 → AC3.
+- [x] `pack.command.ts`, `dispatch.command.ts`, `shipment.command.ts`, `manifest.command.ts`, `rate.service.ts`, `carrier-registry.ts`, `carrier-label-port.ts`: A17, A18, A19 → rows "Pack/dispatch/manifest", "Manifest no COD", "Carrier no COD"; AC4, AC5.
+- [x] `portal-orders.ts`: the four keys → row "Portal isolation".
+- [x] `channel-registry.ts`, `channel-shopify-port.ts`, `channels.ingest.command.ts`, `channels.facade.ts`, `webhooks.controller.ts`: A4–A7 → the Shopify rows, "COD drift".
+- [x] `registers.ts`, `outbound-register.ts`: A20 → AC1.
+- [x] Tests as in the Code Map; OpenAPI regenerated.
 
 **Execution — wms-fe:**
-- [ ] `lib/order-fields.ts` and its test: A13, A14, A15.
-- [ ] `lib/outbound-pack-dispatch.ts`: the re-export.
-- [ ] `lib/outbound-orders.ts`, `outbound-orders.tsx` and its test: the staff form, table and detail → AC1.
-- [ ] `outbound-waves.tsx` and its test: the picker and picklists → AC1, AC2.
-- [ ] `pack-dispatch.tsx` and its test: slip, dispatch, manifest → AC4, AC5.
-- [ ] `lib/portal.ts`, `portal-orders.tsx` and its test: A12 → AC1.
-- [ ] Generated client.
+- [x] `lib/order-fields.ts` and its test: A13, A14, A15.
+- [x] `lib/outbound-pack-dispatch.ts`: the re-export.
+- [x] `lib/outbound-orders.ts`, `outbound-orders.tsx` and its test: the staff form, table and detail → AC1.
+- [x] `outbound-waves.tsx` and its test: the picker and picklists → AC1, AC2.
+- [x] `pack-dispatch.tsx` and its test: slip, dispatch, manifest → AC4, AC5.
+- [x] `lib/portal.ts`, `portal-orders.tsx` and its test: A12 → AC1.
+- [x] Generated client.
 
 **Execution — wms-mobile:**
-- [ ] `src/api.ts`, `src/lib/order-fields.ts` and its test: A13, A14 → AC3.
-- [ ] `app/inbox.tsx`, `app/pick.tsx`, `app/pack.tsx`: A16 → AC3.
+- [x] `src/api.ts`, `src/lib/order-fields.ts` and its test: A13, A14 → AC3.
+- [x] `app/inbox.tsx`, `app/pick.tsx`, `app/pack.tsx`: A16 → AC3.
 
 **Execution — meta (last):**
-- [ ] `docs/design/modules/outbound.md`:
+- [x] `docs/design/modules/outbound.md`:
   - the schema rows;
   - the urgency key, the sweep concurrency and the lock note;
   - the hash positions and the explicit-default rule;
   - the payment line;
   - the manifest COD.
-- [ ] `docs/design/modules/channels.md` (A4–A7), `carriers.md` (`supportsCod`, the request field), `reporting.md` (A20 columns, COD repeated per line).
-- [ ] `docs/design/API-SURFACE.md`, recounted, including the explicit-default hash note; `docs/design/frontend/SYSTEM-DESIGN.md`; `docs/design/mobile/SYSTEM-DESIGN.md` (the snapshot keys and the date source); `docs/repos/wms-be/README.md`, `wms-fe/README.md`, `wms-mobile/README.md`.
-- [ ] `docs/design/IMPLEMENTATION-GUIDE.md` §3: a NOT VALID CHECK on a just-added column needs no VALIDATE scan, and a DO block must not say `INDEX`.
-- [ ] `docs/design/PENDING.md` (A22 plus):
+- [x] `docs/design/modules/channels.md` (A4–A7), `carriers.md` (`supportsCod`, the request field), `reporting.md` (A20 columns, COD repeated per line).
+- [x] `docs/design/API-SURFACE.md`, recounted, including the explicit-default hash note; `docs/design/frontend/SYSTEM-DESIGN.md`; `docs/design/mobile/SYSTEM-DESIGN.md` (the snapshot keys and the date source); `docs/repos/wms-be/README.md`, `wms-fe/README.md`, `wms-mobile/README.md`.
+- [x] `docs/design/IMPLEMENTATION-GUIDE.md` §3: a NOT VALID CHECK on a just-added column needs no VALIDATE scan, and a DO block must not say `INDEX`.
+- [x] `docs/design/PENDING.md` (A22 plus):
   - the amend entry (refused once packed);
   - list sort/filter;
   - channel priority, ship-by and B2B (`company`) mapping;
@@ -586,7 +587,7 @@ They add to, or supersede, the frozen matrix.
   - billing for COD handling and portal high priority;
   - VALIDATE the three CHECKs;
   - the partners re-point.
-- [ ] DEPLOY.md §5: the lock-timeout retry line (A21).
+- [x] DEPLOY.md §5: the lock-timeout retry line (A21).
 
 **Acceptance Criteria** (A24):
 - **AC1, at create.** Given ACME places a portal order with COD ₹1,499, priority high and ship-by today, when staff open Outbound, then the list, the detail and the wave picker read High · Due today · COD ₹1,499.00. The outbound register's row carries `b2c`, `high`, the date and `149900`. The portal list and detail show the same.
@@ -619,6 +620,22 @@ They add to, or supersede, the frozen matrix.
 - In a real HTTP smoke, place a portal COD order, wave it, pick and pack it on the handheld, label it with the sandbox carrier, manifest it and dispatch it. Every stage in AC1–AC5 should show the figures.
 
 ## Implementation Notes
+
+- **Commits.** wms-be `0013c6a` (migration **0093**); wms-fe `63f8101`, plus `718530c` (the wave picker and picklist chip tests, added at the step-03 audit); wms-mobile `3a4becb`. Meta: the docs listed under Execution — meta.
+- **Deviations from the Code Map.**
+  - `orderUrgencyOrderBy(todayIst, columns)` takes the caller's column fragments, so the same key serves the wave sweep, the pack read and the pick lateral read.
+  - `MAX_COD_AMOUNT_PAISE` and `decimalRupeesToPaise` live in `shared/primitives/money.ts`, because channels may not import outbound; `order-urgency.ts` re-exports the cap.
+  - The web form parse is the new `lib/order-fields-form.ts`, shared by the staff create and `lib/portal.ts`, instead of `lib/outbound-orders.ts`.
+  - The sweep's locked re-read also re-reads open claims in a fresh statement. Under READ COMMITTED, the row lock re-checks only the row's own predicate, not the `not exists` subquery.
+- **Verification (2026-10-24).**
+  - wms-be: the listed jest set passed, 18 suites and 371 tests. Lint and typecheck are clean, and `db:generate` reports no schema changes.
+  - wms-fe: lint, typecheck and `bun test` (2592) pass.
+  - wms-mobile: `bun test` (901) and typecheck pass.
+  - The manual HTTP smoke has not been run.
+- **Code review (2026-10-24):** C1–C20; 9 patched, 1 deferred (C10), 10 rejected (see the Review Triage Log). After the patch round:
+  - wms-be: the full suite passed, 3365/3365; the drift guard was re-exported after the DTO edits.
+  - wms-fe: 2627 tests pass; wms-mobile: 901.
+- **PRs:** WMS-BE #130 → WMS-Mobile #34 → WMS-FE #115 → this meta PR. They are stacked on 2-8a (BE #128, FE #113) and 3-3a (BE #129, FE #114).
 
 ## Spec Change Log
 
@@ -668,3 +685,28 @@ Design review, 2026-10-23. K = claims check against origin/main; B = blind revie
 | B21 | medium | The mobile due-date chip used the device clock → A13 |
 | B22 | medium | Files unnamed in tasks; tests in Verification missing from the Code Map → A25 |
 | B23 | low | The amend PENDING wording was weak → A22 |
+
+Code review, 2026-10-24. Layers: BH = Blind Hunter, EC = Edge Case Hunter, VG = Verification Gap. Verdicts: high / medium / low / false; route patch / defer / reject.
+
+| ID | Verdict | Finding → resolution |
+|---|---|---|
+| C1 | medium (patch) | BH1, EC3, EC10. The COD parse refusal answered 400 before the known-order lookup, so a redelivery of an order already held (its body now `voided`/`authorized`, or a pre-4-2a order) was refused on every retry. This broke decision 7: a redelivery always resolves. → `ParsedChannelRefusal` carries the order without its COD, and the ingest refuses only a FIRST delivery (after `findOrderByChannelRef`); a known order resolves, with the drift warn. New e2e test. |
+| C2 | low (patch) | BH2. The refusal meter did not name the order, so an operator could not find the Shopify order. → The meter sentence and the 400 detail now name the channel order ref. |
+| C3 | medium (patch) | BH4, EC1. `uuidv7`: after a backward clock reading, every id until the clock caught up took a random sequence, so ids in one millisecond were not monotonic. The wrap test left the module in 2099, which disabled the property for the rest of the file. → A reading before the last one restarts the sequence at that reading (the pre-4-2a behaviour); a step-back test was added. |
+| C4 | medium (patch) | BH5, EC8. The pick snapshot's lateral urgency subquery ran once per task row. → It is now one `distinct on (picklist_id)` derived table over the warehouse's ready picklists, joined once. |
+| C5 | low (patch) | BH9. The portal priority allow-list was hard-coded in the DTO enum and the command. → `PORTAL_ORDER_PRIORITIES` in `order-urgency.ts`, used by both. |
+| C6 | low (patch) | BH11. The `pickTasks` description still said "in walk order". `OrderEntryDto.priority` was declared nullable though a live read always has one. There was also an import order nit and a double blank line. → All fixed. |
+| C7 | low (patch) | EC5, EC11. A picklist with nothing left to pick (or cancelled) still showed Overdue / Due today. → `ShipByChip` gains `open`, and the picklist passes `status ≠ cancelled ∧ a planned line`; test added. |
+| C8 | medium (patch) | VG1. No snapshot test had "due" beat a higher priority, so dropping the due key or passing a wrong date passed. → Two e2e tests: an overdue normal order ahead of an older non-due high one, in pick and in pack. |
+| C9 | medium (patch) | VG3. These were never rendered by a component test: the staff list and detail, the portal list, `dispatch-payment`, `manifest-cod`, and the status pass-through that hides Overdue. → Tests in `outbound-orders.test.tsx`, `pack-dispatch.test.tsx` and `portal.test.tsx`. |
+| C10 | medium (defer) | VG2. No test checks that a picklist's urgency counts only planned lines (a batch picklist with its urgent order already picked). → deferred-work. |
+| C11 | rejected | BH3. `pending` with `total_outstanding "0.00"` is refused rather than treated as prepaid. The frozen matrix names `"0.00"` as unmappable (fail closed). |
+| C12 | rejected | BH6. Two definitions of a picklist's urgency (web: non-cancelled lines; device: planned lines). A1 and A2 define them deliberately. |
+| C13 | rejected | BH7, EC7. The handheld breaks picklist ties by id, not by the server's order. A16 specifies `picklistId`. |
+| C14 | rejected | BH8, EC6. The wave picker sorts the loaded page only. Decision 14 rules out list sort and filter (PENDING). |
+| C15 | rejected | BH10, EC4. `codAmountPaise` has no type decorator, and `""` reads as absent. A11 and the "Blank = absent" matrix row specify both. |
+| C16 | rejected | BH12. COD drift is only logged. A6 specifies a warn; `orders/updated` is PENDING. |
+| C17 | rejected | BH13. The register's COD is in paise. A20 specifies paise. |
+| C18 | rejected | BH14 (partly). There are no render tests of the mobile screens; the house pattern pins the pure helpers (mobile guide §8). The other gaps are folded into C1, C3, C8 and C9. |
+| C19 | rejected | EC2. The sweep locks up to `cap*2` candidates. A8 specifies the locked re-read of every candidate; the extra rows are held only for the wave transaction. |
+| C20 | rejected | EC9. Browser clock skew against the server's IST date. The server is the authority, and the web only pre-checks. |
