@@ -1076,6 +1076,12 @@
 - source_spec: none
   summary: 3-2b handheld stock adjustment — a `stock.adjust` device op (AnySessionGuard route arm, badge-in operator, occurredAt, sync-report op type + apply arm replaying FEFO/serial composition), a 202-pend outcome on the device, and the role question (operators do not hold stock.adjust).
   evidence: Split from roadmap 3.2 on 2026-10-23 (recommended, taken autonomously) — the web screen (3-2a) needs no backend change; the device path needs a route, an op, and a product decision on operator authority.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2b-handheld-stock-adjustment.md`
+  summary: Name the requesting handheld on the approval card by its enrolment label (and the badged operator), not a UUID tail.
+  evidence: 3-2b code review C14 (BH5).
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2b-handheld-stock-adjustment.md`
+  summary: Soft warning when an adjustment reason contradicts its direction (found with Remove, damaged/expired with Add) on the handheld confirm step and the approval card; group operator-request pend notifications so owners are not flooded.
+  evidence: 3-2b code review C15 (BH7) and C19 (BH11).
 
 - source_spec: none
   summary: 3-5b full stock take with freeze — a warehouse- or zone-wide count of every bin, a freeze that refuses every stock-moving command (putaway, pick, move, transfer, adjustment, receipt into the frozen scope) while it runs, and a close that posts the variances and lifts the freeze.
