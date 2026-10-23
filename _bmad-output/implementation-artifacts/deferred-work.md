@@ -647,6 +647,24 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-5b-dispute-drill-down.md`
   summary: Test the refresh restamp of `client_invoices.storage_measured_through` when the content hash is unchanged but the group watermark moved.
   evidence: 21-5b code review (verification-gap); reverting `restampMeasuredThroughInTx` fails no test. Impact is limited to breakdown 404s on zero-stock days; the setup needs a client in two groups with out-of-step snapshot watermarks.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-5a-contract-billing.md`
+  summary: 5-5b — tiered / volume rates on a rate-card charge (slab vs step pricing decided there), applied over the period's metered quantity per supplying-GSTIN invoice, including how a mid-month card change splits the tier count; widens the card line model (today UNIQUE (rate_card_id, charge_code)) and metering's pricing.
+  evidence: Split from roadmap row 5.5 when scoping 5-5a — a different user goal (price usage by volume) that changes the card's line model and `metering.ts`, which 5-5a keeps byte-identical.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-5a-contract-billing.md`
+  summary: Client-wide minimum monthly charge across supplying GSTINs, and a minimum for a month with no usage and no stock (today no draft exists for such a group, so the floor is never billed) — needs a rule for which invoice carries the top-up.
+  evidence: 5-5a decision 9 applies the floor per invoice (client × month × GSTIN) so each invoice stays computed from its own group alone.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-5a-contract-billing.md`
+  summary: Value-added work orders (roadmap 3.8) raise `client_charges` rows through `ClientChargeService` on completion (category `value_added` or per-operation categories), and the handheld records ad-hoc floor work (extra labour, relabelling) into the same record.
+  evidence: 5-5a ships the charge record and its billing; the work-order model and the mobile capture are separate goals (3.8, and an offline-engine surface 5-5a deliberately does not add).
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-5a-contract-billing.md`
+  summary: Goods sold to a client (packaging material, pallets, consumables) need a goods tax invoice line with HSN, not a services SAC line — the ad-hoc vocabulary refuses them; also the usage preview (`GET …/usage`) does not show approved ad-hoc charges or the minimum estimate.
+  evidence: 5-5a keeps the services invoice SAC-only and metering byte-identical; both are additive follow-ups.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-5a-contract-billing.md`
+  summary: Client portal view of a client's own unbilled and pending ad-hoc charges (a portal-shaped DTO: no evidence note, no staff identity), and evidence attachments (photos, signed work slips) on a charge.
+  evidence: 5-5a design review B7 — `client_charges` is operator-only (A7) and has no file store; both need their own portal allowlist and storage design.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-5a-contract-billing.md`
+  summary: Notification source for ad-hoc charges — raise on the `client_charge.pending` outbox event for `billing.invoice` holders, resolve on `client_charge.approved | rejected | cancelled` (the `stock-adjustment` source in `notification-sources.ts` is the model).
+  evidence: 5-5a design review B14 — 5-5a emits the four events with no consumer yet; wiring a source touches the notifications module's registry and mobile pushes.
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-6-advance-shipment-notices.md`
   summary: ~~21-6b — the handheld receives against an ASN: parse the snapshot's `openAsns` arm (`?? []` default), an ASN context in the receive draft beside `poId`, `asnId`/`asnLineId` on the `grn.submit` payload without changing existing PO/blind hashes, ASN refusals in the replay fate table, ASN cards in the inbox and choose step.~~ **DONE 2026-10-09 by story 21-6b** (`spec-21-6b-handheld-asn-receiving.md`) — wms-mobile parses `openAsns`, receives against an ASN through the one draft/resolver/progress path, and leaves PO and blind payloads byte-identical; wms-fe retired the "next handheld update" notice.
   evidence: Split by the human on 2026-10-08 when scoping 21-6; a separate repo (wms-mobile, hand-written API types) and independently shippable once 21-6's server side lands.
