@@ -447,6 +447,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-6c-labels-manifests-and-tracking-writeback.md`
   summary: The manifest command validates/normalizes shipmentIds BEFORE the transaction and replay — a same-key retry with a malformed body 400s instead of replaying, unlike shipment.command's deliberate validation-after-replay for measurements (triage #19).
   evidence: Verified: manifest.command.ts:111 normalizes before the tx, shipment.command.ts:177-180 validates after replay with the stated rationale. Structurally required today (the sorted collapsed set IS the payload-hash input, unlike label's raw measurements); harm needs a direct API caller retrying a committed manifest with a malformed body. Document the divergence or align in a consistency pass.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5a-damage-photos.md`
+  summary: 4.4 documents on the 2-5a attachments foundation — client-supplied label PDFs per order (portal, API or ops upload; printed at the pack station) and every outbound document per shipment (invoice/challan, e-way bill, POD, the signed handover manifest) scanned or photographed, attached and shared with the client in the portal.
+  evidence: Split from 2-5a (recommended, taken autonomously). Needs the PDF arm and malware scan of the 1.6 documents entry, owner types `order` / `shipment`, and possibly presigned upload for API callers; 2-5a ships images on GRN lines only.
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-6d-carrier-rate-shopping.md`
   summary: A mid-read `disconnect` (a hard DELETE, AD-15) between the connection walk and the in-tx credential open throws `carrierConnectionNotFound` (404 `not-found`) — the whole rates read 404s with the same arm the route reserves for "no order", and `fetchApiGetOrderRates` maps any 404 `not-found` to null, so the strip silently vanishes (triage D1).
   evidence: Verified — disconnect is a hard delete (carrier.command.ts:362-363), `openCredentialForAdapterUseInTx` throws `carrierConnectionNotFound()` on a missing row (carriers.facade.ts:250-252), and the FE fetcher's 404→null mapping is not order-scoped (client.ts fetchApiGetOrderRates docstring overclaims). Window is sub-second and self-healing (the picker drops the connection on its own refetch); when the read is next touched (real transports), give the credential-open miss its own problem code so the 404-null mapping stays order-scoped.
@@ -941,6 +944,9 @@
 - source_spec: none
   summary: SDS document per SKU (upload, view, download) — moves to the file-storage story alongside roadmap 2.5 damage photos.
   evidence: Split from roadmap row 1.6 by the user on 2026-10-20 ("Split 4 ways"). wms-be has no general object storage yet (only the ledger-anchor WORM adapter and Postgres-held audit exports, PENDING), and 2.5 needs the same S3 upload path.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5a-damage-photos.md`
+  summary: 1.6 documents on the 2-5a attachments foundation — the SDS per SKU and the scanned drug/FSSAI licence certificate (1-6c), as `purpose` arms `sku-sds` / `licence-certificate` with owner types `sku` / `licence`; adds a PDF arm to the sanitizer allow-list served only with `Content-Disposition: attachment`, and a malware scan (GuardDuty Malware Protection for S3 or ClamAV) that holds a document unavailable until clean.
+  evidence: 2-5a built the storage this entry waited for (attachments table, FileStore port, presigned GET, sweep) but allows only sanitized JPEG/PNG/WebP and never serves another type inline; documents need the PDF arm, the scan and their own owners, so they ship on their own.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-6c-drug-and-fssai-licences.md`
   summary: ~~1-6d licence enforcement.~~ **DONE 2026-10-20 by story 1-6d** (`spec-1-6d-licence-enforcement.md`). Original: A per-tenant "Enforce licences" switch (off by default, owner-only, showing 1-6c's coverage gaps before it is turned on). When it is on, a `grn.submit` line not covered by a valid client licence AND site licence on the receipt's IST date is refused per line (`licence-not-covered`, review row `grn.licence-refused`, Apply with an audited waiver `goods_receipt.licence_waived` per the 1-2b shelf-life precedent), and order create (web, channel, portal) is refused with 409 `licence-not-covered`; kits are checked through their components.
@@ -985,6 +991,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
   summary: A write-off out of DAMAGED is a plain stock.adjusted with no reference to the GRN line or vendor, so a vendor claim cannot be reconciled from the ledger once units are written off.
   evidence: 2-4a code review BH9; grn.damaged carries grnLineId but the disposition does not. Belongs with 2.8 (QC fail disposition / return to vendor).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5a-damage-photos.md`
+  summary: 2-5a follow-ups on the attachments foundation — a per-client "damage photo required" rule on the 1-2b receiving policy; evidence photos on a QC inspection (2-8a A11) and on a return receipt's grading (13-2) as new `purpose` / `owner_type` arms; server-side thumbnails; per-tenant storage quota and usage metering for billing; a departed client's photo purge at offboarding; video evidence via presigned multipart upload.
+  evidence: Split from 2-5a (recommended, taken autonomously): 2-5a ships the foundation and receipt damage photos only; each item adds a vocabulary arm, a policy field or an infra path of its own (video needs presigned multipart, which 2-5a deliberately does not build — decision 2).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5a-damage-photos.md`
+  summary: Legal hold on attachments — an owner (or a dispute flag on a GRN/claim) suspends the sweep's purge of removed photos and the expiry of staged/awaited rows until released, audited both ways.
+  evidence: 2-5a design review B14. 2-5a purges a removed photo's bytes ATTACHMENT_PURGE_DAYS (default 30) after removal; a photo removed in error while a vendor/carrier dispute is open is lost after that window — an accepted risk until a hold exists.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-5a-damage-photos.md`
+  summary: Personal-data controls on receipt photos — an owner-only urgent purge (delete the bytes immediately, audited, for a DPDP erasure request or a photo of a person) and operator self-removal of their own just-uploaded photo within a short window.
+  evidence: 2-5a design review B15. 2-5a removes softly (managers only, `receipt.photo-remove`) and purges after the configurable delay; immediate erasure and self-service correction need their own authority rules.
 
 - source_spec: none
   summary: 2-10b pallet/carton (LPN) labels at receiving — an LPN (licence plate) record for what a pallet or carton holds, its label (ZPL + PDF, reusing 2-10a's renderer) printed at receiving, and the LPN carried through putaway.
