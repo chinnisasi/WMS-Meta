@@ -268,6 +268,7 @@ variable "worker_job_settings" {
     LEDGER_ANCHOR_CHUNKS_PER_TICK        = "10"
     SESSION_PURGE_POLL_MS                = "86400000"
     LICENCE_EXPIRY_POLL_MS               = "3600000"
+    EMAIL_SEND_POLL_MS                   = "5000"
   }
 
   validation {
@@ -276,10 +277,10 @@ variable "worker_job_settings" {
         "OUTBOX_RELAY_POLL_MS", "OUTBOX_RECONCILE_POLL_MS", "RESERVATION_REAPER_POLL_MS", "COUNT_SCHEDULER_POLL_MS",
         "REPLENISHMENT_SCHEDULER_POLL_MS", "CHANNELS_SYNC_POLL_MS", "STORAGE_SNAPSHOT_POLL_MS", "PUSH_SENDER_POLL_MS",
         "WAVE_CUTOFF_SWEEP_POLL_MS", "AUDIT_EXPORT_POLL_MS", "LEDGER_INTEGRITY_POLL_MS", "SESSION_PURGE_POLL_MS",
-        "LICENCE_EXPIRY_POLL_MS",
+        "LICENCE_EXPIRY_POLL_MS", "EMAIL_SEND_POLL_MS",
       ] : can(regex("^[1-9][0-9]*$", lookup(var.worker_job_settings, key, "")))
     ])
-    error_message = "worker_job_settings must set every one of the thirteen *_POLL_MS (DEPLOY.md §2) to a positive integer: unset means the job is OFF."
+    error_message = "worker_job_settings must set every one of the fourteen *_POLL_MS (DEPLOY.md §2) to a positive integer: unset means the job is OFF."
   }
 }
 

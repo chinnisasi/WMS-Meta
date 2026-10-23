@@ -53,12 +53,17 @@ locals {
 
   # The API: no *_POLL_MS at all — it runs no background job.
   api_env = merge(local.backend_env, {
-    TRUSTED_PROXY_HOPS = "1" # behind the ALB (DEPLOY.md §2)
+    WMS_PROCESS_ROLE   = "api" # 6-2c: stated, though unset means api
+    TRUSTED_PROXY_HOPS = "1"   # behind the ALB (DEPLOY.md §2)
     CORS_ORIGIN        = local.web_origin
   })
 
   # The ONE worker: every job on.
+  # 6-2c (6-2d step 1): a ≥ 6-2c image boots this task as the worker role —
+  # no API listener, the health-only listener on PORT. Without it the image
+  # boots as `api` with *_POLL_MS set and refuses (exit 78, A9).
   worker_env = merge(local.backend_env, var.worker_job_settings, {
+    WMS_PROCESS_ROLE     = "worker"
     PUSH_GATEWAY         = var.push_gateway
     PUSH_HTTP_TIMEOUT_MS = tostring(var.push_http_timeout_ms)
   })
@@ -109,6 +114,16 @@ locals {
     startPeriod = 30
   }
 
+  # 6-2c: the worker's health-only listener — 503 `worker-stale` when a job's
+  # loop is dead or makes no progress, `not-ready` until its jobs register.
+  worker_health = {
+    command     = ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/worker',{signal:AbortSignal.timeout(4000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval    = 15
+    timeout     = 5
+    retries     = 3
+    startPeriod = 60
+  }
+
   web_health = {
     command     = ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/runtime-config.js').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
     interval    = 15
@@ -131,7 +146,7 @@ locals {
   container = {
     for role, spec in {
       api     = { image = local.be_image, env = local.api_env, secrets = local.app_secret_refs, port = 3000, health = local.be_health }
-      worker  = { image = local.be_image, env = local.worker_env, secrets = local.worker_secret_refs, port = 3000, health = local.be_health }
+      worker  = { image = local.be_image, env = local.worker_env, secrets = local.worker_secret_refs, port = 3000, health = local.worker_health }
       web     = { image = local.fe_image, env = local.web_env, secrets = {}, port = 3001, health = local.web_health }
       migrate = { image = local.be_image, env = local.migrate_env, secrets = local.migrate_secret_refs, port = null, health = null }
     } :
