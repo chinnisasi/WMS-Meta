@@ -244,6 +244,33 @@ The statements were generated from the migrations by the migrator's own parser (
 
 `0087_receipt_line_condition.sql` adds four `CHECK` constraints to `goods_receipt_lines` with plain `ADD CONSTRAINT`, each scanning the table once under the `ACCESS EXCLUSIVE` lock its `ADD COLUMN`s took — every receipt waits for the scans. The guard does not judge CHECKs (it judges index builds). On a re-deploy over a large `goods_receipt_lines`, schedule it in a window; a future CHECK on a large table is written `NOT VALID` and validated in a later migration (`VALIDATE CONSTRAINT` takes only a SHARE UPDATE EXCLUSIVE lock).
 
+### Before 0092 (story 3-3a): expired stock becomes unpromisable
+
+`0092_batch_block.sql` is cheap (three nullable columns, metadata-only; its pairing CHECK is added `NOT VALID`, so it scans nothing) — but the **code** it ships with changes what ATP means: from the first request on the new image, the on-hand of every **expired** batch (and every blocked one — none exist yet; the migration's pre-flight refuses if any does) stops being promised. Channel quantities drop on the next publish tick and the replenishment sweep may open breaches for it (design review A5 — accepted: that stock could never be drawn). Run this read-only probe against production before the deploy, so the drop is expected rather than discovered. It is an **upper bound**: unlike the application's `unpromisableBatchUnits` it skips no quarantined scope and applies no per-bin clamp (`min(Σ batch qty, bin on-hand)`), so the real drop can be smaller:
+
+```sql
+-- An UPPER BOUND on the expired-batch units per tenant and warehouse that
+-- 3-3a takes out of ATP (the four already-subtracted system bins excluded;
+-- RECEIVING counted; no quarantine skip, no per-bin clamp).
+-- Milli-units ÷ 1000 = base units. now() here is the operator's probe clock;
+-- the application judges expiry in JS (`isBatchExpiredAt`).
+select boh.tenant_id, boh.warehouse_id,
+       count(distinct boh.batch_id)                  as expired_batches,
+       sum(boh.quantity)::numeric / 1000             as expired_units
+  from batch_on_hand boh
+  join batches b on b.id = boh.batch_id and b.tenant_id = boh.tenant_id
+  join bins bn on bn.id = boh.bin_id
+ where boh.quantity > 0
+   and b.expiry_date is not null and b.expiry_date < now()
+   and not (bn.system_owned and bn.code in ('QC-HOLD', 'DAMAGED', 'RETURNS', 'IN-TRANSIT'))
+ group by boh.tenant_id, boh.warehouse_id
+ order by expired_units desc;
+-- Must be zero (0092's pre-flight refuses otherwise):
+select count(*) from batches where status = 'blocked';
+```
+
+A later migration runs `ALTER TABLE "batches" VALIDATE CONSTRAINT "batches_blocked_pairing"` (SHARE UPDATE EXCLUSIVE — writes continue).
+
 ---
 
 ## 6. Locally and in CI

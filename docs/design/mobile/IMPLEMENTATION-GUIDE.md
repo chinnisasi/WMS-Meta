@@ -130,6 +130,8 @@ Send `null` explicitly where the server's DTO expects the arm closed (`serials: 
 
 **Retryable** is `unreachable` (both arms). **Terminal-but-kept** is `re-plannable`. **Terminal-and-dropped** is `rejected`. **Terminal-and-held** is `quarantined`.
 
+**An offline pick of a just-blocked batch (story 3-3a, A12).** A block (`POST …/inventory/batches/{id}/block`, web-only) moves no stock and bumps no bin epoch, and the snapshot carries no batch status — so the handheld cannot refuse it offline. On replay the server's FEFO re-derivation skips the blocked batch: when the scanned bin's other (drawable) batches cannot cover the pick it answers the existing **`422 insufficient-on-hand`** (epoch unchanged → `rejected`, dropped and uploaded through the sync report, in review), or **`409 pick-bin-short`** when something else moved the bin's epoch meanwhile (`re-plannable`, kept). There is **no `batch-blocked` code on the pick path** (that code is only the web approval's refusal of a pend), and no mobile change in 3-3a.
+
 ### The rules underneath
 
 - **Branch on `code`, never on prose** (AD-9). `detail` is read only to *say* something useful — which bin moved on, how much it holds now. It never decides anything (`replay-classification.ts:12-15`).

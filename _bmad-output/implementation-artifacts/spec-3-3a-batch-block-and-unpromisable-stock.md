@@ -2,7 +2,8 @@
 title: '3-3a batch block and unpromisable stock — block/unblock a batch with a reason; ATP and the grant ceiling exclude blocked and expired batches'
 type: 'feature'
 created: '2026-10-22'
-status: 'ready-for-dev'
+baseline_commit: '00831dba1a3e75f9c3b85c946b46aa7223d861f8'  # wms-be (feat/2-8a tip, stacked 5-1a→3-2b→2-8a — 0089–0091; rebase onto main as they merge); wms-fe: 366ed6775e886072aa30420f2c9bbcea0f2381f9 (feat/2-8a tip); wms-mobile: 0221424dcf52edea6b07b978616c1c13d137a700 (feat/3-2b tip)
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -177,9 +178,9 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] BE: migration + schema; shared expiry predicate; catalog block command + facade; routes and reads; the ATP term; adjust-draw filter; audit; tests; OpenAPI.
-- [ ] FE: actions, dialog, labels; regen; tests.
-- [ ] Meta docs as in the Code Map; deferred-work 3-3b.
+- [x] BE: migration + schema; shared expiry predicate; catalog block command + facade; routes and reads; the ATP term; adjust-draw filter; audit; tests; OpenAPI.
+- [x] FE: actions, dialog, labels; regen; tests.
+- [x] Meta docs as in the Code Map; deferred-work 3-3b (already recorded at design time — `deferred-work.md:1019`).
 
 **Acceptance Criteria:**
 - Given B blocked with 10 on hand and 0 other stock, when an order for 1 is created, then it backorders (no grant), and `channelVisibleQuantity` is 0.
@@ -193,6 +194,31 @@ context:
 - `cd workspace/core/frontend/wms-fe && bun run test && bun run lint && bun run typecheck && bun run build` — expected: all pass.
 
 ## Implementation Notes
+
+Implemented 2026-10-23 on `feat/3-3a-batch-block` (wms-be on the 2-8a tip, wms-fe on the 2-8a tip); not committed. Where the code differs from the text above, and why:
+
+- **Migration is `0092_batch_block.sql`** (next free). One CHECK, `batches_blocked_pairing`, carries both the pairing and the vocabulary (`IS NOT NULL` before `IN`), added **NOT VALID** (`batches` grows with every lot; guide §3) — the pre-flight `DO` block is the proof for existing rows; a later VALIDATE is recorded in PENDING (catalog) and `DEPLOY.md` §5. Probes: one accepted shape per reason, six refused shapes each by the named constraint.
+- **`BATCH_BLOCK_REASONS` lives in `schema.ts`** (beside `SKU_STATUSES` / `ADJUSTMENT_PEND_REASONS`), re-exported by `catalog/batch-block.command.ts` and the facade, so `inventory.dto.ts` can type the read fields without importing catalog. Pinned TS ↔ DB in `test/batch-block.spec.ts`.
+- **The expiry boundary (A3, D19).** The predicate is the existing draw side's, unchanged: drawable while `Date.parse(expiry) >= at`. So a batch is still promisable AT the stored instant E and unpromisable from E+1 ms — not "from the instant stored as its expiry" as A3's prose says. Changing it would have changed the wave/pick rule, which the Never list forbids. The fixtures assert E−1 and E promisable, E+1 (and E+1 day) not. `src/shared/primitives/batch-expiry.ts` holds `isBatchExpiredAt` and the injectable `batchExpiryClock`; the three copies (`replan.ts`, `pick.command.ts`, and the FEFO default — which 3-2b moved from `inventory.controller.ts:594` to `tenancy/adjustment-submission.ts` `resolveFefoBatch`) call it. The FEFO default also reads `batchExpiryClock` (it read `Date.now()`), so draw and promise share one clock.
+- **The hook** is `unpromisableBatchUnits` in `reservation.service.ts` (A2), plus `batchBlockedInTx` in the same file for A11's approval re-check; the architecture allowance pins exactly that file and the columns `id`, `tenantId`, `status`, `expiryDate`.
+- **A4 buffer decrease** uses a new private `regrantSmallerInTx` (structural guards of `grantInTx`, no ceiling test, buffer owners only); `grantInTx` (the short-pick regrant) keeps its ceiling test — `test/picking.spec.ts` pins the refusal against a blocked lot.
+- **A11 approval:** `decideAdjustment`'s approve arm refuses `409 batch-blocked` when the pend's batch was resolved by the FEFO default (negative delta, a batch, null `batch_override_reason`) and is now blocked.
+- **A12 (h) — the mobile claim was wrong.** There is no `batch-blocked` refusal on the pick path: an offline pick of a just-blocked batch replays as `422 insufficient-on-hand` (→ `rejected`) or, when the bin's epoch also moved, `409 pick-bin-short` (→ `re-plannable`). Recorded truthfully in `docs/design/mobile/IMPLEMENTATION-GUIDE.md`; no mobile change.
+- **`blockedByName`** is the member's email handle (`memberDisplayNamesInTx` — members carry no name column).
+- **Reads:** the catalog facade gained `batchViews` / `findBatchView` (the lifecycle view, names resolved in one read); `getBatches` / `findBatch` stay the lean identity reads. The batch DTOs' `status` is now typed `active | blocked` in OpenAPI (FE fixtures needed `as const`).
+- **Unblock note** is required by the command (the DTO only bounds the body), so a missing/blank note is a `400 validation-failed` like the other shape refusals.
+- **Copy:** the FEFO-default refusal now reads "no non-expired, unblocked batch stock"; the web's preview/refusal sentences say "No unexpired, unblocked batch…".
+- **Raw-SQL tests moved to the verb (A6):** `waves.spec.ts` (re-established as a draw-side test: the order reserves first, the block lands after), `picking.spec.ts`, `replenishment.spec.ts`.
+
+**Code-review fixes (2026-10-23):**
+- 0092 now also adds `batches.blocked_note` (inside `batches_blocked_pairing`: required with `other`, null when active) and `stock_adjustment_pendings.batch_resolved_by` (`fefo` | `explicit`, only with a `batch_id`; `stock_adjustment_pendings_batch_resolved_by_check`, VALID — a small table), with probes. The submit path (`composeBatchSerialArms`) records how the batch was resolved; the approval re-runs the FEFO checks only for `fefo` (a null, pre-3-3a pend keeps the old `batch_override_reason IS NULL` inference). The web can name a batch with a null override reason, which is why the reason column could not tell.
+- The approval also refuses a FEFO pend whose batch expired since: **409 `batch-expired`** (chosen to sit beside `batch-blocked` — both are "the world moved since the pend" refusals that leave the row pending; the immediate path's no-candidate answer is `422 insufficient-on-hand`, but a decision over a stored pend refuses with 409 like its other moved-world arms).
+- The unblock audit's `note.before` is the block's note. `blockedByName` is null once the blocker has no user row in the tenant.
+- `unpromisableBatchUnits` filters `status = 'blocked' OR expiry_date < $at` in SQL (same clock reading).
+- Types narrowed (`status`, `blockedReason`, `BlockBatchCommand.reason`); controller casts dropped; dead `CatalogFacade.findBatch` and the web's `batchStatusLabel` removed; `BATCH_BLOCK_REASONS` moved above the `batches` JSDoc.
+- Web: Esc ignored in flight, focus trap, the stale 409s close + re-read, `idempotency-key-reuse` copy, `fefoBatch` reads the server's `expired`.
+
+Verification (2026-10-23): wms-be `lint`, `typecheck`, `build`, `db:migrate`, `db:verify`, `db:generate` (no changes), full `bun run test` — 136 suites, 3216 tests, all pass; mutation checks — removing the second replay fails the race test, removing the quarantine predicate or excluding RECEIVING fails their matrix rows, dropping the term from the ceiling fails the pick-regrant test. wms-fe `test` (2575 pass), `lint`, `typecheck`, `build`, `check:capability-mirror`.
 
 ## Spec Change Log
 
@@ -232,3 +258,25 @@ Design review, 2026-10-22 (D). Two layers: a claims check against the code (K) a
 | D28 | B | low | Offline pick replay after a block. → A12 (existing fate) |
 | D29 | B | low | Replenishment and transfers of blocked stock. → A11 (allowed), A12 (warnings) |
 | D30 | B | low | Thin ACs. → A1, A3, A4, A6 add matrix rows and fixtures |
+
+Code review, 2026-10-23 (Blind Hunter BH, Edge Case Hunter EC, Verification Gap VG). Routing per step-04; all choices recommended, taken autonomously. Migration 0092 proven on a copy of the dev database (28 batches): `db:migrate:deploy` applied it, a re-run was a no-op, rows untouched, the CHECK left NOT VALID as designed; the pre-flight refused a copy holding a pre-blocked batch. Re-proven after C1/C3.
+
+| ID | Source | Verdict | Finding → route |
+|---|---|---|---|
+| C1 | EC1, BH3, EC-claim | medium | Approval infers "FEFO default" from `batch_override_reason IS NULL`, but the web can name a batch explicitly with a null reason → an explicit write-off of a blocked lot is refused at approval. → patch: store `batch_resolved_by` (`fefo`/`explicit`) on the pend at submit (0092) and test it. |
+| C2 | EC2, BH2, VG-other | medium | Approval re-checks blocked but not expired for a FEFO-default pend. → patch: also refuse when the FEFO-resolved batch has expired (`isBatchExpiredAt`). |
+| C3 | BH1 | medium | The block note (required for `other`) is stored nowhere on the batch and never shown; the unblock audit drops it. → patch: `blocked_note` in the pairing (0092), on the lifecycle DTO and the web label. |
+| C4 | BH5 | medium | `unpromisableBatchUnits` scans every dated batch of a SKU in JS on every hot path. → patch: push `expiry_date < $at` into SQL (one clock source kept). |
+| C5 | BH9, EC3, EC4 | medium | The block dialog: Esc closes while in flight (key lost → false 409 on retry); a 409 already/not-blocked does not reload the list or flip the mode; `idempotency-key-reuse` copy is wrong; no focus trap. → patch. |
+| C6 | BH10 | low | The Adjust FEFO preview still derives expiry on the client. → patch: use the server's `expired` flag. |
+| C7 | VG1 | medium | RETURNS and IN-TRANSIT exclusions untested. → patch. |
+| C8 | VG2 | medium | The explicit-override pend → approve path is untested. → patch. |
+| C9 | VG4 | low | The open batch detail's re-read after a block is untested. → patch. |
+| C10 | VG3, BH13 | low | Per-bin clamp, second-warehouse lot-wide block, the regrant open-hold path and a departed blocker are untested. → patch. |
+| C11 | BH14 | low | `blockedReason`/`status` typed `string` force casts. → patch: `BatchBlockReason | null`, `'active' | 'blocked'`. |
+| C12 | EC5, EC6 | low | `findBatch` and `batchStatusLabel` have no production caller left. → patch: remove. |
+| C13 | BH6, BH7 | low | `schema.ts` docblock now documents the tuple not the table; the migration header names the wrong source file. → patch. |
+| C14 | BH4, BH11 | low | Channel quantities drop on the channel-sync poll (it republishes full availability each tick — no event needed); the DEPLOY.md probe overstates (no quarantine skip, no clamp). → patch (docs: name the poll path; call the probe an upper bound). |
+| C15 | BH12 | low | No handheld surface: blocked status is not in the snapshot and an offline pick of a blocked lot replays as `insufficient-on-hand`. → defer (deferred-work). |
+| C16 | EC-claim | low | Decision 6's guard order (403 before 400): the ValidationPipe and key parse run first, as on every route in the house pattern. → reject. |
+| C17 | EC-claim, BH8 | low | The expiry boundary keeps the existing draw rule (promisable at E, not after); spec bookkeeping. → reject (Spec Change Log records the deviation). |
