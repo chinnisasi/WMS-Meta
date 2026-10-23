@@ -1109,6 +1109,21 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-3a-batch-block-and-unpromisable-stock.md`
   summary: 3-3b blocked locations. Adds a reason/kind on `bins.blocked` (including `damaged`), with blocked_at/by and a backfill rule for existing blocked bins; stock in blocked storage bins excluded from ATP and the grant ceiling; the policy for counts, adjustments and QC release into a blocked bin (PENDING:94); the tenantId-less lock fix (PENDING:187).
   evidence: Split from 3.3 at the scope gate. It has a different owner (putaway owns `bins.blocked`), a different migration and backfill decision, and it ships independently of the batch block.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-7a-batch-recall.md`
+  summary: 3-7b recall notifications — on a recall's open and close, email the client brand's contacts (5-1a email service) and offer a consignee contact export (contact name, phone, address lines of every affected dispatched order, client-scoped, audited as a PII download), plus an internal bell entry for `batch_recall.opened`.
+  evidence: Split from roadmap 3.7 at the scope gate (2026-10-23, recommended, taken autonomously) — 3-7a's trace and report deliberately carry only the 5-3a register's consignee fields; notifying people is a separate goal with its own PII/consent and email-template decisions. **Go-live-blocking for pharma and food clients** (design review B20): until it ships, a recall cannot reach consumers from the WMS — the brand must use its own customer data.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-7a-batch-recall.md`
+  summary: 3-7c recall of non-batch SKUs by date range — a recall over (client, SKU, receipt or dispatch date window) for untracked SKUs, with no lot identity: trace dispatches of the SKU in the window and on-hand received in the window (needs the PENDING "age per receipt" layer to say which on-hand units are in scope), and a decision on blocking (a bin/SKU-scope hold, since there is no batch row to block).
+  evidence: Split from roadmap 3.7 (2026-10-23) — 3-7a recalls batches only; an untracked SKU has no lot to block or trace, so the scope rule, the block lever and the trace semantics are all different.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-7a-batch-recall.md`
+  summary: 3-7d client-initiated recall and recall billing — a portal write letting the client brand request a block or open a recall over its own lots (`shareLockClientInTx`, `surface:'portal'` fingerprint, operator confirmation or direct), and a rate-card charge for recall handling (picking/segregating recalled stock).
+  evidence: Split from roadmap 3.7 (2026-10-23) — 3-7a's portal surface is read-only; a portal write and a new billable event each need their own decisions (who confirms, what is charged) and are independently shippable.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-7a-batch-recall.md`
+  summary: 3-7e lot genealogy — record which lots a value-added operation (kit assembly, repack, relabel) consumed into which output lot, so a recall trace continues through the transformation instead of stopping at the adjustment that consumed the units.
+  evidence: 3-7a design review B8 — no such operation exists on main (kits hold no stock), so 3-7a flags every adjust-out row "trace stops here"; genealogy belongs with the value-added-work stories.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-7a-batch-recall.md`
+  summary: 3-7f pick a scanned lot from a bin holding a recalled lot — an optional scanned batch on the pick payload (conditional-key hash rule), checked active and not recalled, so a mixed bin can be picked without first moving the recalled units out; handheld lot scan on the pick screen.
+  evidence: 3-7a design review B3 — the pick payload has no batch field (`RecordPickCommand`), so 3-7a refuses `recalled-lot-in-bin` outright; the override needs a device scan and a payload change of its own.
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
   summary: Link the Moves page to /moves/counts (and its tabs) once WMS-FE #103 (the real /moves page) merges — until then the count-admin surface is reachable only by URL.
   evidence: 3-5a decision 4 and code review BH4; editing moves/page.tsx before #103 merges would conflict with it.
