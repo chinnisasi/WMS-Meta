@@ -1108,6 +1108,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-4-7a-returns-disposition.md`
   summary: QC holds over serial and catch-weight arms — open the `qc.held`/`qc.released` serial arm and hold returned cases, so a serial-tracked or catch-weight return can be quarantined (4-7a answers 409 `disposition-not-supported`; such units wait in RETURNS, already outside ATP).
   evidence: Split from roadmap 4.7 on 2026-10-23 (recommended, taken autonomously) — 4-7a dispositions received units only; QC holds cannot carry serials today (registry `qc.held` serial arm closed; 2-8a decision 1), and the release replays the hold's arms from the ledger.
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-8a-qc-inspection-outcome.md`
+  summary: The web inspect dialog records one fail reason per batch; let it split a batch's failed units across several reasons (the API already accepts it).
+  evidence: 2-8a code review C15 (BH1).
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-5a-blind-counts-and-count-admin.md`
   summary: Cancel a pending count task (web, counts.manage) — needs a status widening migration (after 0087/WMS-BE #116 merges), a refusal or reopen when the task is a variance's recount target, a decision on the scheduler re-creating a cancelled scheduled task, and a discard-only review path for a device submit that lands after the cancel.
   evidence: 3-5a design review B3/B5/B12/B13/B14 — deferred so 3-5a ships without a migration.
