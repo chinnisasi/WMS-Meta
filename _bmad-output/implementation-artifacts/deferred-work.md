@@ -889,6 +889,9 @@
 - source_spec: none
   summary: 1.2b per-client operating policy — receiving tolerance %, QC on receipt, expiry required + minimum remaining shelf life, allocation FEFO/FIFO, enforced in receiving, QC and allocation (backend + web + handheld).
   evidence: Split from roadmap story 1.2 on 2026-10-18 at the user's choice; 1.2a (client master record: contacts, addresses, offboarding) ships first and its client page hosts the policy screen.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-3a-client-allocation-rules.md`
+  summary: 4-3b customer-specific shelf-life rules — a consignee's (or an order's) own minimum remaining shelf life above the client's (modern-trade buyers), and a percentage-of-total-shelf-life form using `skus.shelf_life_days`, applied by 4-3a's allocation predicate in wave planning, re-plan and the pick draw, with a per-order shortfall instead of the per-(warehouse, SKU) ATP term.
+  evidence: Split from roadmap 4.3 on 2026-10-23 (recommended, taken autonomously) — 4-3a ships the client-level rule (FEFO/FIFO and a minimum in days on the client policy row); a per-customer rule needs a partner or order field, its own capture surfaces, and an order-level availability answer that per-(warehouse, SKU) ATP cannot express.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2a-client-master-record.md`
   summary: Client contact audit rows (`client.contact_added/edited/removed`) name the client but not the contact or what changed, so a removed contact leaves no record of who it was.
