@@ -1003,12 +1003,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
   summary: Migration 0087's CHECKs (and similar ADD CONSTRAINTs) scan goods_receipt_lines under ACCESS EXCLUSIVE; use ADD CONSTRAINT … NOT VALID then VALIDATE CONSTRAINT for live deploys.
   evidence: 2-4a code review BH7; same class as the 0081 concurrent-index note (roadmap 6.2 live-deploy work).
-- source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
-  summary: A write-off out of DAMAGED is a plain stock.adjusted with no reference to the GRN line or vendor, so a vendor claim cannot be reconciled from the ledger once units are written off.
-  evidence: 2-4a code review BH9; grn.damaged carries grnLineId but the disposition does not. Belongs with 2.8 (QC fail disposition / return to vendor).
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-6a-serial-capture-at-receipt.md`
   summary: Damage and QC holds on serial-tracked receipt lines — open the serial arm on `grn.damaged` (capturing which serials arrived damaged into DAMAGED) and per-serial QC-on-receipt holds (`qc.held`/`qc.released` serial arms), closing 2-4a decision 9 and the 1-2b `qcSkippedLines` gap.
   evidence: Split from 2-6a decision 7. 2-6a books good serial units only; damage on a serial line stays a whole-op 400 (`receiving.command.ts:872-886`) and QC still skips serial lines (`:1771`).
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4a-damaged-and-short-receipt-quantities.md`
+  summary: A write-off out of DAMAGED is a plain stock.adjusted with no reference to the GRN line or vendor, so a vendor claim cannot be reconciled from the ledger once units are written off.
+  evidence: 2-4a code review BH9; grn.damaged carries grnLineId but the disposition does not. Belongs with 2.8 (QC fail disposition / return to vendor).
 
 - source_spec: none
   summary: 2-10b pallet/carton (LPN) labels at receiving — an LPN (licence plate) record for what a pallet or carton holds, its label (ZPL + PDF, reusing 2-10a's renderer) printed at receiving, and the LPN carried through putaway.
