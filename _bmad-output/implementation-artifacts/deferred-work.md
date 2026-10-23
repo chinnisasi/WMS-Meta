@@ -604,6 +604,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-8-1b-invoice-regulatory-pass.md`
   summary: Voided invoices — extend `invoices_issued_stamped_check` to `invoice_no IS NULL OR origin_gstin IS NOT NULL` (so a voided number cannot escape the per-GSTIN unique through a NULL GSTIN) and pin the voided half of the freeze with a test.
   evidence: The freeze and the docs cover voided rows, but no code path creates one until the void/credit-note story; that story must add the constraint and the test together.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-6a-credit-debit-notes.md`
+  summary: 5-6c — credit/debit notes against issued GOODS tax invoices (invoicing module, 8-1): the same s.34 document model with HSN/UQC lines, netting into the HSN summary (Table 12) in the note's own period, and the voided-invoice constraint above. Numbers use the `GC`/`GD` letter pair (`29/GC2627/000001`, 16 chars) so they never collide with the services `S`/`C`/`D` series (5-6a A12).
+  evidence: 5-6a covers the 3PL's own services invoices (billing); goods invoices live in another module with HSN, quantities and e-way coupling, so they are a separate goal.
 
 ## Deferred from: code review of spec-8-1c-web-gstin-and-price-inputs (2026-10-03)
 
@@ -632,6 +635,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-5-client-invoices.md`
   summary: 21-5b — dispute drill-down: expand a client invoice line to the source records (GRN lines, picks, first-dispatch order events, per-day/per-SKU storage) that produced its quantity, reusing 21-4's shared predicates.
   evidence: Split by the human on 2026-10-07 when scoping 21-5; independently shippable after 21-5's invoice lines exist.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-6a-credit-debit-notes.md`
+  summary: 5-6b — e-invoice IRN for client services invoices and their credit/debit notes on e-invoicing GSTINs: NIC IRP integration behind a port (sealed GSP/IRP credentials), the signed QR and IRN printed on the document, cancellation within 24 hours, and lifting the `einvoice-required` gap (21-5) and the note-issue refusal (5-6a).
+  evidence: Split from roadmap row 5.6 when scoping 5-6a — an external integration with its own credentials, failure modes and sandbox, independent of the note documents it will also sign.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-6a-credit-debit-notes.md`
+  summary: GSTR-1 filing marker and reporting per GSTIN-period — record when a period is filed; refuse void of an invoice or note in a filed period; enforce s.34(2)'s "annual return, if earlier" bound on credit notes; export CDNR/CDNUR (Table 9B) and report the services invoice and C/D note series in Table 13 (the S/C/D series beside the goods series).
+  evidence: 5-6a enforces only the 30-November bound because no filing or annual-return date is recorded anywhere; the marker is a separate data model and the export a separate read.
 - source_spec: `_bmad-output/implementation-artifacts/spec-21-5-client-invoices.md`
   summary: Epic-8 retro A5 invoicing cleanup — extract generator.ts and eway-bills.tsx, de-duplicate state maps/instant regex/FE IST handling/loader helpers, one FE-BE constants drift guard, converge the idempotency skeleton, lock the config commands, fix supplyType nullable-enum.
   evidence: Split by the human on 2026-10-07; a pure refactor with no 21-5 dependency, reviewed better on its own diff.
