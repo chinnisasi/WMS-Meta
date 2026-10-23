@@ -1145,6 +1145,18 @@
 - source_spec: none
   summary: 5-1b password reset by email (the 6.1 remainder) — a forgot-password request, a sealed single-use reset token mailed through 5-1a's queue, the reset page, rate limits, and session revocation on reset.
   evidence: Split from roadmap 5.1 on 2026-10-23 (recommended, taken autonomously) — 5-1a ships the mail infrastructure with invites as its first sender.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2a-client-webhooks.md`
+  summary: 5-2b receipt and dispatch emails — mail to the client's `operations` contacts (client_contacts.roles) on receipt.recorded and order.dispatched through 5-1a's queue (new templates; queued from an outbox subscriber, not the emitting command), with a per-client opt-in and a daily digest option for high-volume D2C dispatch.
+  evidence: Split from roadmap 5.2 on 2026-10-23 (recommended, taken autonomously) — a separate user goal (people, not systems); needs WMS-BE #125 (5-1a) merged and a digest-vs-per-event decision, while 5-2a webhooks need neither.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2a-client-webhooks.md`
+  summary: 5-2c portal tracking — dispatch carrier, tracking number and dispatch time on portal orders, a portal goods-receipt list, and a read-only portal view of the client's webhook endpoints and delivery log (two layers, §7e; the 5-2a tables already carry the 0041 client clause).
+  evidence: Split from roadmap 5.2 on 2026-10-23 (recommended, taken autonomously) — portal reads are their own trust surface; today portal orders carry no AWB/tracking (portal-orders.ts) and there is no portal receipt read.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2a-client-webhooks.md`
+  summary: Client self-service webhooks — a client-admin portal role (roadmap 5.4) creating, rotating, testing and redelivering its own endpoints (portal writes with the session client, `surface: 'portal'` fingerprints), instead of staff configuring them on its behalf.
+  evidence: 5-2a decision 2 — the portal has one `client` role (ROLE_CAPABILITIES.client = asn.announce, orders.place), so every portal user would see and rotate the signing secret; waits for 5.4's client-admin role.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2a-client-webhooks.md`
+  summary: More client webhook event types — order.packed, manifest.created (no subscriber today), delivered/POD once 4.9 emits one, ASN received/closed, QC hold placed/released on the client's goods; each a new public type with its own minimised payload.
+  evidence: 5-2a decision 3 ships receipt.recorded and order.dispatched only — the roadmap's two; there is no POD or delivered event on main.
 - source_spec: none
   summary: 5-1c invoice delivery and alert emails — client invoices emailed to client contacts with the role, and alert mail (licence expiry, the PENDING entry) through 5-1a's queue, with per-recipient opt-out.
   evidence: Split from roadmap 5.1 on 2026-10-23 (recommended, taken autonomously).
@@ -1161,6 +1173,9 @@
 - source_spec: none
   summary: 5-3b analytic reports — space utilisation (bin fill vs capacity), operator productivity (lines/units per operator per shift from the ledger), count accuracy (variance rate by class/zone), each with the 5-3a client filter and CSV/Excel export.
   evidence: Split from roadmap 5.3 on 2026-10-22 (recommended, taken autonomously) — the roadmap row lists them as a "then" second wave; 5-3a ships the five operational registers first.
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2a-client-webhooks.md`
+  summary: 6-2d webhook egress hardening (infra) — an SG/NACL egress deny on the API and worker ECS tasks for the VPC CIDR, 169.254.0.0/16 and fd00:ec2::/32 (the second layer under 5-2a's application SSRF guard), and stable NAT EIPs published in DEPLOY §2 for client receiver allowlists, with a runbook that changing them needs client notice.
+  evidence: 5-2a design review K13/B11/B13 (A14, A16) — IaC belongs with 6-2b's environments, not the wms-be story; 5-2a ships the application guard alone.
 
 - source_spec: none
   summary: 4-1c staff CSV/Excel order import — upload orders (client, warehouse, client order number, ship-to, SKU lines) reusing src/shared/import/sheet-reader.ts with Check file (dry run) / Import, one createOrder per order with a derived key, deduped by the client order number (4-1b's per-client unique ref).
